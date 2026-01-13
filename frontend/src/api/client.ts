@@ -13,6 +13,10 @@ import type {
   SDNVNet,
   SDNSubnet,
   NetworkOverview,
+  Folder,
+  TreeView,
+  CreateFolderRequest,
+  MoveResourceRequest,
 } from '../types';
 
 const BASE_URL = '/api';
@@ -29,6 +33,11 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   if (!res.ok) {
     const error = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(error.error || 'API request failed');
+  }
+
+  // Handle 204 No Content responses
+  if (res.status === 204) {
+    return undefined as T;
   }
 
   return res.json();
@@ -135,6 +144,30 @@ export const api = {
     fetchAPI<SDNVNet[]>(`/clusters/${cluster}/sdn/vnets`),
   getClusterSDNSubnets: (cluster: string) =>
     fetchAPI<SDNSubnet[]>(`/clusters/${cluster}/sdn/subnets`),
+
+  // Folders
+  getFolderTree: (tree: TreeView) =>
+    fetchAPI<Folder[]>(`/folders/${tree}`),
+  createFolder: (req: CreateFolderRequest) =>
+    fetchAPI<Folder>('/folders', { method: 'POST', body: JSON.stringify(req) }),
+  renameFolder: (id: string, name: string) =>
+    fetchAPI<void>(`/folders/${id}`, { method: 'PUT', body: JSON.stringify({ name }) }),
+  deleteFolder: (id: string) =>
+    fetchAPI<void>(`/folders/${id}`, { method: 'DELETE' }),
+  moveFolder: (id: string, parentId?: string) =>
+    fetchAPI<void>(`/folders/${id}/move`, { method: 'POST', body: JSON.stringify({ parent_id: parentId }) }),
+  addFolderMember: (folderId: string, resourceType: string, resourceId: string, cluster: string) =>
+    fetchAPI<void>(`/folders/${folderId}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ resource_type: resourceType, resource_id: resourceId, cluster }),
+    }),
+  removeFolderMember: (folderId: string, resourceType: string, resourceId: string, cluster: string) =>
+    fetchAPI<void>(`/folders/${folderId}/members`, {
+      method: 'DELETE',
+      body: JSON.stringify({ resource_type: resourceType, resource_id: resourceId, cluster }),
+    }),
+  moveResource: (req: MoveResourceRequest, tree: TreeView) =>
+    fetchAPI<void>(`/resources/move?tree=${tree}`, { method: 'POST', body: JSON.stringify(req) }),
 };
 
 // Helper functions

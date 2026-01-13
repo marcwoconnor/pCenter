@@ -15,9 +15,15 @@ type Config struct {
 	DRS      DRSConfig       `yaml:"drs"`
 	Server   ServerConfig    `yaml:"server"`
 	Metrics  MetricsConfig   `yaml:"metrics"`
+	Folders  FoldersConfig   `yaml:"folders"`
 
 	// Legacy: flat nodes array (auto-converted to single cluster)
 	Nodes []NodeConfig `yaml:"nodes,omitempty"`
+}
+
+// FoldersConfig holds folder organization settings
+type FoldersConfig struct {
+	DatabasePath string `yaml:"database_path"`
 }
 
 // MetricsConfig holds metrics collection settings
@@ -118,6 +124,11 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.DRS.Mode == "" {
 		cfg.DRS.Mode = "manual"
+	}
+
+	// Folders defaults
+	if cfg.Folders.DatabasePath == "" {
+		cfg.Folders.DatabasePath = "data/folders.db"
 	}
 
 	// Metrics defaults

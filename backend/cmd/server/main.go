@@ -13,6 +13,7 @@ import (
 
 	"github.com/moconnor/pcenter/internal/api"
 	"github.com/moconnor/pcenter/internal/config"
+	"github.com/moconnor/pcenter/internal/folders"
 	"github.com/moconnor/pcenter/internal/metrics"
 	"github.com/moconnor/pcenter/internal/poller"
 	"github.com/moconnor/pcenter/internal/state"
@@ -106,6 +107,18 @@ func main() {
 
 		slog.Info("metrics enabled", "database", cfg.Metrics.DatabasePath, "interval", cfg.Metrics.CollectionInterval)
 	}
+
+	// Initialize folders database (always enabled)
+	foldersDB, err := folders.Open(cfg.Folders.DatabasePath)
+	if err != nil {
+		slog.Error("failed to open folders database", "error", err)
+		os.Exit(1)
+	}
+	defer foldersDB.Close()
+
+	foldersService := folders.NewService(foldersDB)
+	handler.SetFoldersService(foldersService)
+	slog.Info("folders enabled", "database", cfg.Folders.DatabasePath)
 
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),

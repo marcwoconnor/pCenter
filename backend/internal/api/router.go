@@ -156,6 +156,16 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, corsOrigins []str
 	mux.HandleFunc("GET /api/metrics/ct/{vmid}", h.GetContainerMetrics)
 	mux.HandleFunc("GET /api/clusters/{cluster}/metrics", h.GetClusterMetrics)
 
+	// --- Folders endpoints ---
+	mux.HandleFunc("GET /api/folders/{tree}", h.GetFolderTree)
+	mux.HandleFunc("POST /api/folders", h.CreateFolder)
+	mux.HandleFunc("PUT /api/folders/{id}", h.RenameFolder)
+	mux.HandleFunc("DELETE /api/folders/{id}", h.DeleteFolder)
+	mux.HandleFunc("POST /api/folders/{id}/move", h.MoveFolder)
+	mux.HandleFunc("POST /api/folders/{id}/members", h.AddFolderMember)
+	mux.HandleFunc("DELETE /api/folders/{id}/members", h.RemoveFolderMember)
+	mux.HandleFunc("POST /api/resources/move", h.MoveResource)
+
 	// Serve static files and SPA fallback
 	staticDir := "./frontend"
 	if dir := os.Getenv("STATIC_DIR"); dir != "" {

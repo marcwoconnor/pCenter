@@ -381,3 +381,42 @@ export interface MetricsResponse {
   series: MetricSeries[];
   meta: MetricsMeta;
 }
+
+// Folder types for organizational hierarchy
+
+export type TreeView = 'hosts' | 'vms';
+
+export interface Folder {
+  id: string;
+  name: string;
+  parent_id?: string;
+  tree_view: TreeView;
+  cluster?: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  children?: Folder[];
+  members?: FolderMember[];
+}
+
+export interface FolderMember {
+  folder_id: string;
+  resource_type: 'vm' | 'ct' | 'node' | 'storage';
+  resource_id: string;
+  cluster: string;
+  added_at: string;
+}
+
+export interface CreateFolderRequest {
+  name: string;
+  parent_id?: string;
+  tree_view: TreeView;
+  cluster?: string;
+}
+
+export interface MoveResourceRequest {
+  resource_type: 'vm' | 'ct' | 'node' | 'storage';
+  resource_id: string;
+  cluster: string;
+  to_folder_id?: string;
+}

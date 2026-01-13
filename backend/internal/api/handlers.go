@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/moconnor/pcenter/internal/folders"
 	"github.com/moconnor/pcenter/internal/metrics"
 	"github.com/moconnor/pcenter/internal/poller"
 	"github.com/moconnor/pcenter/internal/pve"
@@ -20,6 +21,7 @@ type Handler struct {
 	store   *state.Store
 	poller  *poller.Poller
 	metrics *metrics.QueryService
+	folders *folders.Service
 }
 
 // NewHandler creates a new API handler
@@ -33,6 +35,11 @@ func NewHandler(store *state.Store, p *poller.Poller) *Handler {
 // SetMetricsService sets the metrics query service
 func (h *Handler) SetMetricsService(m *metrics.QueryService) {
 	h.metrics = m
+}
+
+// SetFoldersService sets the folders service
+func (h *Handler) SetFoldersService(f *folders.Service) {
+	h.folders = f
 }
 
 // getClient returns the PVE client for a cluster/node combination
@@ -1823,4 +1830,217 @@ func (h *Handler) GetClusterMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, result)
+}
+
+// --- Folder Handlers ---
+
+// GetFolderTree returns the folder tree for a specific view (hosts or vms)
+func (h *Handler) GetFolderTree(w http.ResponseWriter, r *http.Request) {
+	if h.folders == nil {
+		writeError(w, http.StatusServiceUnavailable, "folders not enabled")
+		return
+	}
+
+	tree := r.PathValue("tree")
+	var treeView folders.TreeView
+	switch tree {
+	case "hosts":
+		treeView = folders.TreeViewHosts
+	case "vms":
+		treeView = folders.TreeViewVMs
+	default:
+		writeError(w, http.StatusBadRequest, "invalid tree: must be 'hosts' or 'vms'")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	result, err := h.folders.GetFolderTree(ctx, treeView)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, result)
+}
+
+// CreateFolder creates a new folder
+func (h *Handler) CreateFolder(w http.ResponseWriter, r *http.Request) {
+	if h.folders == nil {
+		writeError(w, http.StatusServiceUnavailable, "folders not enabled")
+		return
+	}
+
+	var req folders.CreateFolderRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	folder, err := h.folders.CreateFolder(ctx, req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, folder)
+}
+
+// RenameFolder renames a folder
+func (h *Handler) RenameFolder(w http.ResponseWriter, r *http.Request) {
+	if h.folders == nil {
+		writeError(w, http.StatusServiceUnavailable, "folders not enabled")
+		return
+	}
+
+	id := r.PathValue("id")
+	var req folders.RenameFolderRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := h.folders.RenameFolder(ctx, id, req.Name); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// DeleteFolder deletes a folder
+func (h *Handler) DeleteFolder(w http.ResponseWriter, r *http.Request) {
+	if h.folders == nil {
+		writeError(w, http.StatusServiceUnavailable, "folders not enabled")
+		return
+	}
+
+	id := r.PathValue("id")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := h.folders.DeleteFolder(ctx, id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// MoveFolder moves a folder to a new parent
+func (h *Handler) MoveFolder(w http.ResponseWriter, r *http.Request) {
+	if h.folders == nil {
+		writeError(w, http.StatusServiceUnavailable, "folders not enabled")
+		return
+	}
+
+	id := r.PathValue("id")
+	var req folders.MoveFolderRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := h.folders.MoveFolder(ctx, id, req.ParentID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AddFolderMember adds a resource to a folder
+func (h *Handler) AddFolderMember(w http.ResponseWriter, r *http.Request) {
+	if h.folders == nil {
+		writeError(w, http.StatusServiceUnavailable, "folders not enabled")
+		return
+	}
+
+	folderID := r.PathValue("id")
+	var req folders.AddMemberRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := h.folders.AddMember(ctx, folderID, req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// RemoveFolderMember removes a resource from a folder
+func (h *Handler) RemoveFolderMember(w http.ResponseWriter, r *http.Request) {
+	if h.folders == nil {
+		writeError(w, http.StatusServiceUnavailable, "folders not enabled")
+		return
+	}
+
+	folderID := r.PathValue("id")
+	var req folders.RemoveMemberRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := h.folders.RemoveMember(ctx, folderID, req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// MoveResource moves a resource to a folder
+func (h *Handler) MoveResource(w http.ResponseWriter, r *http.Request) {
+	if h.folders == nil {
+		writeError(w, http.StatusServiceUnavailable, "folders not enabled")
+		return
+	}
+
+	var req folders.MoveResourceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Determine tree view from query param or default to hosts
+	tree := r.URL.Query().Get("tree")
+	var treeView folders.TreeView
+	switch tree {
+	case "vms":
+		treeView = folders.TreeViewVMs
+	default:
+		treeView = folders.TreeViewHosts
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := h.folders.MoveResource(ctx, req, treeView); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
