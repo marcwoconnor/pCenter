@@ -1,0 +1,27 @@
+# Backend
+backend/pcenter
+backend/tmp/
+*.exe
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Config with secrets
+config.yaml
+*.env
+.env*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+*.db
+*.sqlite

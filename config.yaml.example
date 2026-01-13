@@ -1,0 +1,39 @@
+# pCenter Configuration
+# Copy to config.yaml and fill in your values
+
+# New multi-cluster format (recommended)
+clusters:
+  - name: default
+    discovery_node: 10.31.10.14:8006  # Any node in cluster - others auto-discovered
+    token_id: root@pam!claudeCode
+    token_secret: ${PVE_TOKEN_SECRET}  # Set via environment variable
+    insecure: true  # Skip TLS verify for self-signed certs
+
+  # Add more clusters:
+  # - name: prod-dc2
+  #   discovery_node: 10.31.20.10:8006
+  #   token_id: root@pam!prodToken
+  #   token_secret: ${PVE_TOKEN_SECRET_PROD}
+
+# DRS settings (optional)
+drs:
+  enabled: false
+  mode: manual  # manual | semi-automatic | fully-automatic
+  check_interval: 300  # seconds
+  cpu_threshold: 0.8   # trigger when node CPU > 80%
+  mem_threshold: 0.85  # trigger when node memory > 85%
+
+server:
+  port: 8080
+  cors_origins:
+    - http://localhost:5173  # Vite dev server
+    - http://localhost:3000
+
+
+# Legacy format (auto-converts to single "default" cluster):
+# nodes:
+#   - name: pve04
+#     host: 10.31.11.1:8006
+#     token_id: root@pam!claudeCode
+#     token_secret: ${PVE_TOKEN_SECRET}
+#     insecure: true
