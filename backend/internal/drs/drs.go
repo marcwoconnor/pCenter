@@ -194,7 +194,7 @@ func (s *Scheduler) generateRecommendations(clusterName string, loads []NodeLoad
 			reason := s.formatReason(src, *target)
 			priority := s.calculatePriority(src)
 
-			if candidate.vmid > 0 {
+			if candidate.isVM {
 				recommendations = append(recommendations, pve.DRSRecommendation{
 					ID:        generateRecID(clusterName, recID),
 					Cluster:   clusterName,

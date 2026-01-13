@@ -1,7 +1,7 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useCluster } from '../context/ClusterContext';
 import type { SelectedObject } from '../context/ClusterContext';
-import type { Guest, Storage, ClusterInfo } from '../types';
+import type { Guest, Storage, ClusterInfo, NetworkInterface } from '../types';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { MigrateDialog } from './MigrateDialog';
 import { api } from '../api/client';
@@ -101,8 +101,40 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
   const { clusters, nodes, guests, storage, selectedObject, setSelectedObject, performAction, openConsole } = useCluster();
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [migrateGuest, setMigrateGuest] = useState<Guest | null>(null);
+  const [networkInterfaces, setNetworkInterfaces] = useState<NetworkInterface[]>([]);
 
   const filterLower = filter.toLowerCase();
+
+  // Fetch network interfaces when in network view
+  useEffect(() => {
+    if (view !== 'network') return;
+
+    async function fetchNetworkData() {
+      // Derive cluster names from nodes
+      let clusterNames: string[] = [];
+      if (clusters && clusters.length > 0) {
+        clusterNames = clusters.map(c => c.name);
+      } else if (nodes && nodes.length > 0) {
+        clusterNames = [...new Set(nodes.map(n => n.cluster).filter(Boolean))];
+      }
+      if (clusterNames.length === 0) return;
+
+      const allInterfaces: NetworkInterface[] = [];
+      for (const clusterName of clusterNames) {
+        try {
+          const ifaces = await api.getClusterNetworkInterfaces(clusterName);
+          allInterfaces.push(...ifaces);
+        } catch (e) {
+          console.error(`Failed to fetch network for ${clusterName}:`, e);
+        }
+      }
+      setNetworkInterfaces(allInterfaces);
+    }
+
+    fetchNetworkData();
+    const interval = setInterval(fetchNetworkData, 30000);
+    return () => clearInterval(interval);
+  }, [view, clusters, nodes]);
 
   // Sort clusters by name
   const sortedClusters = useMemo(() =>
@@ -548,17 +580,61 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
     );
   }
 
-  // Network View (placeholder)
+  // Network View - real interfaces
   if (view === 'network') {
+    // Group interfaces by node
+    const interfacesByNode = networkInterfaces.reduce((acc, iface) => {
+      const key = `${iface.cluster}-${iface.node}`;
+      if (!acc[key]) acc[key] = { node: iface.node, cluster: iface.cluster, interfaces: [] };
+      acc[key].interfaces.push(iface);
+      return acc;
+    }, {} as Record<string, { node: string; cluster: string; interfaces: NetworkInterface[] }>);
+
+    // Icon based on interface type
+    const getIfaceIcon = (type: string) => {
+      switch (type) {
+        case 'bridge': return '🌉';
+        case 'bond': return '🔗';
+        case 'vlan': return '🏷️';
+        case 'eth': return '🔌';
+        case 'OVSBridge': return '🌐';
+        default: return '📡';
+      }
+    };
+
+    // Format interface label
+    const getIfaceLabel = (iface: NetworkInterface) => {
+      let label = `${iface.iface} (${iface.type})`;
+      if (iface.address) label += ` - ${iface.address}`;
+      else if (iface.cidr) label += ` - ${iface.cidr}`;
+      return label;
+    };
+
     return (
       <div className="py-2">
-        <TreeNode icon="🌐" label="Networks" defaultExpanded>
-          {sortedNodes.map((node) => (
-            <TreeNode key={`${node.cluster}-${node.node}`} icon="🖥" label={node.node}>
-              <TreeNode icon="📡" label="vmbr0 (bridge)" />
-              <TreeNode icon="📡" label="vmbr1 (bridge)" />
-            </TreeNode>
-          ))}
+        <TreeNode icon="🌐" label="Networks" defaultExpanded count={networkInterfaces.length}>
+          {Object.values(interfacesByNode)
+            .sort((a, b) => a.node.localeCompare(b.node))
+            .map(({ node, cluster, interfaces }) => (
+              <TreeNode
+                key={`${cluster}-${node}`}
+                icon="🖥"
+                label={node}
+                count={interfaces.length}
+                defaultExpanded
+              >
+                {interfaces
+                  .sort((a, b) => a.iface.localeCompare(b.iface))
+                  .map((iface) => (
+                    <TreeNode
+                      key={`${cluster}-${node}-${iface.iface}`}
+                      icon={getIfaceIcon(iface.type)}
+                      label={getIfaceLabel(iface)}
+                      status={iface.active ? 'online' : 'stopped'}
+                    />
+                  ))}
+              </TreeNode>
+            ))}
         </TreeNode>
       </div>
     );

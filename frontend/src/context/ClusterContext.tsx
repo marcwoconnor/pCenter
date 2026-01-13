@@ -3,8 +3,15 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import { api } from '../api/client';
 import type { Summary, Node, Guest, Storage, ClusterInfo, MigrationProgress, DRSRecommendation } from '../types';
 
+interface CephHealthCheck {
+  severity: string;
+  summary: string;
+  detail?: string;
+}
+
 interface CephStatus {
   health: string;
+  checks?: Record<string, CephHealthCheck>;
   bytes_used: number;
   bytes_avail: number;
   bytes_total: number;

@@ -126,6 +126,13 @@ func (p *Poller) Start(ctx context.Context) {
 		}()
 	}
 
+	// Start migration status polling loop
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		p.pollMigrationsLoop(p.ctx)
+	}()
+
 	slog.Info("poller started", "clusters", len(p.clusters), "interval", p.interval, "drs", p.drsScheduler != nil)
 }
 
@@ -173,6 +180,13 @@ func (cp *ClusterPoller) run(ctx context.Context) {
 	go func() {
 		defer wg.Done()
 		cp.pollHALoop(ctx)
+	}()
+
+	// Also poll SDN data periodically
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		cp.pollSDNLoop(ctx)
 	}()
 
 	wg.Wait()
@@ -279,17 +293,19 @@ func (cp *ClusterPoller) fetchNode(ctx context.Context, client *pve.Client) {
 
 	// Fetch all data in parallel
 	var (
-		node    pve.Node
-		vms     []pve.VM
-		cts     []pve.Container
-		storage []pve.Storage
-		ceph    *pve.CephStatus
+		node        pve.Node
+		nodeDetails *pve.NodeStatus
+		vms         []pve.VM
+		cts         []pve.Container
+		storage     []pve.Storage
+		ceph        *pve.CephStatus
+		netIfaces   []pve.NetworkInterface
 
-		nodeErr, vmErr, ctErr, storageErr, cephErr error
-		wg                                          sync.WaitGroup
+		nodeErr, detailsErr, vmErr, ctErr, storageErr, cephErr, netErr error
+		wg                                                              sync.WaitGroup
 	)
 
-	wg.Add(5)
+	wg.Add(7)
 
 	go func() {
 		defer wg.Done()
@@ -299,6 +315,11 @@ func (cp *ClusterPoller) fetchNode(ctx context.Context, client *pve.Client) {
 		} else if nodeStatus != nil {
 			node = *nodeStatus
 		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		nodeDetails, detailsErr = client.GetNodeDetails(fetchCtx)
 	}()
 
 	go func() {
@@ -325,6 +346,11 @@ func (cp *ClusterPoller) fetchNode(ctx context.Context, client *pve.Client) {
 		}
 	}()
 
+	go func() {
+		defer wg.Done()
+		netIfaces, netErr = client.GetNetworkInterfaces(fetchCtx)
+	}()
+
 	wg.Wait()
 
 	// Check for critical errors
@@ -344,15 +370,32 @@ func (cp *ClusterPoller) fetchNode(ctx context.Context, client *pve.Client) {
 	if storageErr != nil {
 		slog.Warn("failed to fetch storage", "cluster", cp.name, "node", nodeName, "error", storageErr)
 	}
+	if netErr != nil {
+		slog.Warn("failed to fetch network interfaces", "cluster", cp.name, "node", nodeName, "error", netErr)
+	}
+	if detailsErr != nil {
+		slog.Warn("failed to fetch node details", "cluster", cp.name, "node", nodeName, "error", detailsErr)
+	}
 
 	// Update cluster state
 	cp.clusterStore.UpdateNode(nodeName, node, vms, cts, storage, ceph)
+
+	// Update network interfaces separately (node-specific)
+	if netErr == nil {
+		cp.clusterStore.UpdateNetworkInterfaces(nodeName, netIfaces)
+	}
+
+	// Update node details (version, kernel, etc.)
+	if detailsErr == nil && nodeDetails != nil {
+		cp.clusterStore.SetNodeDetails(nodeName, nodeDetails)
+	}
 
 	slog.Debug("polled node",
 		"cluster", cp.name,
 		"node", nodeName,
 		"vms", len(vms),
 		"containers", len(cts),
+		"interfaces", len(netIfaces),
 		"duration", time.Since(start),
 	)
 
@@ -386,6 +429,92 @@ func (cp *ClusterPoller) fetchHA(ctx context.Context) {
 	}
 
 	cp.clusterStore.SetHAStatus(haStatus)
+
+	if cp.onChange != nil {
+		cp.onChange()
+	}
+}
+
+// pollSDNLoop polls SDN data periodically
+func (cp *ClusterPoller) pollSDNLoop(ctx context.Context) {
+	// Poll SDN less frequently - every 60 seconds
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+
+	// Initial poll
+	cp.fetchSDN(ctx)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cp.fetchSDN(ctx)
+		}
+	}
+}
+
+// fetchSDN fetches SDN data for the cluster (zones, vnets, subnets, controllers)
+func (cp *ClusterPoller) fetchSDN(ctx context.Context) {
+	cp.mu.RLock()
+	var client *pve.Client
+	for _, c := range cp.clients {
+		client = c
+		break // Use first available client
+	}
+	cp.mu.RUnlock()
+
+	if client == nil {
+		return
+	}
+
+	fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// Fetch all SDN data in parallel
+	var (
+		zones       []pve.SDNZone
+		vnets       []pve.SDNVNet
+		subnets     []pve.SDNSubnet
+		controllers []pve.SDNController
+		wg          sync.WaitGroup
+	)
+
+	wg.Add(4)
+
+	go func() {
+		defer wg.Done()
+		zones, _ = client.GetSDNZones(fetchCtx)
+	}()
+
+	go func() {
+		defer wg.Done()
+		vnets, _ = client.GetSDNVNets(fetchCtx)
+	}()
+
+	go func() {
+		defer wg.Done()
+		subnets, _ = client.GetSDNSubnets(fetchCtx)
+	}()
+
+	go func() {
+		defer wg.Done()
+		controllers, _ = client.GetSDNControllers(fetchCtx)
+	}()
+
+	wg.Wait()
+
+	// Update cluster state
+	cp.clusterStore.SetSDNData(zones, vnets, subnets, controllers)
+
+	if len(zones) > 0 || len(vnets) > 0 {
+		slog.Debug("polled SDN",
+			"cluster", cp.name,
+			"zones", len(zones),
+			"vnets", len(vnets),
+			"subnets", len(subnets),
+		)
+	}
 
 	if cp.onChange != nil {
 		cp.onChange()
@@ -437,5 +566,83 @@ func (p *Poller) runDRSAnalysis() {
 	// Notify listeners of the update
 	if p.onChange != nil {
 		p.onChange()
+	}
+}
+
+// pollMigrationsLoop polls active migration task statuses
+func (p *Poller) pollMigrationsLoop(ctx context.Context) {
+	// Poll every 5 seconds - migrations can complete quickly
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.checkMigrationStatuses(ctx)
+		}
+	}
+}
+
+// checkMigrationStatuses checks all active migrations against Proxmox task API
+func (p *Poller) checkMigrationStatuses(ctx context.Context) {
+	migrations := p.store.GetMigrations()
+	if len(migrations) == 0 {
+		return
+	}
+
+	for _, m := range migrations {
+		// Find a client for the source node's cluster
+		clients := p.GetClusterClients(m.Cluster)
+		if clients == nil {
+			continue
+		}
+
+		// Get client for the source node (where task was started)
+		client, ok := clients[m.FromNode]
+		if !ok {
+			// Try any client in the cluster
+			for _, c := range clients {
+				client = c
+				break
+			}
+		}
+		if client == nil {
+			continue
+		}
+
+		// Query task status
+		fetchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		task, err := client.GetTaskStatus(fetchCtx, m.UPID)
+		cancel()
+
+		if err != nil {
+			slog.Debug("failed to get migration task status", "upid", m.UPID, "error", err)
+			continue
+		}
+
+		if task == nil {
+			continue
+		}
+
+		// Check if task is finished
+		if task.Status == "stopped" {
+			if task.ExitCode == "OK" {
+				slog.Info("migration completed", "vmid", m.VMID, "from", m.FromNode, "to", m.ToNode)
+				p.store.UpdateMigration(m.UPID, 100, "completed", "")
+			} else {
+				slog.Warn("migration failed", "vmid", m.VMID, "exitstatus", task.ExitCode)
+				p.store.UpdateMigration(m.UPID, m.Progress, "failed", task.ExitCode)
+			}
+			// Remove after a short delay so UI can see the final status
+			go func(upid string) {
+				time.Sleep(10 * time.Second)
+				p.store.RemoveMigration(upid)
+				if p.onChange != nil {
+					p.onChange()
+				}
+			}(m.UPID)
+		}
 	}
 }

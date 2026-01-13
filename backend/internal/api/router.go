@@ -42,7 +42,8 @@ func CORSMiddleware(origins []string) func(http.Handler) http.Handler {
 }
 
 // NewRouter creates the HTTP router with all routes
-func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, corsOrigins []string) http.Handler {
+// Returns both the http.Handler and the Handler for configuration
+func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, corsOrigins []string) (http.Handler, *Handler) {
 	h := NewHandler(store, p)
 
 	mux := http.NewServeMux()
@@ -80,6 +81,8 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, corsOrigins []str
 	// Storage & Ceph (all clusters)
 	mux.HandleFunc("GET /api/storage", h.GetStorage)
 	mux.HandleFunc("GET /api/ceph", h.GetCeph)
+	mux.HandleFunc("POST /api/ceph/command", h.RunCephCommand)
+	mux.HandleFunc("GET /api/smart", h.GetSmart)
 
 	// Migrations & DRS (global)
 	mux.HandleFunc("GET /api/migrations", h.GetMigrations)
@@ -119,6 +122,20 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, corsOrigins []str
 	mux.HandleFunc("POST /api/clusters/{cluster}/ha/{type}/{vmid}/enable", h.EnableHA)
 	mux.HandleFunc("DELETE /api/clusters/{cluster}/ha/{type}/{vmid}", h.DisableHA)
 
+	// Cluster Network/SDN
+	mux.HandleFunc("GET /api/clusters/{cluster}/network", h.GetClusterNetwork)
+	mux.HandleFunc("GET /api/clusters/{cluster}/network/interfaces", h.GetClusterNetworkInterfaces)
+	mux.HandleFunc("GET /api/clusters/{cluster}/sdn/zones", h.GetClusterSDNZones)
+	mux.HandleFunc("GET /api/clusters/{cluster}/sdn/vnets", h.GetClusterSDNVNets)
+	mux.HandleFunc("GET /api/clusters/{cluster}/sdn/subnets", h.GetClusterSDNSubnets)
+
+	// Cluster Maintenance Mode
+	mux.HandleFunc("GET /api/clusters/{cluster}/qdevice", h.GetQDeviceStatus)
+	mux.HandleFunc("GET /api/clusters/{cluster}/maintenance/{node}/preflight", h.GetMaintenancePreflight)
+	mux.HandleFunc("GET /api/clusters/{cluster}/maintenance/{node}/state", h.GetMaintenanceState)
+	mux.HandleFunc("POST /api/clusters/{cluster}/maintenance/{node}/enter", h.EnterMaintenanceMode)
+	mux.HandleFunc("POST /api/clusters/{cluster}/maintenance/{node}/exit", h.ExitMaintenanceMode)
+
 	// --- Migration endpoints ---
 
 	// Global (searches all clusters by VMID)
@@ -132,6 +149,13 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, corsOrigins []str
 	// Get nodes for migration target selection
 	mux.HandleFunc("GET /api/clusters/{cluster}/nodes/migration-targets", h.GetClusterNodesForMigration)
 
+	// --- Metrics endpoints ---
+	mux.HandleFunc("GET /api/metrics", h.GetMetrics)
+	mux.HandleFunc("GET /api/metrics/node/{node}", h.GetNodeMetrics)
+	mux.HandleFunc("GET /api/metrics/vm/{vmid}", h.GetVMMetrics)
+	mux.HandleFunc("GET /api/metrics/ct/{vmid}", h.GetContainerMetrics)
+	mux.HandleFunc("GET /api/clusters/{cluster}/metrics", h.GetClusterMetrics)
+
 	// Serve static files and SPA fallback
 	staticDir := "./frontend"
 	if dir := os.Getenv("STATIC_DIR"); dir != "" {
@@ -140,7 +164,7 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, corsOrigins []str
 	mux.Handle("/", spaHandler(staticDir))
 
 	// Apply CORS middleware
-	return CORSMiddleware(corsOrigins)(mux)
+	return CORSMiddleware(corsOrigins)(mux), h
 }
 
 // spaHandler serves static files and falls back to index.html for SPA routing

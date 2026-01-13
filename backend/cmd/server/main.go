@@ -13,6 +13,7 @@ import (
 
 	"github.com/moconnor/pcenter/internal/api"
 	"github.com/moconnor/pcenter/internal/config"
+	"github.com/moconnor/pcenter/internal/metrics"
 	"github.com/moconnor/pcenter/internal/poller"
 	"github.com/moconnor/pcenter/internal/state"
 )
@@ -72,7 +73,40 @@ func main() {
 	time.Sleep(2 * time.Second)
 
 	// Create HTTP server
-	router := api.NewRouter(store, p, hub, cfg.Server.CORSOrigins)
+	router, handler := api.NewRouter(store, p, hub, cfg.Server.CORSOrigins)
+
+	// Initialize metrics if enabled
+	var metricsDB *metrics.DB
+	if cfg.Metrics.Enabled {
+		var err error
+		metricsDB, err = metrics.Open(cfg.Metrics.DatabasePath)
+		if err != nil {
+			slog.Error("failed to open metrics database", "error", err)
+			os.Exit(1)
+		}
+		defer metricsDB.Close()
+
+		// Set up metrics services
+		queryService := metrics.NewQueryService(metricsDB)
+		handler.SetMetricsService(queryService)
+
+		// Start metrics collector
+		collector := metrics.NewCollector(store, metricsDB, cfg.Metrics.CollectionInterval)
+		go collector.Start(ctx)
+
+		// Start rollup service
+		retention := metrics.RetentionConfig{
+			RawHours:     cfg.Metrics.Retention.RawHours,
+			HourlyDays:   cfg.Metrics.Retention.HourlyDays,
+			DailyDays:    cfg.Metrics.Retention.DailyDays,
+			WeeklyMonths: cfg.Metrics.Retention.WeeklyMonths,
+		}
+		rollupService := metrics.NewRollupService(metricsDB, retention)
+		go rollupService.Start(ctx)
+
+		slog.Info("metrics enabled", "database", cfg.Metrics.DatabasePath, "interval", cfg.Metrics.CollectionInterval)
+	}
+
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
 		Handler:      router,

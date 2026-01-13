@@ -1,18 +1,52 @@
 package pve
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/moconnor/pcenter/internal/config"
 )
+
+// runSSHCommand executes a command on a remote host via SSH
+func runSSHCommand(ctx context.Context, host string, command string) (string, error) {
+	slog.Info("running SSH command", "host", host, "command", command)
+
+	cmd := exec.CommandContext(ctx, "ssh",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "ConnectTimeout=10",
+		fmt.Sprintf("root@%s", host),
+		command,
+	)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	output := stdout.String()
+	if stderr.Len() > 0 {
+		if output != "" {
+			output += "\n"
+		}
+		output += stderr.String()
+	}
+
+	if err != nil {
+		return output, fmt.Errorf("SSH command failed: %w\nOutput: %s", err, output)
+	}
+
+	return output, nil
+}
 
 // Client is a Proxmox VE API client for a single node
 type Client struct {
@@ -184,6 +218,23 @@ func (c *Client) GetNodeStatus(ctx context.Context) (*Node, error) {
 	return nil, fmt.Errorf("node %s not found", c.nodeName)
 }
 
+// GetNodeDetails returns detailed node info (version, kernel, CPU model, etc.)
+func (c *Client) GetNodeDetails(ctx context.Context) (*NodeStatus, error) {
+	raw, err := get[NodeStatusResponse](c, ctx, fmt.Sprintf("/nodes/%s/status", c.nodeName))
+	if err != nil {
+		return nil, err
+	}
+	return &NodeStatus{
+		PVEVersion:    raw.PVEVersion,
+		KernelVersion: raw.KVersion,
+		CPUModel:      raw.CPUInfo.Model,
+		CPUCores:      raw.CPUInfo.Cores,
+		CPUSockets:    raw.CPUInfo.Sockets,
+		BootMode:      raw.BootInfo.Mode,
+		LoadAvg:       raw.LoadAvg,
+	}, nil
+}
+
 // --- VM operations ---
 
 // GetVMs returns all VMs on this node
@@ -345,6 +396,473 @@ func (c *Client) GetCephStatus(ctx context.Context) (*CephStatus, error) {
 		return nil, err
 	}
 	return &status, nil
+}
+
+// RunCephCommand executes a whitelisted Ceph command via SSH
+func (c *Client) RunCephCommand(ctx context.Context, command string, pgID string) (string, error) {
+	// Build the full command based on the command type
+	var fullCmd string
+	switch command {
+	case "pg_repair":
+		if pgID == "" {
+			return "", fmt.Errorf("pg_id is required for pg_repair")
+		}
+		// Validate PG ID format (e.g., "4.3b" - pool.pg_num in hex)
+		if !isValidPgID(pgID) {
+			return "", fmt.Errorf("invalid pg_id format: %s", pgID)
+		}
+		fullCmd = fmt.Sprintf("ceph pg repair %s", pgID)
+	case "health_detail":
+		fullCmd = "ceph health detail"
+	case "osd_tree":
+		fullCmd = "ceph osd tree"
+	case "status":
+		fullCmd = "ceph status"
+	case "pg_query":
+		if pgID == "" {
+			return "", fmt.Errorf("pg_id is required for pg_query")
+		}
+		if !isValidPgID(pgID) {
+			return "", fmt.Errorf("invalid pg_id format: %s", pgID)
+		}
+		fullCmd = fmt.Sprintf("ceph pg %s query | head -20", pgID)
+	default:
+		return "", fmt.Errorf("unknown command: %s", command)
+	}
+
+	// Get the node hostname from the base URL
+	host := c.getHostFromURL()
+	if host == "" {
+		return "", fmt.Errorf("could not determine node host")
+	}
+
+	// Execute via SSH
+	return runSSHCommand(ctx, host, fullCmd)
+}
+
+// isValidPgID validates the format of a Ceph PG ID (e.g., "4.3b")
+func isValidPgID(pgID string) bool {
+	parts := strings.Split(pgID, ".")
+	if len(parts) != 2 {
+		return false
+	}
+	// First part should be a number (pool ID)
+	for _, ch := range parts[0] {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	// Second part should be hex (pg num)
+	for _, ch := range parts[1] {
+		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')) {
+			return false
+		}
+	}
+	return len(parts[0]) > 0 && len(parts[1]) > 0
+}
+
+// getHostFromURL extracts the hostname from the client's base URL
+func (c *Client) getHostFromURL() string {
+	u, err := url.Parse(c.baseURL)
+	if err != nil {
+		return ""
+	}
+	host := u.Hostname()
+	// Remove port if present
+	if idx := strings.Index(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+	return host
+}
+
+// GetSmartData fetches SMART data for all disks on this node
+func (c *Client) GetSmartData(ctx context.Context) ([]SmartDisk, error) {
+	host := c.getHostFromURL()
+	if host == "" {
+		return nil, fmt.Errorf("could not determine node host")
+	}
+
+	// Get list of SMART-capable devices
+	scanOutput, err := runSSHCommand(ctx, host, "smartctl --scan -j")
+	if err != nil {
+		return nil, fmt.Errorf("smartctl scan failed: %w", err)
+	}
+
+	var scanResult struct {
+		Devices []struct {
+			Name     string `json:"name"`
+			InfoName string `json:"info_name"`
+			Type     string `json:"type"`
+			Protocol string `json:"protocol"`
+		} `json:"devices"`
+	}
+	if err := json.Unmarshal([]byte(scanOutput), &scanResult); err != nil {
+		return nil, fmt.Errorf("failed to parse smartctl scan: %w", err)
+	}
+
+	var disks []SmartDisk
+	criticalAttrs := map[int]bool{
+		5:   true, // Reallocated_Sector_Ct
+		10:  true, // Spin_Retry_Count
+		196: true, // Reallocated_Event_Count
+		197: true, // Current_Pending_Sector
+		198: true, // Offline_Uncorrectable
+	}
+
+	for _, dev := range scanResult.Devices {
+		// Skip rbd devices and similar
+		if strings.HasPrefix(dev.Name, "/dev/rbd") {
+			continue
+		}
+
+		// Get detailed SMART data for this device
+		smartOutput, err := runSSHCommand(ctx, host, fmt.Sprintf("smartctl -j -a %s", dev.Name))
+		if err != nil {
+			slog.Warn("failed to get SMART data", "device", dev.Name, "error", err)
+			continue
+		}
+
+		disk := parseSmartJSON(smartOutput, dev.Name, c.nodeName, criticalAttrs)
+		if disk != nil {
+			disk.Cluster = c.clusterName
+			disks = append(disks, *disk)
+		}
+	}
+
+	return disks, nil
+}
+
+// parseSmartJSON parses smartctl JSON output into a SmartDisk
+func parseSmartJSON(jsonData string, device string, node string, criticalAttrs map[int]bool) *SmartDisk {
+	var data struct {
+		Device struct {
+			Name     string `json:"name"`
+			Protocol string `json:"protocol"`
+		} `json:"device"`
+		ModelName       string `json:"model_name"`
+		ScsiModelName   string `json:"scsi_model_name"`
+		ScsiVendor      string `json:"scsi_vendor"`
+		ScsiProduct     string `json:"scsi_product"`
+		SerialNumber    string `json:"serial_number"`
+		ScsiSerial      string `json:"scsi_serial"`
+		FirmwareVersion string `json:"firmware_version"`
+		UserCapacity   struct {
+			Bytes int64 `json:"bytes"`
+		} `json:"user_capacity"`
+		RotationRate int `json:"rotation_rate"` // 0 for SSD/NVMe
+		SmartStatus  struct {
+			Passed bool `json:"passed"`
+		} `json:"smart_status"`
+		ATASmartAttributes struct {
+			Revision int `json:"revision"`
+			Table    []struct {
+				ID         int    `json:"id"`
+				Name       string `json:"name"`
+				Value      int    `json:"value"`
+				Worst      int    `json:"worst"`
+				Thresh     int    `json:"thresh"`
+				WhenFailed string `json:"when_failed"`
+				Flags      struct {
+					String string `json:"string"`
+				} `json:"flags"`
+				Raw struct {
+					Value int64 `json:"value"`
+				} `json:"raw"`
+			} `json:"table"`
+		} `json:"ata_smart_attributes"`
+		NVMeSmartHealthLog struct {
+			CriticalWarning         int   `json:"critical_warning"`
+			Temperature             int   `json:"temperature"`
+			AvailableSpare          int   `json:"available_spare"`
+			AvailableSpareThreshold int   `json:"available_spare_threshold"`
+			PercentageUsed          int   `json:"percentage_used"`
+			DataUnitsRead           int64 `json:"data_units_read"`
+			DataUnitsWritten        int64 `json:"data_units_written"`
+			PowerCycles             int64 `json:"power_cycles"`
+			PowerOnHours            int64 `json:"power_on_hours"`
+			UnsafeShutdowns         int64 `json:"unsafe_shutdowns"`
+			MediaErrors             int64 `json:"media_and_data_integrity_errors"`
+			ErrorInfoLogEntries     int64 `json:"num_err_log_entries"`
+		} `json:"nvme_smart_health_information_log"`
+		Temperature struct {
+			Current int `json:"current"`
+		} `json:"temperature"`
+		PowerOnTime struct {
+			Hours int64 `json:"hours"`
+		} `json:"power_on_time"`
+	}
+
+	if err := json.Unmarshal([]byte(jsonData), &data); err != nil {
+		slog.Warn("failed to parse SMART JSON", "device", device, "error", err)
+		return nil
+	}
+
+	// Use SCSI fields as fallback for model and serial
+	model := data.ModelName
+	if model == "" {
+		model = data.ScsiModelName
+	}
+	if model == "" && data.ScsiVendor != "" {
+		model = data.ScsiVendor + " " + data.ScsiProduct
+	}
+
+	serial := data.SerialNumber
+	if serial == "" {
+		serial = data.ScsiSerial
+	}
+
+	disk := &SmartDisk{
+		Node:     node,
+		Device:   device,
+		Model:    model,
+		Serial:   serial,
+		Capacity: data.UserCapacity.Bytes,
+		Protocol: data.Device.Protocol,
+	}
+
+	// Determine disk type
+	if data.Device.Protocol == "NVMe" {
+		disk.Type = "nvme"
+	} else if data.RotationRate == 0 {
+		disk.Type = "ssd"
+	} else {
+		disk.Type = "hdd"
+	}
+
+	// Health status
+	if data.SmartStatus.Passed {
+		disk.Health = "PASSED"
+	} else {
+		disk.Health = "FAILED"
+	}
+
+	// Temperature and power-on hours
+	if data.Device.Protocol == "NVMe" {
+		disk.Temperature = data.NVMeSmartHealthLog.Temperature
+		disk.PowerOnHours = data.NVMeSmartHealthLog.PowerOnHours
+
+		// NVMe specific health data
+		disk.NVMeHealth = &NVMeHealth{
+			CriticalWarning:      data.NVMeSmartHealthLog.CriticalWarning,
+			AvailableSpare:       data.NVMeSmartHealthLog.AvailableSpare,
+			AvailableSpareThresh: data.NVMeSmartHealthLog.AvailableSpareThreshold,
+			PercentUsed:          data.NVMeSmartHealthLog.PercentageUsed,
+			DataUnitsRead:        data.NVMeSmartHealthLog.DataUnitsRead,
+			DataUnitsWritten:     data.NVMeSmartHealthLog.DataUnitsWritten,
+			PowerCycles:          data.NVMeSmartHealthLog.PowerCycles,
+			UnsafeShutdowns:      data.NVMeSmartHealthLog.UnsafeShutdowns,
+			MediaErrors:          data.NVMeSmartHealthLog.MediaErrors,
+			ErrorLogEntries:      data.NVMeSmartHealthLog.ErrorInfoLogEntries,
+		}
+
+		// Override health if critical warning or media errors
+		if data.NVMeSmartHealthLog.CriticalWarning > 0 || data.NVMeSmartHealthLog.MediaErrors > 0 {
+			disk.Health = "WARNING"
+		}
+	} else {
+		disk.Temperature = data.Temperature.Current
+		disk.PowerOnHours = data.PowerOnTime.Hours
+
+		// Parse ATA SMART attributes
+		for _, attr := range data.ATASmartAttributes.Table {
+			smartAttr := SmartAttribute{
+				ID:         attr.ID,
+				Name:       attr.Name,
+				Value:      attr.Value,
+				Worst:      attr.Worst,
+				Threshold:  attr.Thresh,
+				Raw:        attr.Raw.Value,
+				Flags:      attr.Flags.String,
+				WhenFailed: attr.WhenFailed,
+				Critical:   criticalAttrs[attr.ID],
+			}
+
+			// Check for critical attribute failures
+			if smartAttr.Critical && smartAttr.Raw > 0 {
+				disk.Health = "WARNING"
+			}
+
+			disk.Attributes = append(disk.Attributes, smartAttr)
+		}
+	}
+
+	return disk
+}
+
+// --- QDevice & Maintenance ---
+
+// GetQDeviceStatus returns the qdevice status from this node
+func (c *Client) GetQDeviceStatus(ctx context.Context) (*QDeviceStatus, error) {
+	host := c.getHostFromURL()
+	if host == "" {
+		return nil, fmt.Errorf("could not determine node host")
+	}
+
+	output, err := runSSHCommand(ctx, host, "corosync-qdevice-tool -s 2>/dev/null || echo 'NOT_CONFIGURED'")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get qdevice status: %w", err)
+	}
+
+	status := &QDeviceStatus{
+		Configured: !strings.Contains(output, "NOT_CONFIGURED"),
+	}
+
+	if !status.Configured {
+		return status, nil
+	}
+
+	// Parse the output
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "QNetd host:") {
+			status.QNetdAddress = strings.TrimSpace(strings.TrimPrefix(line, "QNetd host:"))
+		} else if strings.HasPrefix(line, "Algorithm:") {
+			status.Algorithm = strings.TrimSpace(strings.TrimPrefix(line, "Algorithm:"))
+		} else if strings.HasPrefix(line, "State:") {
+			status.State = strings.TrimSpace(strings.TrimPrefix(line, "State:"))
+			status.Connected = status.State == "Connected"
+		}
+	}
+
+	return status, nil
+}
+
+// FindQDeviceVM finds the VM running the qdevice (qnetd) server
+func (c *Client) FindQDeviceVM(ctx context.Context, qnetdIP string) (*QDeviceStatus, error) {
+	// We need to find which VM has this IP
+	// This requires checking VM guest agent network info
+	// For now, we'll identify by name pattern "osd-mon" or by checking the IP
+
+	// Get all VMs on this node
+	vms, err := c.GetVMs(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, vm := range vms {
+		// Check if VM name matches qdevice pattern
+		if strings.Contains(strings.ToLower(vm.Name), "osd-mon") ||
+			strings.Contains(strings.ToLower(vm.Name), "qdevice") ||
+			strings.Contains(strings.ToLower(vm.Name), "quorum") {
+			return &QDeviceStatus{
+				HostNode:   c.nodeName,
+				HostVMID:   vm.VMID,
+				HostVMName: vm.Name,
+			}, nil
+		}
+	}
+
+	return nil, nil
+}
+
+// GetMaintenancePreflight performs pre-flight checks for maintenance mode
+func (c *Client) GetMaintenancePreflight(ctx context.Context, targetNode string, allNodes []string) (*MaintenancePreflight, error) {
+	preflight := &MaintenancePreflight{
+		Node:     targetNode,
+		CanEnter: true,
+	}
+
+	host := c.getHostFromURL()
+	if host == "" {
+		return nil, fmt.Errorf("could not determine node host")
+	}
+
+	// Check 1: Verify we have another node to migrate to
+	var otherNode string
+	for _, n := range allNodes {
+		if n != targetNode {
+			otherNode = n
+			break
+		}
+	}
+	if otherNode == "" {
+		preflight.Checks = append(preflight.Checks, MaintenancePreflightCheck{
+			Name:     "Target Node Available",
+			Status:   "error",
+			Message:  "No other node available for migration",
+			Blocking: true,
+		})
+		preflight.CanEnter = false
+		return preflight, nil
+	}
+	preflight.Checks = append(preflight.Checks, MaintenancePreflightCheck{
+		Name:    "Target Node Available",
+		Status:  "ok",
+		Message: fmt.Sprintf("Guests will migrate to %s", otherNode),
+	})
+
+	// Check 2: Ceph health
+	cephOutput, err := runSSHCommand(ctx, host, "ceph health 2>/dev/null || echo 'CEPH_NOT_AVAILABLE'")
+	if err == nil && !strings.Contains(cephOutput, "CEPH_NOT_AVAILABLE") {
+		cephHealth := strings.TrimSpace(cephOutput)
+		if cephHealth == "HEALTH_OK" {
+			preflight.Checks = append(preflight.Checks, MaintenancePreflightCheck{
+				Name:    "Ceph Health",
+				Status:  "ok",
+				Message: "Ceph cluster is healthy",
+			})
+		} else if strings.Contains(cephHealth, "HEALTH_WARN") {
+			preflight.Checks = append(preflight.Checks, MaintenancePreflightCheck{
+				Name:    "Ceph Health",
+				Status:  "warning",
+				Message: fmt.Sprintf("Ceph has warnings: %s", cephHealth),
+			})
+		} else {
+			preflight.Checks = append(preflight.Checks, MaintenancePreflightCheck{
+				Name:     "Ceph Health",
+				Status:   "error",
+				Message:  fmt.Sprintf("Ceph is unhealthy: %s", cephHealth),
+				Blocking: true,
+			})
+			preflight.CanEnter = false
+		}
+	}
+
+	// Check 3: QDevice status
+	qdeviceOutput, err := runSSHCommand(ctx, host, "corosync-qdevice-tool -s 2>/dev/null | grep -E 'State:|QNetd host:' || echo 'NO_QDEVICE'")
+	if err == nil && !strings.Contains(qdeviceOutput, "NO_QDEVICE") {
+		if strings.Contains(qdeviceOutput, "Connected") {
+			preflight.Checks = append(preflight.Checks, MaintenancePreflightCheck{
+				Name:    "QDevice Connected",
+				Status:  "ok",
+				Message: "Cluster qdevice is connected and will maintain quorum",
+			})
+		} else {
+			preflight.Checks = append(preflight.Checks, MaintenancePreflightCheck{
+				Name:     "QDevice Connected",
+				Status:   "error",
+				Message:  "QDevice is not connected - maintenance would break quorum",
+				Blocking: true,
+			})
+			preflight.CanEnter = false
+		}
+	}
+
+	// Check 4: Set Ceph noout flag reminder
+	preflight.Checks = append(preflight.Checks, MaintenancePreflightCheck{
+		Name:    "Ceph OSD Flags",
+		Status:  "warning",
+		Message: "Will set 'noout' flag to prevent OSD rebalancing during maintenance",
+	})
+
+	return preflight, nil
+}
+
+// SetCephNoout sets or unsets the Ceph noout flag
+func (c *Client) SetCephNoout(ctx context.Context, enable bool) error {
+	host := c.getHostFromURL()
+	if host == "" {
+		return fmt.Errorf("could not determine node host")
+	}
+
+	cmd := "ceph osd unset noout"
+	if enable {
+		cmd = "ceph osd set noout"
+	}
+
+	_, err := runSSHCommand(ctx, host, cmd)
+	return err
 }
 
 // --- Migration ---
@@ -728,4 +1246,61 @@ func (c *Client) delete(ctx context.Context, path string) error {
 	}
 
 	return nil
+}
+
+// --- Network operations ---
+
+// GetNetworkInterfaces returns all network interfaces on this node
+func (c *Client) GetNetworkInterfaces(ctx context.Context) ([]NetworkInterface, error) {
+	ifaces, err := get[[]NetworkInterface](c, ctx, fmt.Sprintf("/nodes/%s/network", c.nodeName))
+	if err != nil {
+		return nil, err
+	}
+	// Tag with node name
+	for i := range ifaces {
+		ifaces[i].Node = c.nodeName
+	}
+	return ifaces, nil
+}
+
+// --- SDN operations (cluster-wide) ---
+
+// GetSDNZones returns all SDN zones in the cluster
+func (c *Client) GetSDNZones(ctx context.Context) ([]SDNZone, error) {
+	zones, err := get[[]SDNZone](c, ctx, "/cluster/sdn/zones")
+	if err != nil {
+		// SDN might not be configured
+		return []SDNZone{}, nil
+	}
+	return zones, nil
+}
+
+// GetSDNVNets returns all SDN virtual networks in the cluster
+func (c *Client) GetSDNVNets(ctx context.Context) ([]SDNVNet, error) {
+	vnets, err := get[[]SDNVNet](c, ctx, "/cluster/sdn/vnets")
+	if err != nil {
+		// SDN might not be configured
+		return []SDNVNet{}, nil
+	}
+	return vnets, nil
+}
+
+// GetSDNSubnets returns all SDN subnets in the cluster
+func (c *Client) GetSDNSubnets(ctx context.Context) ([]SDNSubnet, error) {
+	subnets, err := get[[]SDNSubnet](c, ctx, "/cluster/sdn/subnets")
+	if err != nil {
+		// SDN might not be configured
+		return []SDNSubnet{}, nil
+	}
+	return subnets, nil
+}
+
+// GetSDNControllers returns all SDN controllers in the cluster
+func (c *Client) GetSDNControllers(ctx context.Context) ([]SDNController, error) {
+	controllers, err := get[[]SDNController](c, ctx, "/cluster/sdn/controllers")
+	if err != nil {
+		// SDN controllers might not be configured
+		return []SDNController{}, nil
+	}
+	return controllers, nil
 }

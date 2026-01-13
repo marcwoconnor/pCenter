@@ -14,9 +14,26 @@ type Config struct {
 	Clusters []ClusterConfig `yaml:"clusters"`
 	DRS      DRSConfig       `yaml:"drs"`
 	Server   ServerConfig    `yaml:"server"`
+	Metrics  MetricsConfig   `yaml:"metrics"`
 
 	// Legacy: flat nodes array (auto-converted to single cluster)
 	Nodes []NodeConfig `yaml:"nodes,omitempty"`
+}
+
+// MetricsConfig holds metrics collection settings
+type MetricsConfig struct {
+	Enabled            bool            `yaml:"enabled"`
+	DatabasePath       string          `yaml:"database_path"`
+	CollectionInterval int             `yaml:"collection_interval"` // seconds
+	Retention          RetentionConfig `yaml:"retention"`
+}
+
+// RetentionConfig defines how long metrics are kept at each resolution
+type RetentionConfig struct {
+	RawHours     int `yaml:"raw_hours"`     // Default: 24
+	HourlyDays   int `yaml:"hourly_days"`   // Default: 7
+	DailyDays    int `yaml:"daily_days"`    // Default: 30
+	WeeklyMonths int `yaml:"weekly_months"` // Default: 12
 }
 
 // ClusterConfig defines a Proxmox cluster to manage
@@ -101,6 +118,26 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.DRS.Mode == "" {
 		cfg.DRS.Mode = "manual"
+	}
+
+	// Metrics defaults
+	if cfg.Metrics.DatabasePath == "" {
+		cfg.Metrics.DatabasePath = "data/metrics.db"
+	}
+	if cfg.Metrics.CollectionInterval == 0 {
+		cfg.Metrics.CollectionInterval = 30
+	}
+	if cfg.Metrics.Retention.RawHours == 0 {
+		cfg.Metrics.Retention.RawHours = 24
+	}
+	if cfg.Metrics.Retention.HourlyDays == 0 {
+		cfg.Metrics.Retention.HourlyDays = 7
+	}
+	if cfg.Metrics.Retention.DailyDays == 0 {
+		cfg.Metrics.Retention.DailyDays = 30
+	}
+	if cfg.Metrics.Retention.WeeklyMonths == 0 {
+		cfg.Metrics.Retention.WeeklyMonths = 12
 	}
 
 	// Validate clusters

@@ -17,6 +17,32 @@ type Node struct {
 	SSLFingerprint string  `json:"ssl_fingerprint,omitempty"`
 }
 
+// NodeStatus contains detailed node status from /nodes/{node}/status
+type NodeStatus struct {
+	PVEVersion    string   `json:"pveversion"`
+	KernelVersion string   `json:"kversion"`
+	CPUModel      string   `json:"cpu_model"`
+	CPUCores      int      `json:"cpu_cores"`
+	CPUSockets    int      `json:"cpu_sockets"`
+	BootMode      string   `json:"boot_mode"`
+	LoadAvg       []string `json:"loadavg"`
+}
+
+// NodeStatusResponse is the raw response from Proxmox /nodes/{node}/status
+type NodeStatusResponse struct {
+	PVEVersion string `json:"pveversion"`
+	KVersion   string `json:"kversion"`
+	CPUInfo    struct {
+		Model   string `json:"model"`
+		Cores   int    `json:"cores"`
+		Sockets int    `json:"sockets"`
+	} `json:"cpuinfo"`
+	BootInfo struct {
+		Mode string `json:"mode"`
+	} `json:"boot-info"`
+	LoadAvg []string `json:"loadavg"`
+}
+
 // VM represents a QEMU virtual machine
 type VM struct {
 	Cluster   string  `json:"cluster,omitempty"` // populated by us
@@ -121,10 +147,30 @@ type Task struct {
 	ExitCode  string `json:"exitstatus,omitempty"`
 }
 
+// CephHealthCheckDetail is a single detail message within a health check
+type CephHealthCheckDetail struct {
+	Message string `json:"message"`
+}
+
+// CephHealthCheckSummary is the summary of a health check
+type CephHealthCheckSummary struct {
+	Count   int    `json:"count"`
+	Message string `json:"message"`
+}
+
+// CephHealthCheck represents a single Ceph health check
+type CephHealthCheck struct {
+	Severity string                  `json:"severity"` // HEALTH_OK, HEALTH_WARN, HEALTH_ERR
+	Summary  CephHealthCheckSummary  `json:"summary"`
+	Detail   []CephHealthCheckDetail `json:"detail"`
+	Muted    bool                    `json:"muted"`
+}
+
 // CephStatus represents Ceph cluster health
 type CephStatus struct {
 	Health struct {
-		Status string `json:"status"` // HEALTH_OK, HEALTH_WARN, HEALTH_ERR
+		Status string                     `json:"status"` // HEALTH_OK, HEALTH_WARN, HEALTH_ERR
+		Checks map[string]CephHealthCheck `json:"checks,omitempty"`
 	} `json:"health"`
 	PGMap struct {
 		BytesUsed  int64 `json:"bytes_used"`
@@ -219,4 +265,195 @@ type ClusterState struct {
 	VMs        []VM
 	Containers []Container
 	Storage    []Storage
+}
+
+// NetworkInterface represents a node's network interface
+type NetworkInterface struct {
+	Cluster       string `json:"cluster,omitempty"`       // populated by us
+	Node          string `json:"node,omitempty"`          // populated by us
+	Iface         string `json:"iface"`                   // interface name (eth0, vmbr0, etc)
+	Type          string `json:"type"`                    // bridge, bond, eth, vlan, OVSBridge, etc
+	Active        int    `json:"active"`                  // 1 or 0
+	Autostart     int    `json:"autostart"`               // 1 or 0
+	Method        string `json:"method,omitempty"`        // static, dhcp, manual
+	Method6       string `json:"method6,omitempty"`       // IPv6 method
+	Address       string `json:"address,omitempty"`       // IPv4 address
+	Netmask       string `json:"netmask,omitempty"`       // IPv4 netmask
+	Gateway       string `json:"gateway,omitempty"`       // IPv4 gateway
+	CIDR          string `json:"cidr,omitempty"`          // CIDR notation
+	Address6      string `json:"address6,omitempty"`      // IPv6 address
+	Netmask6      string `json:"netmask6,omitempty"`      // IPv6 prefix
+	Gateway6      string `json:"gateway6,omitempty"`      // IPv6 gateway
+	BridgePorts   string `json:"bridge_ports,omitempty"`  // bridge members
+	BridgeSTP     string `json:"bridge_stp,omitempty"`    // spanning tree
+	BridgeFD      string `json:"bridge_fd,omitempty"`     // forward delay
+	BridgeVlanAware int  `json:"bridge_vlan_aware,omitempty"` // VLAN aware bridge
+	BondSlaves    string `json:"slaves,omitempty"`        // bond members
+	BondMode      string `json:"bond_mode,omitempty"`     // bonding mode
+	BondPrimary   string `json:"bond-primary,omitempty"`  // primary interface
+	VLANRawDevice string      `json:"vlan-raw-device,omitempty"` // parent for VLAN
+	VLANID        interface{} `json:"vlan-id,omitempty"`         // VLAN tag (can be string or int)
+	MTU           int    `json:"mtu,omitempty"`           // MTU size
+	Comments      string `json:"comments,omitempty"`      // description
+}
+
+// SDNZone represents an SDN zone (cluster-wide)
+type SDNZone struct {
+	Cluster      string `json:"cluster,omitempty"` // populated by us
+	Zone         string `json:"zone"`              // zone identifier
+	Type         string `json:"type"`              // simple, vlan, qinq, vxlan, evpn
+	State        string `json:"state,omitempty"`   // active, pending
+	Pending      int    `json:"pending,omitempty"` // has pending changes
+	Nodes        string `json:"nodes,omitempty"`   // restrict to nodes
+	IPAM         string `json:"ipam,omitempty"`    // IPAM plugin
+	DNS          string `json:"dns,omitempty"`     // DNS plugin
+	ReverseDNS   string `json:"reversedns,omitempty"` // reverse DNS zone
+	DNSZone      string `json:"dnszone,omitempty"` // DNS zone name
+	Bridge       string `json:"bridge,omitempty"`  // bridge for simple/vlan zones
+	Tag          int    `json:"tag,omitempty"`     // default VLAN tag
+	VLANProtocol string `json:"vlan-protocol,omitempty"` // 802.1q or 802.1ad
+	MTU          int    `json:"mtu,omitempty"`     // MTU size
+	Peers        string `json:"peers,omitempty"`   // peer list for vxlan/evpn
+}
+
+// SDNVNet represents a virtual network within an SDN zone
+type SDNVNet struct {
+	Cluster   string `json:"cluster,omitempty"` // populated by us
+	VNet      string `json:"vnet"`              // vnet identifier
+	Zone      string `json:"zone"`              // parent zone
+	Type      string `json:"type,omitempty"`    // vnet type
+	State     string `json:"state,omitempty"`   // active, pending
+	Pending   int    `json:"pending,omitempty"` // has pending changes
+	Alias     string `json:"alias,omitempty"`   // display name
+	Tag       int    `json:"tag,omitempty"`     // VLAN/VXLAN tag
+	VLANAware int    `json:"vlanaware,omitempty"` // VLAN aware
+}
+
+// SDNSubnet represents a subnet within an SDN vnet
+type SDNSubnet struct {
+	Cluster       string `json:"cluster,omitempty"` // populated by us
+	Subnet        string `json:"subnet"`            // CIDR notation
+	VNet          string `json:"vnet"`              // parent vnet
+	Zone          string `json:"zone,omitempty"`    // parent zone (from vnet)
+	Type          string `json:"type,omitempty"`    // subnet type
+	State         string `json:"state,omitempty"`   // active, pending
+	Gateway       string `json:"gateway,omitempty"` // gateway IP
+	SNAT          int    `json:"snat,omitempty"`    // enable SNAT
+	DNSZonePrefix string `json:"dnszoneprefix,omitempty"` // DNS prefix
+}
+
+// SDNController represents an SDN controller (for EVPN)
+type SDNController struct {
+	Cluster    string `json:"cluster,omitempty"` // populated by us
+	Controller string `json:"controller"`        // controller identifier
+	Type       string `json:"type"`              // evpn, faucet, etc
+	State      string `json:"state,omitempty"`   // active, pending
+	Pending    int    `json:"pending,omitempty"` // has pending changes
+	ASN        int    `json:"asn,omitempty"`     // BGP ASN
+	Peers      string `json:"peers,omitempty"`   // BGP peers
+}
+
+// SmartDisk represents a disk with SMART data
+type SmartDisk struct {
+	Node         string           `json:"node"`
+	Cluster      string           `json:"cluster,omitempty"`
+	Device       string           `json:"device"`       // /dev/sda
+	Model        string           `json:"model"`        // drive model
+	Serial       string           `json:"serial"`       // serial number
+	Capacity     int64            `json:"capacity"`     // bytes
+	Type         string           `json:"type"`         // hdd, ssd, nvme
+	Protocol     string           `json:"protocol"`     // ATA, NVMe
+	Health       string           `json:"health"`       // PASSED, FAILED, UNKNOWN
+	PowerOnHours int64            `json:"power_on_hours"`
+	Temperature  int              `json:"temperature"`  // Celsius
+	Attributes   []SmartAttribute `json:"attributes,omitempty"`   // HDD/SSD SMART attrs
+	NVMeHealth   *NVMeHealth      `json:"nvme_health,omitempty"`  // NVMe specific
+}
+
+// SmartAttribute is a single SMART attribute (for HDD/SSD)
+type SmartAttribute struct {
+	ID         int    `json:"id"`
+	Name       string `json:"name"`
+	Value      int    `json:"value"`
+	Worst      int    `json:"worst"`
+	Threshold  int    `json:"threshold"`
+	Raw        int64  `json:"raw"`
+	Flags      string `json:"flags"`
+	WhenFailed string `json:"when_failed,omitempty"`
+	Critical   bool   `json:"critical"` // highlighted as critical for health
+}
+
+// NVMeHealth contains NVMe-specific health data
+type NVMeHealth struct {
+	CriticalWarning     int   `json:"critical_warning"`
+	AvailableSpare      int   `json:"available_spare"`       // percent
+	AvailableSpareThresh int  `json:"available_spare_thresh"` // percent
+	PercentUsed         int   `json:"percent_used"`          // wear level
+	DataUnitsRead       int64 `json:"data_units_read"`
+	DataUnitsWritten    int64 `json:"data_units_written"`
+	PowerCycles         int64 `json:"power_cycles"`
+	UnsafeShutdowns     int64 `json:"unsafe_shutdowns"`
+	MediaErrors         int64 `json:"media_errors"`
+	ErrorLogEntries     int64 `json:"error_log_entries"`
+}
+
+// QDeviceStatus represents the Proxmox cluster qdevice status
+type QDeviceStatus struct {
+	Configured   bool   `json:"configured"`
+	Connected    bool   `json:"connected"`
+	HostNode     string `json:"host_node"`      // Node where qdevice VM runs
+	HostVMID     int    `json:"host_vmid"`      // VMID of qdevice VM
+	HostVMName   string `json:"host_vm_name"`   // Name of qdevice VM
+	QNetdAddress string `json:"qnetd_address"`  // IP:port of qnetd server
+	Algorithm    string `json:"algorithm"`      // e.g., "Fifty-Fifty split"
+	State        string `json:"state"`          // Connected, Disconnected, etc.
+}
+
+// MaintenancePreflightCheck represents a single pre-flight check result
+type MaintenancePreflightCheck struct {
+	Name     string `json:"name"`
+	Status   string `json:"status"`   // ok, warning, error
+	Message  string `json:"message"`
+	Blocking bool   `json:"blocking"` // If true, blocks maintenance mode
+}
+
+// MaintenancePreflight represents the full pre-flight check results
+type MaintenancePreflight struct {
+	Node           string                      `json:"node"`
+	CanEnter       bool                        `json:"can_enter"`
+	Checks         []MaintenancePreflightCheck `json:"checks"`
+	GuestsToMove   []GuestToMove               `json:"guests_to_move"`
+	CriticalGuests []GuestToMove               `json:"critical_guests"` // osd-mon01, etc.
+}
+
+// GuestToMove represents a VM/CT that needs to be migrated
+type GuestToMove struct {
+	VMID       int    `json:"vmid"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`        // qemu, lxc
+	Status     string `json:"status"`      // running, stopped
+	TargetNode string `json:"target_node"`
+	IsCritical bool   `json:"is_critical"` // qdevice VM, etc.
+	Reason     string `json:"reason,omitempty"`
+}
+
+// MaintenanceState tracks a node's maintenance status
+type MaintenanceState struct {
+	Node          string    `json:"node"`
+	InMaintenance bool      `json:"in_maintenance"`
+	EnteredAt     time.Time `json:"entered_at,omitempty"`
+	Phase         string    `json:"phase,omitempty"` // preflight, evacuating, ready, exiting
+	Progress      int       `json:"progress"`        // 0-100
+	Message       string    `json:"message,omitempty"`
+}
+
+// EvacuationStatus tracks the evacuation progress
+type EvacuationStatus struct {
+	Node            string        `json:"node"`
+	TotalGuests     int           `json:"total_guests"`
+	MigratedGuests  int           `json:"migrated_guests"`
+	CurrentGuest    string        `json:"current_guest,omitempty"`
+	CurrentProgress int           `json:"current_progress"`
+	Errors          []string      `json:"errors,omitempty"`
+	Guests          []GuestToMove `json:"guests"`
 }

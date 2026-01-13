@@ -8,6 +8,11 @@ import type {
   ClusterInfo,
   MigrationProgress,
   DRSRecommendation,
+  NetworkInterface,
+  SDNZone,
+  SDNVNet,
+  SDNSubnet,
+  NetworkOverview,
 } from '../types';
 
 const BASE_URL = '/api';
@@ -118,6 +123,18 @@ export const api = {
     fetchAPI<{ message: string }>(`/clusters/${cluster}/ha/${type}/${vmid}`, { method: 'DELETE' }),
   getHAGroups: (cluster: string) =>
     fetchAPI<{ group: string; comment?: string; nodes?: string }[]>(`/clusters/${cluster}/ha/groups`),
+
+  // Network/SDN
+  getClusterNetwork: (cluster: string) =>
+    fetchAPI<NetworkOverview>(`/clusters/${cluster}/network`),
+  getClusterNetworkInterfaces: (cluster: string, node?: string) =>
+    fetchAPI<NetworkInterface[]>(`/clusters/${cluster}/network/interfaces${node ? `?node=${node}` : ''}`),
+  getClusterSDNZones: (cluster: string) =>
+    fetchAPI<SDNZone[]>(`/clusters/${cluster}/sdn/zones`),
+  getClusterSDNVNets: (cluster: string) =>
+    fetchAPI<SDNVNet[]>(`/clusters/${cluster}/sdn/vnets`),
+  getClusterSDNSubnets: (cluster: string) =>
+    fetchAPI<SDNSubnet[]>(`/clusters/${cluster}/sdn/subnets`),
 };
 
 // Helper functions

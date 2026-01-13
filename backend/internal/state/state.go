@@ -17,19 +17,30 @@ type Store struct {
 
 	// DRS recommendations per cluster
 	drsRecommendations map[string][]pve.DRSRecommendation // keyed by cluster name
+
+	// Maintenance mode state per node (cluster:node -> state)
+	maintenanceStates map[string]*pve.MaintenanceState
 }
 
 // ClusterStore holds state for a single Proxmox cluster
 type ClusterStore struct {
 	mu sync.RWMutex
 
-	name       string
-	nodes      map[string]pve.Node       // keyed by node name
-	vms        map[int]pve.VM            // keyed by VMID (unique within cluster)
-	containers map[int]pve.Container     // keyed by VMID
-	storage    map[string][]pve.Storage  // keyed by node name
-	ceph       map[string]*pve.CephStatus // keyed by node name
-	haStatus   *pve.HAStatus
+	name        string
+	nodes       map[string]pve.Node        // keyed by node name
+	nodeDetails map[string]*pve.NodeStatus // keyed by node name (version, kernel, etc.)
+	vms         map[int]pve.VM             // keyed by VMID (unique within cluster)
+	containers  map[int]pve.Container      // keyed by VMID
+	storage     map[string][]pve.Storage   // keyed by node name
+	ceph        map[string]*pve.CephStatus // keyed by node name
+	haStatus    *pve.HAStatus
+
+	// Network data
+	networkInterfaces map[string][]pve.NetworkInterface // keyed by node name
+	sdnZones          []pve.SDNZone                     // cluster-wide
+	sdnVNets          []pve.SDNVNet                     // cluster-wide
+	sdnSubnets        []pve.SDNSubnet                   // cluster-wide
+	sdnControllers    []pve.SDNController               // cluster-wide
 
 	lastUpdate map[string]time.Time // per-node update times
 	errors     map[string]error     // per-node errors
@@ -41,7 +52,39 @@ func New() *Store {
 		clusters:           make(map[string]*ClusterStore),
 		migrations:         make(map[string]*pve.MigrationProgress),
 		drsRecommendations: make(map[string][]pve.DRSRecommendation),
+		maintenanceStates:  make(map[string]*pve.MaintenanceState),
 	}
+}
+
+// GetMaintenanceState returns the maintenance state for a node
+func (s *Store) GetMaintenanceState(cluster, node string) *pve.MaintenanceState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	key := cluster + ":" + node
+	return s.maintenanceStates[key]
+}
+
+// SetMaintenanceState sets the maintenance state for a node
+func (s *Store) SetMaintenanceState(cluster, node string, state *pve.MaintenanceState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := cluster + ":" + node
+	if state == nil {
+		delete(s.maintenanceStates, key)
+	} else {
+		s.maintenanceStates[key] = state
+	}
+}
+
+// GetAllMaintenanceStates returns all maintenance states
+func (s *Store) GetAllMaintenanceStates() map[string]*pve.MaintenanceState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make(map[string]*pve.MaintenanceState, len(s.maintenanceStates))
+	for k, v := range s.maintenanceStates {
+		result[k] = v
+	}
+	return result
 }
 
 // GetOrCreateCluster returns the cluster store, creating it if needed
@@ -54,14 +97,16 @@ func (s *Store) GetOrCreateCluster(name string) *ClusterStore {
 	}
 
 	cs := &ClusterStore{
-		name:       name,
-		nodes:      make(map[string]pve.Node),
-		vms:        make(map[int]pve.VM),
-		containers: make(map[int]pve.Container),
-		storage:    make(map[string][]pve.Storage),
-		ceph:       make(map[string]*pve.CephStatus),
-		lastUpdate: make(map[string]time.Time),
-		errors:     make(map[string]error),
+		name:              name,
+		nodes:             make(map[string]pve.Node),
+		nodeDetails:       make(map[string]*pve.NodeStatus),
+		vms:               make(map[int]pve.VM),
+		containers:        make(map[int]pve.Container),
+		storage:           make(map[string][]pve.Storage),
+		ceph:              make(map[string]*pve.CephStatus),
+		networkInterfaces: make(map[string][]pve.NetworkInterface),
+		lastUpdate:        make(map[string]time.Time),
+		errors:            make(map[string]error),
 	}
 	s.clusters[name] = cs
 	return cs
@@ -141,6 +186,25 @@ func (cs *ClusterStore) SetHAStatus(status *pve.HAStatus) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	cs.haStatus = status
+}
+
+// SetNodeDetails updates detailed node info (version, kernel, etc.)
+func (cs *ClusterStore) SetNodeDetails(nodeName string, details *pve.NodeStatus) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.nodeDetails[nodeName] = details
+}
+
+// GetNodeDetails returns detailed info for all nodes
+func (cs *ClusterStore) GetNodeDetails() map[string]*pve.NodeStatus {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+
+	result := make(map[string]*pve.NodeStatus)
+	for name, details := range cs.nodeDetails {
+		result[name] = details
+	}
+	return result
 }
 
 // GetNodes returns all nodes in the cluster
@@ -229,6 +293,90 @@ func (cs *ClusterStore) GetHAStatus() *pve.HAStatus {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	return cs.haStatus
+}
+
+// --- Network data methods ---
+
+// UpdateNetworkInterfaces updates network interfaces for a node
+func (cs *ClusterStore) UpdateNetworkInterfaces(nodeName string, ifaces []pve.NetworkInterface) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	// Tag with cluster name
+	for i := range ifaces {
+		ifaces[i].Cluster = cs.name
+		ifaces[i].Node = nodeName
+	}
+	cs.networkInterfaces[nodeName] = ifaces
+}
+
+// SetSDNData updates all SDN data for the cluster
+func (cs *ClusterStore) SetSDNData(zones []pve.SDNZone, vnets []pve.SDNVNet, subnets []pve.SDNSubnet, controllers []pve.SDNController) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	// Tag with cluster name
+	for i := range zones {
+		zones[i].Cluster = cs.name
+	}
+	for i := range vnets {
+		vnets[i].Cluster = cs.name
+	}
+	for i := range subnets {
+		subnets[i].Cluster = cs.name
+	}
+	for i := range controllers {
+		controllers[i].Cluster = cs.name
+	}
+
+	cs.sdnZones = zones
+	cs.sdnVNets = vnets
+	cs.sdnSubnets = subnets
+	cs.sdnControllers = controllers
+}
+
+// GetNetworkInterfaces returns network interfaces, optionally filtered by node
+func (cs *ClusterStore) GetNetworkInterfaces(nodeName string) []pve.NetworkInterface {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+
+	if nodeName != "" {
+		return cs.networkInterfaces[nodeName]
+	}
+
+	var all []pve.NetworkInterface
+	for _, ifaces := range cs.networkInterfaces {
+		all = append(all, ifaces...)
+	}
+	return all
+}
+
+// GetSDNZones returns all SDN zones
+func (cs *ClusterStore) GetSDNZones() []pve.SDNZone {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.sdnZones
+}
+
+// GetSDNVNets returns all SDN virtual networks
+func (cs *ClusterStore) GetSDNVNets() []pve.SDNVNet {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.sdnVNets
+}
+
+// GetSDNSubnets returns all SDN subnets
+func (cs *ClusterStore) GetSDNSubnets() []pve.SDNSubnet {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.sdnSubnets
+}
+
+// GetSDNControllers returns all SDN controllers
+func (cs *ClusterStore) GetSDNControllers() []pve.SDNController {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.sdnControllers
 }
 
 // GetNodeStatus returns the last update time and error for a node

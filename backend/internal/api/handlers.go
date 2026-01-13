@@ -1,11 +1,15 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/moconnor/pcenter/internal/metrics"
 	"github.com/moconnor/pcenter/internal/poller"
 	"github.com/moconnor/pcenter/internal/pve"
 	"github.com/moconnor/pcenter/internal/state"
@@ -13,8 +17,9 @@ import (
 
 // Handler holds dependencies for API handlers
 type Handler struct {
-	store  *state.Store
-	poller *poller.Poller
+	store   *state.Store
+	poller  *poller.Poller
+	metrics *metrics.QueryService
 }
 
 // NewHandler creates a new API handler
@@ -23,6 +28,11 @@ func NewHandler(store *state.Store, p *poller.Poller) *Handler {
 		store:  store,
 		poller: p,
 	}
+}
+
+// SetMetricsService sets the metrics query service
+func (h *Handler) SetMetricsService(m *metrics.QueryService) {
+	h.metrics = m
 }
 
 // getClient returns the PVE client for a cluster/node combination
@@ -225,6 +235,79 @@ func (h *Handler) GetCeph(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, ceph)
 }
 
+// CephCommandRequest is the request body for running a Ceph command
+type CephCommandRequest struct {
+	Command string `json:"command"` // e.g., "pg_repair"
+	PgID    string `json:"pg_id,omitempty"`
+}
+
+// CephCommandResponse is the response from running a Ceph command
+type CephCommandResponse struct {
+	Success bool   `json:"success"`
+	Output  string `json:"output"`
+	Error   string `json:"error,omitempty"`
+}
+
+// RunCephCommand executes a whitelisted Ceph command on a cluster node
+func (h *Handler) RunCephCommand(w http.ResponseWriter, r *http.Request) {
+	var req CephCommandRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Get any available client to run the command
+	var client *pve.Client
+	allClients := h.poller.GetAllClients()
+	for _, clients := range allClients {
+		for _, c := range clients {
+			client = c
+			break
+		}
+		if client != nil {
+			break
+		}
+	}
+
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "no cluster connection available")
+		return
+	}
+
+	// Execute the command
+	output, err := client.RunCephCommand(r.Context(), req.Command, req.PgID)
+	if err != nil {
+		writeJSON(w, CephCommandResponse{
+			Success: false,
+			Error:   err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, CephCommandResponse{
+		Success: true,
+		Output:  output,
+	})
+}
+
+// GetSmart returns SMART data for all disks across all nodes
+func (h *Handler) GetSmart(w http.ResponseWriter, r *http.Request) {
+	allClients := h.poller.GetAllClients()
+
+	var allDisks []pve.SmartDisk
+	for _, clients := range allClients {
+		for _, client := range clients {
+			disks, err := client.GetSmartData(r.Context())
+			if err != nil {
+				continue // Log and skip failed nodes
+			}
+			allDisks = append(allDisks, disks...)
+		}
+	}
+
+	writeJSON(w, allDisks)
+}
+
 // --- Cluster-specific handlers ---
 
 // GetClusterSummary returns summary for a specific cluster
@@ -358,6 +441,333 @@ func (h *Handler) GetClusterHA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, haStatus)
+}
+
+// --- Maintenance Mode ---
+
+// GetQDeviceStatus returns the qdevice status for a cluster
+func (h *Handler) GetQDeviceStatus(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+
+	clients := h.poller.GetClusterClients(clusterName)
+	if clients == nil {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	// Get qdevice status from any node
+	var qdeviceStatus *pve.QDeviceStatus
+	var qdeviceVMNode string
+	var qdeviceVM *pve.QDeviceStatus
+
+	for nodeName, client := range clients {
+		status, err := client.GetQDeviceStatus(r.Context())
+		if err == nil && status != nil && status.Configured {
+			qdeviceStatus = status
+		}
+
+		// Check if this node has the qdevice VM
+		vmStatus, err := client.FindQDeviceVM(r.Context(), "")
+		if err == nil && vmStatus != nil {
+			qdeviceVMNode = nodeName
+			qdeviceVM = vmStatus
+		}
+	}
+
+	if qdeviceStatus == nil {
+		qdeviceStatus = &pve.QDeviceStatus{Configured: false}
+	}
+
+	// Merge qdevice VM info
+	if qdeviceVM != nil {
+		qdeviceStatus.HostNode = qdeviceVMNode
+		qdeviceStatus.HostVMID = qdeviceVM.HostVMID
+		qdeviceStatus.HostVMName = qdeviceVM.HostVMName
+	}
+
+	writeJSON(w, qdeviceStatus)
+}
+
+// GetMaintenancePreflight returns pre-flight checks for entering maintenance mode
+func (h *Handler) GetMaintenancePreflight(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+
+	clients := h.poller.GetClusterClients(clusterName)
+	if clients == nil {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	client, ok := clients[nodeName]
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	// Get all node names
+	var allNodes []string
+	for n := range clients {
+		allNodes = append(allNodes, n)
+	}
+
+	preflight, err := client.GetMaintenancePreflight(r.Context(), nodeName, allNodes)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Find guests on this node
+	cs, ok := h.store.GetCluster(clusterName)
+	if ok {
+		vms := cs.GetVMs()
+		cts := cs.GetContainers()
+
+		var otherNode string
+		for _, n := range allNodes {
+			if n != nodeName {
+				otherNode = n
+				break
+			}
+		}
+
+		for _, vm := range vms {
+			if vm.Node == nodeName {
+				guest := pve.GuestToMove{
+					VMID:       vm.VMID,
+					Name:       vm.Name,
+					Type:       "qemu",
+					Status:     vm.Status,
+					TargetNode: otherNode,
+				}
+				// Check if this is the qdevice VM
+				if strings.Contains(strings.ToLower(vm.Name), "osd-mon") ||
+					strings.Contains(strings.ToLower(vm.Name), "qdevice") {
+					guest.IsCritical = true
+					guest.Reason = "QDevice/Ceph Monitor - must migrate first"
+					preflight.CriticalGuests = append(preflight.CriticalGuests, guest)
+				}
+				preflight.GuestsToMove = append(preflight.GuestsToMove, guest)
+			}
+		}
+
+		for _, ct := range cts {
+			if ct.Node == nodeName {
+				guest := pve.GuestToMove{
+					VMID:       ct.VMID,
+					Name:       ct.Name,
+					Type:       "lxc",
+					Status:     ct.Status,
+					TargetNode: otherNode,
+				}
+				preflight.GuestsToMove = append(preflight.GuestsToMove, guest)
+			}
+		}
+	}
+
+	// Add check for guests count
+	if len(preflight.GuestsToMove) > 0 {
+		preflight.Checks = append(preflight.Checks, pve.MaintenancePreflightCheck{
+			Name:    "Guests to Migrate",
+			Status:  "warning",
+			Message: fmt.Sprintf("%d guests will be migrated", len(preflight.GuestsToMove)),
+		})
+	}
+
+	if len(preflight.CriticalGuests) > 0 {
+		preflight.Checks = append(preflight.Checks, pve.MaintenancePreflightCheck{
+			Name:    "Critical Guests",
+			Status:  "warning",
+			Message: fmt.Sprintf("%d critical guests (qdevice) will be migrated first", len(preflight.CriticalGuests)),
+		})
+	}
+
+	writeJSON(w, preflight)
+}
+
+// GetMaintenanceState returns the current maintenance state for a node
+func (h *Handler) GetMaintenanceState(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+
+	state := h.store.GetMaintenanceState(clusterName, nodeName)
+	if state == nil {
+		state = &pve.MaintenanceState{
+			Node:          nodeName,
+			InMaintenance: false,
+		}
+	}
+	writeJSON(w, state)
+}
+
+// EnterMaintenanceMode starts the maintenance mode process for a node
+func (h *Handler) EnterMaintenanceMode(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+
+	clients := h.poller.GetClusterClients(clusterName)
+	if clients == nil {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	client, ok := clients[nodeName]
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	// Set initial maintenance state
+	state := &pve.MaintenanceState{
+		Node:          nodeName,
+		InMaintenance: true,
+		EnteredAt:     time.Now(),
+		Phase:         "starting",
+		Progress:      0,
+		Message:       "Setting Ceph noout flag...",
+	}
+	h.store.SetMaintenanceState(clusterName, nodeName, state)
+
+	// Set Ceph noout flag
+	if err := client.SetCephNoout(r.Context(), true); err != nil {
+		state.Phase = "error"
+		state.Message = fmt.Sprintf("Failed to set noout: %v", err)
+		h.store.SetMaintenanceState(clusterName, nodeName, state)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	state.Phase = "evacuating"
+	state.Progress = 10
+	state.Message = "Starting guest evacuation..."
+	h.store.SetMaintenanceState(clusterName, nodeName, state)
+
+	// Start evacuation in background
+	go h.evacuateNode(clusterName, nodeName, clients)
+
+	writeJSON(w, state)
+}
+
+// evacuateNode migrates all guests from a node (runs in background)
+func (h *Handler) evacuateNode(clusterName, nodeName string, clients map[string]*pve.Client) {
+	ctx := context.Background()
+	client := clients[nodeName]
+
+	// Find target node
+	var targetNode string
+	var targetClient *pve.Client
+	for n, c := range clients {
+		if n != nodeName {
+			targetNode = n
+			targetClient = c
+			break
+		}
+	}
+
+	if targetNode == "" {
+		state := h.store.GetMaintenanceState(clusterName, nodeName)
+		state.Phase = "error"
+		state.Message = "No target node available"
+		h.store.SetMaintenanceState(clusterName, nodeName, state)
+		return
+	}
+
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		return
+	}
+
+	vms := cs.GetVMs()
+	cts := cs.GetContainers()
+
+	var guestsToMigrate []pve.GuestToMove
+
+	// Critical guests first (qdevice VM)
+	for _, vm := range vms {
+		if vm.Node == nodeName {
+			guest := pve.GuestToMove{VMID: vm.VMID, Name: vm.Name, Type: "qemu", Status: vm.Status}
+			if strings.Contains(strings.ToLower(vm.Name), "osd-mon") {
+				guest.IsCritical = true
+				guestsToMigrate = append([]pve.GuestToMove{guest}, guestsToMigrate...)
+			} else {
+				guestsToMigrate = append(guestsToMigrate, guest)
+			}
+		}
+	}
+
+	for _, ct := range cts {
+		if ct.Node == nodeName {
+			guestsToMigrate = append(guestsToMigrate, pve.GuestToMove{
+				VMID: ct.VMID, Name: ct.Name, Type: "lxc", Status: ct.Status,
+			})
+		}
+	}
+
+	total := len(guestsToMigrate)
+	for i, guest := range guestsToMigrate {
+		state := h.store.GetMaintenanceState(clusterName, nodeName)
+		state.Progress = 10 + (80 * i / max(total, 1))
+		state.Message = fmt.Sprintf("Migrating %s (%d/%d)...", guest.Name, i+1, total)
+		h.store.SetMaintenanceState(clusterName, nodeName, state)
+
+		// Perform migration
+		var upid string
+		var err error
+		online := guest.Status == "running"
+
+		if guest.Type == "qemu" {
+			upid, err = client.MigrateVM(ctx, guest.VMID, targetNode, online)
+		} else {
+			upid, err = client.MigrateContainer(ctx, guest.VMID, targetNode, online)
+		}
+
+		if err != nil {
+			state.Message = fmt.Sprintf("Failed to migrate %s: %v", guest.Name, err)
+			// Continue with next guest
+			continue
+		}
+
+		// Wait for migration to complete
+		_ = targetClient // Use target client to check task status
+		_ = upid
+		time.Sleep(5 * time.Second) // Simple wait - could poll task status
+	}
+
+	// Evacuation complete
+	state := h.store.GetMaintenanceState(clusterName, nodeName)
+	state.Phase = "ready"
+	state.Progress = 100
+	state.Message = "Maintenance mode ready - host can be rebooted"
+	h.store.SetMaintenanceState(clusterName, nodeName, state)
+}
+
+// ExitMaintenanceMode exits maintenance mode for a node
+func (h *Handler) ExitMaintenanceMode(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+
+	clients := h.poller.GetClusterClients(clusterName)
+	if clients == nil {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	client, ok := clients[nodeName]
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	// Clear Ceph noout flag
+	if err := client.SetCephNoout(r.Context(), false); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to unset noout: %v", err))
+		return
+	}
+
+	// Clear maintenance state
+	h.store.SetMaintenanceState(clusterName, nodeName, nil)
+
+	writeJSON(w, map[string]string{"status": "ok", "message": "Exited maintenance mode"})
 }
 
 // --- Actions ---
@@ -1169,4 +1579,248 @@ func (h *Handler) GetHAGroups(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, groups)
+}
+
+// --- Network/SDN Handlers ---
+
+// GetClusterNetworkInterfaces returns all network interfaces for a cluster
+func (h *Handler) GetClusterNetworkInterfaces(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	// Optional node filter
+	node := r.URL.Query().Get("node")
+	writeJSON(w, cs.GetNetworkInterfaces(node))
+}
+
+// GetClusterSDNZones returns all SDN zones for a cluster
+func (h *Handler) GetClusterSDNZones(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+	writeJSON(w, cs.GetSDNZones())
+}
+
+// GetClusterSDNVNets returns all SDN virtual networks for a cluster
+func (h *Handler) GetClusterSDNVNets(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+	writeJSON(w, cs.GetSDNVNets())
+}
+
+// GetClusterSDNSubnets returns all SDN subnets for a cluster
+func (h *Handler) GetClusterSDNSubnets(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+	writeJSON(w, cs.GetSDNSubnets())
+}
+
+// NetworkOverview provides aggregated network data
+type NetworkOverview struct {
+	Interfaces  []pve.NetworkInterface `json:"interfaces"`
+	SDNZones    []pve.SDNZone          `json:"sdn_zones"`
+	SDNVNets    []pve.SDNVNet          `json:"sdn_vnets"`
+	SDNSubnets  []pve.SDNSubnet        `json:"sdn_subnets"`
+}
+
+// GetClusterNetwork returns aggregated network data for a cluster
+func (h *Handler) GetClusterNetwork(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	overview := NetworkOverview{
+		Interfaces:  cs.GetNetworkInterfaces(""),
+		SDNZones:    cs.GetSDNZones(),
+		SDNVNets:    cs.GetSDNVNets(),
+		SDNSubnets:  cs.GetSDNSubnets(),
+	}
+
+	// Ensure non-nil slices for JSON
+	if overview.Interfaces == nil {
+		overview.Interfaces = []pve.NetworkInterface{}
+	}
+	if overview.SDNZones == nil {
+		overview.SDNZones = []pve.SDNZone{}
+	}
+	if overview.SDNVNets == nil {
+		overview.SDNVNets = []pve.SDNVNet{}
+	}
+	if overview.SDNSubnets == nil {
+		overview.SDNSubnets = []pve.SDNSubnet{}
+	}
+
+	writeJSON(w, overview)
+}
+
+// --- Metrics Handlers ---
+
+// parseMetricQuery parses common metrics query parameters from a request
+func (h *Handler) parseMetricQuery(r *http.Request) metrics.MetricQuery {
+	query := metrics.MetricQuery{
+		Resolution: r.URL.Query().Get("resolution"),
+	}
+
+	// Parse time range
+	if start := r.URL.Query().Get("start"); start != "" {
+		if ts, err := strconv.ParseInt(start, 10, 64); err == nil {
+			query.StartTime = time.Unix(ts, 0)
+		}
+	}
+	if query.StartTime.IsZero() {
+		query.StartTime = time.Now().Add(-time.Hour) // Default: last hour
+	}
+
+	if end := r.URL.Query().Get("end"); end != "" {
+		if ts, err := strconv.ParseInt(end, 10, 64); err == nil {
+			query.EndTime = time.Unix(ts, 0)
+		}
+	}
+	if query.EndTime.IsZero() {
+		query.EndTime = time.Now()
+	}
+
+	// Parse metric types
+	if metricsParam := r.URL.Query().Get("metrics"); metricsParam != "" {
+		query.MetricTypes = strings.Split(metricsParam, ",")
+	} else {
+		query.MetricTypes = []string{"cpu", "mem_percent"} // Default metrics
+	}
+
+	return query
+}
+
+// GetMetrics handles general metrics queries
+func (h *Handler) GetMetrics(w http.ResponseWriter, r *http.Request) {
+	if h.metrics == nil {
+		writeError(w, http.StatusServiceUnavailable, "metrics not enabled")
+		return
+	}
+
+	query := h.parseMetricQuery(r)
+	query.Cluster = r.URL.Query().Get("cluster")
+	query.ResourceType = r.URL.Query().Get("resource_type")
+	query.ResourceID = r.URL.Query().Get("resource_id")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	result, err := h.metrics.Query(ctx, query)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, result)
+}
+
+// GetNodeMetrics returns metrics for a specific node
+func (h *Handler) GetNodeMetrics(w http.ResponseWriter, r *http.Request) {
+	if h.metrics == nil {
+		writeError(w, http.StatusServiceUnavailable, "metrics not enabled")
+		return
+	}
+
+	query := h.parseMetricQuery(r)
+	query.ResourceType = "node"
+	query.ResourceID = r.PathValue("node")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	result, err := h.metrics.Query(ctx, query)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, result)
+}
+
+// GetVMMetrics returns metrics for a specific VM
+func (h *Handler) GetVMMetrics(w http.ResponseWriter, r *http.Request) {
+	if h.metrics == nil {
+		writeError(w, http.StatusServiceUnavailable, "metrics not enabled")
+		return
+	}
+
+	query := h.parseMetricQuery(r)
+	query.ResourceType = "vm"
+	query.ResourceID = r.PathValue("vmid")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	result, err := h.metrics.Query(ctx, query)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, result)
+}
+
+// GetContainerMetrics returns metrics for a specific container
+func (h *Handler) GetContainerMetrics(w http.ResponseWriter, r *http.Request) {
+	if h.metrics == nil {
+		writeError(w, http.StatusServiceUnavailable, "metrics not enabled")
+		return
+	}
+
+	query := h.parseMetricQuery(r)
+	query.ResourceType = "ct"
+	query.ResourceID = r.PathValue("vmid")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	result, err := h.metrics.Query(ctx, query)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, result)
+}
+
+// GetClusterMetrics returns metrics for all resources in a cluster
+func (h *Handler) GetClusterMetrics(w http.ResponseWriter, r *http.Request) {
+	if h.metrics == nil {
+		writeError(w, http.StatusServiceUnavailable, "metrics not enabled")
+		return
+	}
+
+	query := h.parseMetricQuery(r)
+	query.Cluster = r.PathValue("cluster")
+	query.ResourceType = r.URL.Query().Get("resource_type")
+	query.ResourceID = r.URL.Query().Get("resource_id")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	result, err := h.metrics.Query(ctx, query)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, result)
 }

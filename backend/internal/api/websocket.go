@@ -143,20 +143,24 @@ type HAInfo struct {
 	Manager string `json:"manager"` // manager node
 }
 
-// NodeWithStatus extends Node with polling status
+// NodeWithStatus extends Node with polling status and details
 type NodeWithStatus struct {
-	Cluster    string  `json:"cluster"`
-	Node       string  `json:"node"`
-	Status     string  `json:"status"`
-	CPU        float64 `json:"cpu"`
-	MaxCPU     int     `json:"maxcpu"`
-	Mem        int64   `json:"mem"`
-	MaxMem     int64   `json:"maxmem"`
-	Disk       int64   `json:"disk"`
-	MaxDisk    int64   `json:"maxdisk"`
-	Uptime     int64   `json:"uptime"`
-	LastUpdate int64   `json:"last_update"`
-	Error      string  `json:"error,omitempty"`
+	Cluster       string   `json:"cluster"`
+	Node          string   `json:"node"`
+	Status        string   `json:"status"`
+	CPU           float64  `json:"cpu"`
+	MaxCPU        int      `json:"maxcpu"`
+	Mem           int64    `json:"mem"`
+	MaxMem        int64    `json:"maxmem"`
+	Disk          int64    `json:"disk"`
+	MaxDisk       int64    `json:"maxdisk"`
+	Uptime        int64    `json:"uptime"`
+	LastUpdate    int64    `json:"last_update"`
+	Error         string   `json:"error,omitempty"`
+	PVEVersion    string   `json:"pve_version,omitempty"`
+	KernelVersion string   `json:"kernel_version,omitempty"`
+	CPUModel      string   `json:"cpu_model,omitempty"`
+	LoadAvg       []string `json:"loadavg,omitempty"`
 }
 
 // Guest is a unified VM/CT representation
@@ -192,12 +196,20 @@ type StorageInfo struct {
 	Total   int64  `json:"total"`
 }
 
+// CephHealthCheck contains details about a Ceph health check
+type CephHealthCheck struct {
+	Severity string `json:"severity"`
+	Summary  string `json:"summary"`
+	Detail   string `json:"detail,omitempty"`
+}
+
 // CephInfo contains Ceph cluster status
 type CephInfo struct {
-	Health     string `json:"health"`
-	BytesUsed  int64  `json:"bytes_used"`
-	BytesAvail int64  `json:"bytes_avail"`
-	BytesTotal int64  `json:"bytes_total"`
+	Health     string                     `json:"health"`
+	Checks     map[string]CephHealthCheck `json:"checks,omitempty"`
+	BytesUsed  int64                      `json:"bytes_used"`
+	BytesAvail int64                      `json:"bytes_avail"`
+	BytesTotal int64                      `json:"bytes_total"`
 }
 
 func (h *Hub) buildStateMessage() []byte {
@@ -223,9 +235,20 @@ func (h *Hub) buildStateMessage() []byte {
 		clusters = append(clusters, ci)
 	}
 
-	// Build nodes list
+	// Build nodes list with details
 	nodes := h.store.GetNodes()
 	statuses := h.store.GetAllNodeStatuses()
+
+	// Collect node details from all clusters
+	allNodeDetails := make(map[string]*pve.NodeStatus) // keyed by "cluster/node"
+	for _, cs := range globalSummary.Clusters {
+		if cluster, ok := h.store.GetCluster(cs.Name); ok {
+			for nodeName, details := range cluster.GetNodeDetails() {
+				allNodeDetails[cs.Name+"/"+nodeName] = details
+			}
+		}
+	}
+
 	nodeList := make([]NodeWithStatus, 0, len(nodes))
 	for _, n := range nodes {
 		nws := NodeWithStatus{
@@ -253,6 +276,13 @@ func (h *Hub) buildStateMessage() []byte {
 			if status.Error != nil {
 				nws.Error = status.Error.Error()
 			}
+		}
+		// Add node details (version, kernel, etc.)
+		if details, ok := allNodeDetails[key]; ok && details != nil {
+			nws.PVEVersion = details.PVEVersion
+			nws.KernelVersion = details.KernelVersion
+			nws.CPUModel = details.CPUModel
+			nws.LoadAvg = details.LoadAvg
 		}
 		nodeList = append(nodeList, nws)
 	}
@@ -323,6 +353,21 @@ func (h *Hub) buildStateMessage() []byte {
 			BytesUsed:  ceph.PGMap.BytesUsed,
 			BytesAvail: ceph.PGMap.BytesAvail,
 			BytesTotal: ceph.PGMap.BytesTotal,
+		}
+		// Map health checks if present
+		if len(ceph.Health.Checks) > 0 {
+			cephInfo.Checks = make(map[string]CephHealthCheck)
+			for name, check := range ceph.Health.Checks {
+				detail := ""
+				if len(check.Detail) > 0 {
+					detail = check.Detail[0].Message
+				}
+				cephInfo.Checks[name] = CephHealthCheck{
+					Severity: check.Severity,
+					Summary:  check.Summary.Message,
+					Detail:   detail,
+				}
+			}
 		}
 	}
 
