@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useCluster } from '../context/ClusterContext';
 import { formatBytes, formatUptime } from '../api/client';
 import { useMetrics } from '../hooks/useMetrics';
@@ -544,9 +544,35 @@ function GuestMonitorTab({
   );
 }
 
+// Helper to get time range start timestamp
+function getStartTimestamp(range: TimeRange): number {
+  const now = Math.floor(Date.now() / 1000);
+  switch (range) {
+    case '1h': return now - 3600;
+    case '6h': return now - 6 * 3600;
+    case '24h': return now - 24 * 3600;
+    case '7d': return now - 7 * 24 * 3600;
+    case '30d': return now - 30 * 24 * 3600;
+    default: return now - 3600;
+  }
+}
+
 function NodeMonitorTab({ node }: { node: string }) {
   const [timeRange, setTimeRange] = useState<TimeRange>('1h');
+  const [selectedGuests, setSelectedGuests] = useState<Set<number>>(new Set());
+  const [guestMetrics, setGuestMetrics] = useState<MetricSeries[]>([]);
+  const [showGuestPicker, setShowGuestPicker] = useState(false);
+  const { guests } = useCluster();
 
+  // Get running guests on this node, sorted by name for stable ordering
+  const nodeGuests = useMemo(
+    () => guests
+      .filter(g => g.node === node && g.status === 'running')
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    [guests, node]
+  );
+
+  // Fetch node metrics
   const { data, loading, error } = useMetrics({
     resourceType: 'node',
     resourceId: node,
@@ -554,10 +580,79 @@ function NodeMonitorTab({ node }: { node: string }) {
     timeRange,
   });
 
-  const cpuSeries = useMemo(
-    () => data?.series?.filter((s: MetricSeries) => s.metric === 'cpu') || [],
-    [data?.series]
+  // Fetch metrics for selected guests
+  useEffect(() => {
+    if (selectedGuests.size === 0) {
+      setGuestMetrics([]);
+      return;
+    }
+
+    const fetchGuestMetrics = async () => {
+      const start = getStartTimestamp(timeRange);
+      const end = Math.floor(Date.now() / 1000);
+      const results: MetricSeries[] = [];
+
+      await Promise.all(
+        Array.from(selectedGuests).map(async (vmid) => {
+          const guest = nodeGuests.find(g => g.vmid === vmid);
+          if (!guest) return;
+
+          const type = guest.type === 'qemu' ? 'vm' : 'ct';
+          try {
+            const res = await fetch(
+              `/api/metrics/${type}/${vmid}?start=${start}&end=${end}&metrics=cpu&resolution=auto`
+            );
+            if (res.ok) {
+              const data = await res.json();
+              // Relabel series with guest name
+              data.series?.forEach((s: MetricSeries) => {
+                results.push({
+                  ...s,
+                  resource_id: guest.name,
+                });
+              });
+            }
+          } catch {
+            // Ignore fetch errors for individual guests
+          }
+        })
+      );
+
+      setGuestMetrics(results);
+    };
+
+    fetchGuestMetrics();
+    const interval = setInterval(fetchGuestMetrics, 30000);
+    return () => clearInterval(interval);
+  }, [selectedGuests, timeRange, nodeGuests]);
+
+  // Toggle guest selection
+  const toggleGuest = (vmid: number) => {
+    setSelectedGuests(prev => {
+      const next = new Set(prev);
+      if (next.has(vmid)) {
+        next.delete(vmid);
+      } else {
+        next.add(vmid);
+      }
+      return next;
+    });
+  };
+
+  // Combine node CPU with guest CPU series
+  const nodeCpuSeries = useMemo(
+    () => data?.series?.filter((s: MetricSeries) => s.metric === 'cpu').map(s => ({
+      ...s,
+      resource_id: `${node} (Host)`,
+    })) || [],
+    [data?.series, node]
   );
+
+  const combinedCpuSeries = useMemo(
+    () => [...nodeCpuSeries, ...guestMetrics],
+    [nodeCpuSeries, guestMetrics]
+  );
+
   const memSeries = useMemo(
     () => data?.series?.filter((s: MetricSeries) => s.metric === 'mem_percent') || [],
     [data?.series]
@@ -601,13 +696,59 @@ function NodeMonitorTab({ node }: { node: string }) {
       )}
 
       <div className="grid md:grid-cols-2 gap-4">
+        {/* CPU Chart with guest overlay option */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <div className="flex justify-between items-center mb-2">
+            <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              CPU Usage
+            </h4>
+            {nodeGuests.length > 0 && (
+              <button
+                onClick={() => setShowGuestPicker(!showGuestPicker)}
+                className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400"
+              >
+                {showGuestPicker ? 'Hide' : 'Overlay'} Guests ({selectedGuests.size})
+              </button>
+            )}
+          </div>
+
+          {/* Guest picker dropdown */}
+          {showGuestPicker && (
+            <div className="mb-3 p-2 bg-gray-50 dark:bg-gray-700 rounded text-xs max-h-40 overflow-y-auto">
+              <div className="grid grid-cols-2 gap-1">
+                {nodeGuests.map(g => (
+                  <label
+                    key={g.vmid}
+                    className="flex items-center gap-1.5 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 p-1 rounded"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedGuests.has(g.vmid)}
+                      onChange={() => toggleGuest(g.vmid)}
+                      className="w-3 h-3"
+                    />
+                    <span className="truncate" title={g.name}>
+                      {g.type === 'qemu' ? '💻' : '📦'} {g.name}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {selectedGuests.size > 0 && (
+                <button
+                  onClick={() => setSelectedGuests(new Set())}
+                  className="mt-2 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                >
+                  Clear all
+                </button>
+              )}
+            </div>
+          )}
+
           <MetricsChart
-            series={cpuSeries}
+            series={combinedCpuSeries}
             timeRange={timeRange}
-            title="CPU Usage"
             height={180}
-            showLegend={false}
+            showLegend={combinedCpuSeries.length > 1}
           />
         </div>
 
