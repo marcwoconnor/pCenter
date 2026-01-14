@@ -459,3 +459,140 @@ type EvacuationStatus struct {
 	Errors          []string      `json:"errors,omitempty"`
 	Guests          []GuestToMove `json:"guests"`
 }
+
+// VMConfig represents full VM configuration from Proxmox /nodes/{node}/qemu/{vmid}/config
+type VMConfig struct {
+	Digest      string `json:"digest"`                // For optimistic locking
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+
+	// Hardware
+	Cores   int     `json:"cores,omitempty"`
+	Sockets int     `json:"sockets,omitempty"`
+	CPU     string  `json:"cpu,omitempty"`     // CPU type (host, kvm64, etc)
+	Memory  int     `json:"memory,omitempty"`  // MB
+	Balloon int     `json:"balloon,omitempty"` // Memory ballooning (MB), 0 to disable
+	Numa    int     `json:"numa,omitempty"`    // Enable NUMA
+	BIOS    string  `json:"bios,omitempty"`    // seabios, ovmf
+	Machine string  `json:"machine,omitempty"` // q35, i440fx
+
+	// Boot
+	Boot     string `json:"boot,omitempty"`     // Boot order (order=scsi0;ide2;net0)
+	Bootdisk string `json:"bootdisk,omitempty"` // Default boot disk
+
+	// Options
+	Onboot     int    `json:"onboot,omitempty"`     // Start at boot (0 or 1)
+	Protection int    `json:"protection,omitempty"` // Prevent deletion (0 or 1)
+	Agent      string `json:"agent,omitempty"`      // QEMU guest agent (enabled=1)
+	Ostype     string `json:"ostype,omitempty"`     // OS type (l26, win10, etc)
+
+	// Cloud-init
+	CIUser       string `json:"ciuser,omitempty"`
+	CIPassword   string `json:"cipassword,omitempty"` // Will be hidden/masked
+	SSHKeys      string `json:"sshkeys,omitempty"`    // URL-encoded
+	IPConfig0    string `json:"ipconfig0,omitempty"`
+	IPConfig1    string `json:"ipconfig1,omitempty"`
+	Nameserver   string `json:"nameserver,omitempty"`
+	Searchdomain string `json:"searchdomain,omitempty"`
+
+	// VGA
+	VGA string `json:"vga,omitempty"` // std, cirrus, vmware, qxl, serial0, virtio
+
+	// Storage - dynamic fields stored in RawConfig
+	// Network - dynamic fields stored in RawConfig
+
+	// All raw config data (for dynamic fields like scsi0, net0, etc)
+	RawConfig map[string]interface{} `json:"raw_config,omitempty"`
+}
+
+// ContainerConfig represents full LXC container configuration from Proxmox
+type ContainerConfig struct {
+	Digest      string `json:"digest"`                // For optimistic locking
+	Hostname    string `json:"hostname,omitempty"`
+	Description string `json:"description,omitempty"`
+
+	// Resources
+	Cores    int     `json:"cores,omitempty"`    // Number of cores
+	CPULimit float64 `json:"cpulimit,omitempty"` // CPU limit (0-128)
+	CPUUnits int     `json:"cpuunits,omitempty"` // CPU weight (0-500000)
+	Memory   int     `json:"memory,omitempty"`   // MB
+	Swap     int     `json:"swap,omitempty"`     // MB
+
+	// Root filesystem
+	Rootfs string `json:"rootfs,omitempty"` // storage:size format
+
+	// Options
+	Onboot       int    `json:"onboot,omitempty"`       // Start at boot
+	Protection   int    `json:"protection,omitempty"`   // Prevent deletion
+	Unprivileged int    `json:"unprivileged,omitempty"` // Unprivileged container
+	Ostype       string `json:"ostype,omitempty"`       // debian, ubuntu, centos, etc
+	Arch         string `json:"arch,omitempty"`         // amd64, i386, arm64, armhf
+
+	// Features
+	Features string `json:"features,omitempty"` // nesting=1,keyctl=1,fuse=1
+
+	// Startup/Shutdown
+	Startup  string `json:"startup,omitempty"`  // Startup order
+
+	// Network - stored as net0, net1, etc in RawConfig
+	// Mount points - stored as mp0, mp1, etc in RawConfig
+
+	// All raw config data
+	RawConfig map[string]interface{} `json:"raw_config,omitempty"`
+}
+
+// ConfigUpdateRequest for applying configuration changes
+type ConfigUpdateRequest struct {
+	Digest  string                 `json:"digest"`           // Required for optimistic locking
+	Changes map[string]interface{} `json:"changes"`          // Key-value pairs to update
+	Delete  []string               `json:"delete,omitempty"` // Keys to delete
+}
+
+// ConfigResponse wraps config with metadata
+type ConfigResponse struct {
+	Config interface{} `json:"config"`
+	Digest string      `json:"digest"`
+	Node   string      `json:"node"`
+	VMID   int         `json:"vmid"`
+}
+
+// Snapshot represents a VM or container snapshot
+type Snapshot struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	SnapTime    int64  `json:"snaptime,omitempty"`  // Unix timestamp
+	VMState     int    `json:"vmstate,omitempty"`   // 1 if includes RAM state (VM only)
+	Parent      string `json:"parent,omitempty"`    // Parent snapshot name
+}
+
+// FirewallRule represents a firewall rule
+type FirewallRule struct {
+	Pos     int    `json:"pos,omitempty"`     // Position in rule list
+	Type    string `json:"type"`              // in, out, group
+	Action  string `json:"action"`            // ACCEPT, DROP, REJECT
+	Enable  int    `json:"enable,omitempty"`  // 0 or 1
+	Source  string `json:"source,omitempty"`
+	Dest    string `json:"dest,omitempty"`
+	Sport   string `json:"sport,omitempty"`   // Source port
+	Dport   string `json:"dport,omitempty"`   // Destination port
+	Proto   string `json:"proto,omitempty"`   // tcp, udp, icmp, etc
+	Macro   string `json:"macro,omitempty"`   // Predefined macro (SSH, HTTP, etc)
+	IFace   string `json:"iface,omitempty"`   // Interface
+	Log     string `json:"log,omitempty"`     // Log level
+	Comment string `json:"comment,omitempty"`
+}
+
+// FirewallOptions represents firewall options for a guest
+type FirewallOptions struct {
+	Enable       int    `json:"enable,omitempty"`       // Enable firewall
+	DHCPv4       int    `json:"dhcp,omitempty"`         // Allow DHCP
+	DHCPv6       int    `json:"dhcp6,omitempty"`        // Allow DHCPv6
+	IPFilter     int    `json:"ipfilter,omitempty"`     // IP filter
+	LogLevelIn   string `json:"log_level_in,omitempty"` // Log level for incoming
+	LogLevelOut  string `json:"log_level_out,omitempty"`// Log level for outgoing
+	MACFilter    int    `json:"macfilter,omitempty"`    // MAC filter
+	NDP          int    `json:"ndp,omitempty"`          // Allow NDP
+	PolicyIn     string `json:"policy_in,omitempty"`    // Default incoming policy
+	PolicyOut    string `json:"policy_out,omitempty"`   // Default outgoing policy
+	RadV         int    `json:"radv,omitempty"`         // Allow router advertisements
+}

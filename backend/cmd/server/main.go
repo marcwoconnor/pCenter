@@ -87,6 +87,9 @@ func main() {
 	// Create HTTP server
 	router, handler := api.NewRouter(store, p, hub, agentHub, cfg.Server.CORSOrigins)
 
+	// Set clusters config for on-demand client creation (agent-only mode)
+	handler.SetClusters(cfg.Clusters)
+
 	// Initialize metrics if enabled
 	var metricsDB *metrics.DB
 	if cfg.Metrics.Enabled {

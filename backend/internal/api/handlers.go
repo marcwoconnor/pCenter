@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/moconnor/pcenter/internal/agent"
+	"github.com/moconnor/pcenter/internal/config"
 	"github.com/moconnor/pcenter/internal/folders"
 	"github.com/moconnor/pcenter/internal/metrics"
 	"github.com/moconnor/pcenter/internal/poller"
@@ -24,6 +25,7 @@ type Handler struct {
 	metrics  *metrics.QueryService
 	folders  *folders.Service
 	agentHub *agent.Hub
+	clusters []config.ClusterConfig // For on-demand client creation
 }
 
 // NewHandler creates a new API handler
@@ -49,17 +51,44 @@ func (h *Handler) SetAgentHub(hub *agent.Hub) {
 	h.agentHub = hub
 }
 
+// SetClusters sets the cluster configs for on-demand client creation
+func (h *Handler) SetClusters(clusters []config.ClusterConfig) {
+	h.clusters = clusters
+}
+
 // getClient returns the PVE client for a cluster/node combination
 func (h *Handler) getClient(cluster, node string) (*pve.Client, bool) {
-	if h.poller == nil {
+	// Try poller first
+	if h.poller != nil {
+		clients := h.poller.GetClusterClients(cluster)
+		if clients != nil {
+			if client, ok := clients[node]; ok {
+				return client, true
+			}
+		}
+	}
+
+	// Fall back to on-demand client creation for agent-only mode
+	return h.createOnDemandClient(cluster, node)
+}
+
+// createOnDemandClient creates a PVE client on-demand from cluster config
+func (h *Handler) createOnDemandClient(clusterName, node string) (*pve.Client, bool) {
+	// Find cluster config
+	var clusterCfg *config.ClusterConfig
+	for _, c := range h.clusters {
+		if c.Name == clusterName {
+			clusterCfg = &c
+			break
+		}
+	}
+	if clusterCfg == nil {
 		return nil, false
 	}
-	clients := h.poller.GetClusterClients(cluster)
-	if clients == nil {
-		return nil, false
-	}
-	client, ok := clients[node]
-	return client, ok
+
+	// Create client using discovery node (Proxmox will route to correct node)
+	client := pve.NewClientForNode(*clusterCfg, node, "")
+	return client, true
 }
 
 // pollerAvailable returns true if the poller is running
@@ -2080,4 +2109,212 @@ func (h *Handler) MoveResource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Configuration Handlers ---
+
+// GetClusterVMConfig returns the full configuration for a VM
+func (h *Handler) GetClusterVMConfig(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	vm, ok := cs.GetVM(vmid)
+	if !ok {
+		writeError(w, http.StatusNotFound, "VM not found in cluster")
+		return
+	}
+
+	client, ok := h.getClient(clusterName, vm.Node)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "node client not available")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	config, err := client.GetVMConfig(ctx, vmid)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Return wrapped response with metadata
+	writeJSON(w, pve.ConfigResponse{
+		Config: config,
+		Digest: config.Digest,
+		Node:   vm.Node,
+		VMID:   vmid,
+	})
+}
+
+// GetClusterContainerConfig returns the full configuration for a container
+func (h *Handler) GetClusterContainerConfig(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	ct, ok := cs.GetContainer(vmid)
+	if !ok {
+		writeError(w, http.StatusNotFound, "container not found in cluster")
+		return
+	}
+
+	client, ok := h.getClient(clusterName, ct.Node)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "node client not available")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	config, err := client.GetContainerConfig(ctx, vmid)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Return wrapped response with metadata
+	writeJSON(w, pve.ConfigResponse{
+		Config: config,
+		Digest: config.Digest,
+		Node:   ct.Node,
+		VMID:   vmid,
+	})
+}
+
+// UpdateClusterVMConfig updates VM configuration with optimistic locking
+func (h *Handler) UpdateClusterVMConfig(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	var req pve.ConfigUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Digest == "" {
+		writeError(w, http.StatusBadRequest, "digest required for config updates")
+		return
+	}
+
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	vm, ok := cs.GetVM(vmid)
+	if !ok {
+		writeError(w, http.StatusNotFound, "VM not found in cluster")
+		return
+	}
+
+	client, ok := h.getClient(clusterName, vm.Node)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "node client not available")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	if err := client.UpdateVMConfig(ctx, vmid, &req); err != nil {
+		// Check for digest mismatch (412 Precondition Failed from Proxmox)
+		if strings.Contains(err.Error(), "412") || strings.Contains(err.Error(), "digest") {
+			writeError(w, http.StatusConflict, "configuration changed by another user, please refresh")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, map[string]string{"message": "configuration updated"})
+}
+
+// UpdateClusterContainerConfig updates container configuration with optimistic locking
+func (h *Handler) UpdateClusterContainerConfig(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	var req pve.ConfigUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Digest == "" {
+		writeError(w, http.StatusBadRequest, "digest required for config updates")
+		return
+	}
+
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	ct, ok := cs.GetContainer(vmid)
+	if !ok {
+		writeError(w, http.StatusNotFound, "container not found in cluster")
+		return
+	}
+
+	client, ok := h.getClient(clusterName, ct.Node)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "node client not available")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	if err := client.UpdateContainerConfig(ctx, vmid, &req); err != nil {
+		// Check for digest mismatch (412 Precondition Failed from Proxmox)
+		if strings.Contains(err.Error(), "412") || strings.Contains(err.Error(), "digest") {
+			writeError(w, http.StatusConflict, "configuration changed by another user, please refresh")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, map[string]string{"message": "configuration updated"})
 }

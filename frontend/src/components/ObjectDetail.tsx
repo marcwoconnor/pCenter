@@ -1,9 +1,10 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useCluster } from '../context/ClusterContext';
-import { formatBytes, formatUptime } from '../api/client';
+import { formatBytes, formatUptime, api } from '../api/client';
 import { useMetrics } from '../hooks/useMetrics';
+import { useConfigEditor, type UseConfigEditorReturn } from '../hooks/useConfigEditor';
 import { MetricsChart } from './MetricsChart';
-import type { MetricSeries } from '../types';
+import type { MetricSeries, VMConfig, ContainerConfig } from '../types';
 
 type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d';
 
@@ -155,7 +156,13 @@ export function ObjectDetail() {
             isRunning={guest.status === 'running'}
           />
         )}
-        {activeTab === 'configure' && <ConfigureTab />}
+        {activeTab === 'configure' && guest && (
+          <ConfigureTab
+            vmid={guest.vmid}
+            type={guest.type === 'qemu' ? 'vm' : 'ct'}
+            cluster={guest.cluster}
+          />
+        )}
       </div>
     </div>
   );
@@ -869,10 +876,619 @@ function NodeMonitorTab({ node }: { node: string }) {
   );
 }
 
-function ConfigureTab() {
+type ConfigSubTab = 'hardware' | 'options' | 'network' | 'storage';
+
+const CONFIG_SUB_TABS: { id: ConfigSubTab; label: string }[] = [
+  { id: 'hardware', label: 'Hardware' },
+  { id: 'options', label: 'Options' },
+  { id: 'network', label: 'Network' },
+  { id: 'storage', label: 'Storage' },
+];
+
+function ConfigureTab({
+  vmid,
+  type,
+  cluster,
+}: {
+  vmid: number;
+  type: 'vm' | 'ct';
+  cluster: string;
+}) {
+  const [activeSubTab, setActiveSubTab] = useState<ConfigSubTab>('hardware');
+  const [config, setConfig] = useState<VMConfig | ContainerConfig | null>(null);
+  const [digest, setDigest] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  // Fetch config on mount
+  useEffect(() => {
+    setLoading(true);
+    setFetchError(null);
+
+    const fetchConfig = async () => {
+      try {
+        if (type === 'vm') {
+          const res = await api.getVMConfig(cluster, vmid);
+          setConfig(res.config);
+          setDigest(res.digest);
+        } else {
+          const res = await api.getContainerConfig(cluster, vmid);
+          setConfig(res.config);
+          setDigest(res.digest);
+        }
+      } catch (err) {
+        setFetchError(err instanceof Error ? err.message : 'Failed to load config');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchConfig();
+  }, [vmid, type, cluster]);
+
+  if (loading) {
+    return (
+      <div className="text-gray-500 dark:text-gray-400 text-center py-8">
+        Loading configuration...
+      </div>
+    );
+  }
+
+  if (fetchError) {
+    return (
+      <div className="text-red-500 text-center py-8">
+        Error: {fetchError}
+      </div>
+    );
+  }
+
+  if (!config) {
+    return (
+      <div className="text-gray-500 dark:text-gray-400 text-center py-8">
+        No configuration data available
+      </div>
+    );
+  }
+
   return (
-    <div className="text-gray-500 text-center py-8">
-      Configuration options coming soon...
+    <ConfigureTabContent
+      vmid={vmid}
+      type={type}
+      cluster={cluster}
+      config={config}
+      digest={digest}
+      activeSubTab={activeSubTab}
+      setActiveSubTab={setActiveSubTab}
+    />
+  );
+}
+
+// Separate component to use the hook after config is loaded
+function ConfigureTabContent({
+  vmid,
+  type,
+  cluster,
+  config,
+  digest,
+  activeSubTab,
+  setActiveSubTab,
+}: {
+  vmid: number;
+  type: 'vm' | 'ct';
+  cluster: string;
+  config: VMConfig | ContainerConfig;
+  digest: string;
+  activeSubTab: ConfigSubTab;
+  setActiveSubTab: (tab: ConfigSubTab) => void;
+}) {
+  const editor = useConfigEditor({
+    vmid,
+    type,
+    cluster,
+    initialConfig: config,
+    initialDigest: digest,
+  });
+
+  return (
+    <div className="space-y-4">
+      {/* Sub-tabs */}
+      <div className="flex gap-1 border-b border-gray-200 dark:border-gray-700 pb-2">
+        {CONFIG_SUB_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveSubTab(tab.id)}
+            className={`px-3 py-1.5 text-xs font-medium rounded-t transition-colors ${
+              activeSubTab === tab.id
+                ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 border border-b-0 border-gray-200 dark:border-gray-700'
+                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Sub-tab content */}
+      {activeSubTab === 'hardware' && (
+        <HardwareSection config={config} type={type} editor={editor} />
+      )}
+      {activeSubTab === 'options' && (
+        <OptionsSection config={config} type={type} editor={editor} />
+      )}
+      {activeSubTab === 'network' && (
+        <NetworkSection config={config} />
+      )}
+      {activeSubTab === 'storage' && (
+        <StorageSection config={config} type={type} />
+      )}
+
+      {/* Pending Changes Panel */}
+      {editor.isDirty && (
+        <PendingChangesPanel editor={editor} />
+      )}
+    </div>
+  );
+}
+
+function HardwareSection({
+  config,
+  type,
+  editor,
+}: {
+  config: VMConfig | ContainerConfig;
+  type: 'vm' | 'ct';
+  editor: UseConfigEditorReturn;
+}) {
+  const isVM = type === 'vm';
+  const vmConfig = isVM ? (config as VMConfig) : null;
+  const ctConfig = !isVM ? (config as ContainerConfig) : null;
+
+  return (
+    <div className="grid md:grid-cols-2 gap-4">
+      {/* CPU */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+        <h4 className="font-medium mb-3 text-gray-900 dark:text-white flex items-center gap-2">
+          <span>🔲</span> CPU
+        </h4>
+        <div className="space-y-2 text-sm">
+          <EditableNumberRow
+            label="Cores"
+            configKey="cores"
+            editor={editor}
+            min={1}
+            max={128}
+          />
+          {isVM && (
+            <EditableNumberRow
+              label="Sockets"
+              configKey="sockets"
+              editor={editor}
+              min={1}
+              max={4}
+            />
+          )}
+          {vmConfig && (
+            <ConfigRow label="Type" value={vmConfig.cpu || 'kvm64'} />
+          )}
+          {ctConfig && ctConfig.cpulimit && (
+            <ConfigRow label="CPU Limit" value={ctConfig.cpulimit} />
+          )}
+        </div>
+      </div>
+
+      {/* Memory */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+        <h4 className="font-medium mb-3 text-gray-900 dark:text-white flex items-center gap-2">
+          <span>💾</span> Memory
+        </h4>
+        <div className="space-y-2 text-sm">
+          <EditableNumberRow
+            label="Memory (MB)"
+            configKey="memory"
+            editor={editor}
+            min={16}
+            max={1048576}
+            step={128}
+          />
+          {ctConfig && (
+            <EditableNumberRow
+              label="Swap (MB)"
+              configKey="swap"
+              editor={editor}
+              min={0}
+              max={131072}
+              step={128}
+            />
+          )}
+          {vmConfig && vmConfig.balloon !== undefined && (
+            <ConfigRow
+              label="Ballooning"
+              value={vmConfig.balloon === 0 ? 'Disabled' : `Min ${vmConfig.balloon} MB`}
+            />
+          )}
+        </div>
+      </div>
+
+      {/* BIOS/Machine (VM only) */}
+      {vmConfig && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <h4 className="font-medium mb-3 text-gray-900 dark:text-white flex items-center gap-2">
+            <span>⚙️</span> System
+          </h4>
+          <div className="space-y-2 text-sm">
+            <ConfigRow label="BIOS" value={vmConfig.bios || 'SeaBIOS'} />
+            <ConfigRow label="Machine" value={vmConfig.machine || 'i440fx'} />
+            <ConfigRow label="OS Type" value={vmConfig.ostype || 'other'} />
+          </div>
+        </div>
+      )}
+
+      {/* Display (VM only) */}
+      {vmConfig && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <h4 className="font-medium mb-3 text-gray-900 dark:text-white flex items-center gap-2">
+            <span>🖥️</span> Display
+          </h4>
+          <div className="space-y-2 text-sm">
+            <ConfigRow label="VGA" value={vmConfig.vga || 'std'} />
+          </div>
+        </div>
+      )}
+
+      {/* Container Features */}
+      {ctConfig && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <h4 className="font-medium mb-3 text-gray-900 dark:text-white flex items-center gap-2">
+            <span>📦</span> Container
+          </h4>
+          <div className="space-y-2 text-sm">
+            <ConfigRow label="OS Type" value={ctConfig.ostype || 'unmanaged'} />
+            <ConfigRow label="Arch" value={ctConfig.arch || 'amd64'} />
+            <ConfigRow
+              label="Unprivileged"
+              value={ctConfig.unprivileged === 1 ? 'Yes' : 'No'}
+            />
+            {ctConfig.features && (
+              <ConfigRow label="Features" value={ctConfig.features} />
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OptionsSection({
+  config,
+  type,
+  editor,
+}: {
+  config: VMConfig | ContainerConfig;
+  type: 'vm' | 'ct';
+  editor: UseConfigEditorReturn;
+}) {
+  const isVM = type === 'vm';
+  const vmConfig = isVM ? (config as VMConfig) : null;
+  const ctConfig = !isVM ? (config as ContainerConfig) : null;
+
+  return (
+    <div className="grid md:grid-cols-2 gap-4">
+      {/* General */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+        <h4 className="font-medium mb-3 text-gray-900 dark:text-white">General</h4>
+        <div className="space-y-2 text-sm">
+          <ConfigRow
+            label="Name"
+            value={vmConfig?.name || ctConfig?.hostname || `${type}`}
+          />
+          {config.description && (
+            <div className="flex flex-col">
+              <span className="text-gray-500 dark:text-gray-400">Description</span>
+              <span className="text-gray-900 dark:text-white text-xs mt-1 whitespace-pre-wrap">
+                {config.description}
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Boot Options */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+        <h4 className="font-medium mb-3 text-gray-900 dark:text-white">Boot Options</h4>
+        <div className="space-y-2 text-sm">
+          <EditableCheckboxRow
+            label="Start at boot"
+            configKey="onboot"
+            editor={editor}
+          />
+          {vmConfig?.boot && <ConfigRow label="Boot order" value={vmConfig.boot} />}
+          {vmConfig?.bootdisk && <ConfigRow label="Boot disk" value={vmConfig.bootdisk} />}
+          {ctConfig?.startup && <ConfigRow label="Startup" value={ctConfig.startup} />}
+        </div>
+      </div>
+
+      {/* Protection */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+        <h4 className="font-medium mb-3 text-gray-900 dark:text-white">Protection</h4>
+        <div className="space-y-2 text-sm">
+          <EditableCheckboxRow
+            label="Protection"
+            configKey="protection"
+            editor={editor}
+          />
+        </div>
+      </div>
+
+      {/* QEMU Guest Agent (VM only) */}
+      {vmConfig && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <h4 className="font-medium mb-3 text-gray-900 dark:text-white">Guest Agent</h4>
+          <div className="space-y-2 text-sm">
+            <ConfigRow
+              label="QEMU Agent"
+              value={vmConfig.agent?.includes('enabled=1') ? 'Enabled' : 'Disabled'}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Cloud-init (VM only) */}
+      {vmConfig && (vmConfig.ciuser || vmConfig.sshkeys || vmConfig.ipconfig0) && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 md:col-span-2">
+          <h4 className="font-medium mb-3 text-gray-900 dark:text-white">Cloud-init</h4>
+          <div className="space-y-2 text-sm">
+            {vmConfig.ciuser && <ConfigRow label="User" value={vmConfig.ciuser} />}
+            {vmConfig.sshkeys && (
+              <ConfigRow label="SSH Keys" value="(configured)" />
+            )}
+            {vmConfig.ipconfig0 && <ConfigRow label="IP Config" value={vmConfig.ipconfig0} />}
+            {vmConfig.nameserver && <ConfigRow label="DNS" value={vmConfig.nameserver} />}
+            {vmConfig.searchdomain && (
+              <ConfigRow label="Search Domain" value={vmConfig.searchdomain} />
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NetworkSection({
+  config,
+}: {
+  config: VMConfig | ContainerConfig;
+}) {
+  // Extract network interfaces from raw_config
+  const networks = useMemo(() => {
+    const raw = config.raw_config || {};
+    const nets: { key: string; value: string }[] = [];
+
+    Object.entries(raw).forEach(([key, value]) => {
+      if (key.startsWith('net') && typeof value === 'string') {
+        nets.push({ key, value });
+      }
+    });
+
+    return nets.sort((a, b) => a.key.localeCompare(b.key));
+  }, [config.raw_config]);
+
+  if (networks.length === 0) {
+    return (
+      <div className="text-gray-500 dark:text-gray-400 text-center py-8">
+        No network interfaces configured
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {networks.map(({ key, value }) => (
+        <div key={key} className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <h4 className="font-medium mb-3 text-gray-900 dark:text-white flex items-center gap-2">
+            <span>🔌</span> {key.toUpperCase()}
+          </h4>
+          <div className="text-sm text-gray-600 dark:text-gray-400 font-mono break-all">
+            {value}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function StorageSection({
+  config,
+  type,
+}: {
+  config: VMConfig | ContainerConfig;
+  type: 'vm' | 'ct';
+}) {
+  const isVM = type === 'vm';
+  const ctConfig = !isVM ? (config as ContainerConfig) : null;
+
+  // Extract storage devices from raw_config
+  const storage = useMemo(() => {
+    const raw = config.raw_config || {};
+    const disks: { key: string; value: string }[] = [];
+
+    // VM disk types
+    const vmDiskPrefixes = ['scsi', 'sata', 'ide', 'virtio', 'efidisk', 'tpmstate'];
+    // CT mount point prefix
+    const ctPrefix = 'mp';
+
+    Object.entries(raw).forEach(([key, value]) => {
+      if (typeof value !== 'string') return;
+
+      if (isVM) {
+        if (vmDiskPrefixes.some(p => key.startsWith(p))) {
+          disks.push({ key, value });
+        }
+      } else {
+        if (key.startsWith(ctPrefix) || key === 'rootfs') {
+          disks.push({ key, value });
+        }
+      }
+    });
+
+    return disks.sort((a, b) => a.key.localeCompare(b.key));
+  }, [config.raw_config, isVM]);
+
+  // Add rootfs for containers
+  const allStorage = useMemo(() => {
+    if (ctConfig?.rootfs && !storage.find(s => s.key === 'rootfs')) {
+      return [{ key: 'rootfs', value: ctConfig.rootfs }, ...storage];
+    }
+    return storage;
+  }, [storage, ctConfig?.rootfs]);
+
+  if (allStorage.length === 0) {
+    return (
+      <div className="text-gray-500 dark:text-gray-400 text-center py-8">
+        No storage devices configured
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {allStorage.map(({ key, value }) => (
+        <div key={key} className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <h4 className="font-medium mb-3 text-gray-900 dark:text-white flex items-center gap-2">
+            <span>💿</span> {key.toUpperCase()}
+          </h4>
+          <div className="text-sm text-gray-600 dark:text-gray-400 font-mono break-all">
+            {value}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Helper component for config rows
+function ConfigRow({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="flex justify-between">
+      <span className="text-gray-500 dark:text-gray-400">{label}</span>
+      <span className="text-gray-900 dark:text-white font-medium">{value}</span>
+    </div>
+  );
+}
+
+// Editable number input row
+function EditableNumberRow({
+  label,
+  configKey,
+  editor,
+  min,
+  max,
+  step = 1,
+}: {
+  label: string;
+  configKey: string;
+  editor: UseConfigEditorReturn;
+  min?: number;
+  max?: number;
+  step?: number;
+}) {
+  const value = editor.getValue(configKey);
+  const numValue = typeof value === 'number' ? value : parseInt(String(value) || '0', 10);
+
+  return (
+    <div className="flex justify-between items-center">
+      <span className="text-gray-500 dark:text-gray-400">{label}</span>
+      <input
+        type="number"
+        value={numValue}
+        min={min}
+        max={max}
+        step={step}
+        onChange={(e) => editor.setValue(configKey, parseInt(e.target.value, 10), label)}
+        className="w-24 px-2 py-1 text-sm text-right bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-900 dark:text-white"
+      />
+    </div>
+  );
+}
+
+// Editable checkbox row (for boolean flags like onboot, protection)
+function EditableCheckboxRow({
+  label,
+  configKey,
+  editor,
+}: {
+  label: string;
+  configKey: string;
+  editor: UseConfigEditorReturn;
+}) {
+  const value = editor.getValue(configKey);
+  const checked = value === 1 || value === '1' || value === true;
+
+  return (
+    <div className="flex justify-between items-center">
+      <span className="text-gray-500 dark:text-gray-400">{label}</span>
+      <label className="relative inline-flex items-center cursor-pointer">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => editor.setValue(configKey, e.target.checked ? 1 : 0, label)}
+          className="sr-only peer"
+        />
+        <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+      </label>
+    </div>
+  );
+}
+
+// Pending changes panel with Apply/Discard buttons
+function PendingChangesPanel({ editor }: { editor: UseConfigEditorReturn }) {
+  return (
+    <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-4 max-w-lg w-full mx-4 z-50">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1 min-w-0">
+          <h4 className="font-medium text-gray-900 dark:text-white text-sm mb-2">
+            Pending Changes ({editor.pendingChanges.length})
+          </h4>
+          <div className="space-y-1 text-xs max-h-32 overflow-y-auto">
+            {editor.pendingChanges.map((change) => (
+              <div key={change.key} className="flex gap-2 text-gray-600 dark:text-gray-400">
+                <span className="font-medium">{change.label}:</span>
+                <span className="text-red-500 line-through">{String(change.oldValue ?? 'unset')}</span>
+                <span>→</span>
+                <span className="text-green-500">{String(change.newValue)}</span>
+              </div>
+            ))}
+          </div>
+          {editor.error && (
+            <div className="mt-2 text-xs text-red-500">
+              {editor.conflict ? '⚠️ ' : ''}
+              {editor.error}
+            </div>
+          )}
+        </div>
+        <div className="flex gap-2 flex-shrink-0">
+          <button
+            onClick={editor.discard}
+            disabled={editor.applying}
+            className="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white disabled:opacity-50"
+          >
+            Discard
+          </button>
+          <button
+            onClick={editor.apply}
+            disabled={editor.applying}
+            className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1"
+          >
+            {editor.applying ? (
+              <>
+                <span className="animate-spin">⏳</span>
+                Applying...
+              </>
+            ) : (
+              'Apply'
+            )}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

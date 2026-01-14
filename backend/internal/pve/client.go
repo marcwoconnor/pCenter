@@ -264,6 +264,124 @@ func (c *Client) GetVM(ctx context.Context, vmid int) (*VM, error) {
 	return nil, fmt.Errorf("VM %d not found on %s", vmid, c.nodeName)
 }
 
+// GetVMConfig returns the full configuration for a VM
+func (c *Client) GetVMConfig(ctx context.Context, vmid int) (*VMConfig, error) {
+	raw, err := get[map[string]interface{}](c, ctx, fmt.Sprintf("/nodes/%s/qemu/%d/config", c.nodeName, vmid))
+	if err != nil {
+		return nil, err
+	}
+	return parseVMConfig(raw), nil
+}
+
+// UpdateVMConfig updates VM configuration with optimistic locking via digest
+func (c *Client) UpdateVMConfig(ctx context.Context, vmid int, req *ConfigUpdateRequest) error {
+	data := url.Values{}
+	data.Set("digest", req.Digest)
+
+	// Add changes
+	for key, value := range req.Changes {
+		data.Set(key, fmt.Sprintf("%v", value))
+	}
+
+	// Add delete list if any
+	if len(req.Delete) > 0 {
+		data.Set("delete", strings.Join(req.Delete, ","))
+	}
+
+	return c.putForm(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/config", c.nodeName, vmid), data)
+}
+
+// parseVMConfig converts raw API response to structured VMConfig
+func parseVMConfig(raw map[string]interface{}) *VMConfig {
+	cfg := &VMConfig{RawConfig: raw}
+
+	// Extract known fields
+	if v, ok := raw["digest"].(string); ok {
+		cfg.Digest = v
+	}
+	if v, ok := raw["name"].(string); ok {
+		cfg.Name = v
+	}
+	if v, ok := raw["description"].(string); ok {
+		cfg.Description = v
+	}
+
+	// Hardware
+	if v, ok := raw["cores"].(float64); ok {
+		cfg.Cores = int(v)
+	}
+	if v, ok := raw["sockets"].(float64); ok {
+		cfg.Sockets = int(v)
+	}
+	if v, ok := raw["cpu"].(string); ok {
+		cfg.CPU = v
+	}
+	if v, ok := raw["memory"].(float64); ok {
+		cfg.Memory = int(v)
+	}
+	if v, ok := raw["balloon"].(float64); ok {
+		cfg.Balloon = int(v)
+	}
+	if v, ok := raw["numa"].(float64); ok {
+		cfg.Numa = int(v)
+	}
+	if v, ok := raw["bios"].(string); ok {
+		cfg.BIOS = v
+	}
+	if v, ok := raw["machine"].(string); ok {
+		cfg.Machine = v
+	}
+
+	// Boot
+	if v, ok := raw["boot"].(string); ok {
+		cfg.Boot = v
+	}
+	if v, ok := raw["bootdisk"].(string); ok {
+		cfg.Bootdisk = v
+	}
+
+	// Options
+	if v, ok := raw["onboot"].(float64); ok {
+		cfg.Onboot = int(v)
+	}
+	if v, ok := raw["protection"].(float64); ok {
+		cfg.Protection = int(v)
+	}
+	if v, ok := raw["agent"].(string); ok {
+		cfg.Agent = v
+	}
+	if v, ok := raw["ostype"].(string); ok {
+		cfg.Ostype = v
+	}
+
+	// Cloud-init
+	if v, ok := raw["ciuser"].(string); ok {
+		cfg.CIUser = v
+	}
+	if v, ok := raw["sshkeys"].(string); ok {
+		cfg.SSHKeys = v
+	}
+	if v, ok := raw["ipconfig0"].(string); ok {
+		cfg.IPConfig0 = v
+	}
+	if v, ok := raw["ipconfig1"].(string); ok {
+		cfg.IPConfig1 = v
+	}
+	if v, ok := raw["nameserver"].(string); ok {
+		cfg.Nameserver = v
+	}
+	if v, ok := raw["searchdomain"].(string); ok {
+		cfg.Searchdomain = v
+	}
+
+	// VGA
+	if v, ok := raw["vga"].(string); ok {
+		cfg.VGA = v
+	}
+
+	return cfg
+}
+
 // StartVM starts a VM
 func (c *Client) StartVM(ctx context.Context, vmid int) (string, error) {
 	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/status/start", c.nodeName, vmid), nil)
@@ -310,6 +428,100 @@ func (c *Client) GetContainers(ctx context.Context) ([]Container, error) {
 		cts[i].Type = "lxc"
 	}
 	return cts, nil
+}
+
+// GetContainerConfig returns the full configuration for a container
+func (c *Client) GetContainerConfig(ctx context.Context, vmid int) (*ContainerConfig, error) {
+	raw, err := get[map[string]interface{}](c, ctx, fmt.Sprintf("/nodes/%s/lxc/%d/config", c.nodeName, vmid))
+	if err != nil {
+		return nil, err
+	}
+	return parseContainerConfig(raw), nil
+}
+
+// UpdateContainerConfig updates container configuration with optimistic locking via digest
+func (c *Client) UpdateContainerConfig(ctx context.Context, vmid int, req *ConfigUpdateRequest) error {
+	data := url.Values{}
+	data.Set("digest", req.Digest)
+
+	// Add changes
+	for key, value := range req.Changes {
+		data.Set(key, fmt.Sprintf("%v", value))
+	}
+
+	// Add delete list if any
+	if len(req.Delete) > 0 {
+		data.Set("delete", strings.Join(req.Delete, ","))
+	}
+
+	return c.putForm(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/config", c.nodeName, vmid), data)
+}
+
+// parseContainerConfig converts raw API response to structured ContainerConfig
+func parseContainerConfig(raw map[string]interface{}) *ContainerConfig {
+	cfg := &ContainerConfig{RawConfig: raw}
+
+	// Extract known fields
+	if v, ok := raw["digest"].(string); ok {
+		cfg.Digest = v
+	}
+	if v, ok := raw["hostname"].(string); ok {
+		cfg.Hostname = v
+	}
+	if v, ok := raw["description"].(string); ok {
+		cfg.Description = v
+	}
+
+	// Resources
+	if v, ok := raw["cores"].(float64); ok {
+		cfg.Cores = int(v)
+	}
+	if v, ok := raw["cpulimit"].(float64); ok {
+		cfg.CPULimit = v
+	}
+	if v, ok := raw["cpuunits"].(float64); ok {
+		cfg.CPUUnits = int(v)
+	}
+	if v, ok := raw["memory"].(float64); ok {
+		cfg.Memory = int(v)
+	}
+	if v, ok := raw["swap"].(float64); ok {
+		cfg.Swap = int(v)
+	}
+
+	// Root filesystem
+	if v, ok := raw["rootfs"].(string); ok {
+		cfg.Rootfs = v
+	}
+
+	// Options
+	if v, ok := raw["onboot"].(float64); ok {
+		cfg.Onboot = int(v)
+	}
+	if v, ok := raw["protection"].(float64); ok {
+		cfg.Protection = int(v)
+	}
+	if v, ok := raw["unprivileged"].(float64); ok {
+		cfg.Unprivileged = int(v)
+	}
+	if v, ok := raw["ostype"].(string); ok {
+		cfg.Ostype = v
+	}
+	if v, ok := raw["arch"].(string); ok {
+		cfg.Arch = v
+	}
+
+	// Features
+	if v, ok := raw["features"].(string); ok {
+		cfg.Features = v
+	}
+
+	// Startup
+	if v, ok := raw["startup"].(string); ok {
+		cfg.Startup = v
+	}
+
+	return cfg
 }
 
 // StartContainer starts a container

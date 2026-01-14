@@ -420,3 +420,123 @@ export interface MoveResourceRequest {
   cluster: string;
   to_folder_id?: string;
 }
+
+// Configuration types for VM/Container settings
+
+export interface VMConfig {
+  digest: string;
+  name?: string;
+  description?: string;
+
+  // Hardware
+  cores?: number;
+  sockets?: number;
+  cpu?: string;
+  memory?: number;
+  balloon?: number;
+  numa?: number;
+  bios?: string;
+  machine?: string;
+
+  // Boot
+  boot?: string;
+  bootdisk?: string;
+
+  // Options
+  onboot?: number;
+  protection?: number;
+  agent?: string;
+  ostype?: string;
+
+  // Cloud-init
+  ciuser?: string;
+  cipassword?: string;
+  sshkeys?: string;
+  ipconfig0?: string;
+  ipconfig1?: string;
+  nameserver?: string;
+  searchdomain?: string;
+
+  // VGA
+  vga?: string;
+
+  // Dynamic fields (scsi0, net0, ide0, etc.)
+  raw_config?: Record<string, unknown>;
+}
+
+export interface ContainerConfig {
+  digest: string;
+  hostname?: string;
+  description?: string;
+
+  // Resources
+  cores?: number;
+  cpulimit?: number;
+  cpuunits?: number;
+  memory?: number;
+  swap?: number;
+
+  // Root filesystem
+  rootfs?: string;
+
+  // Options
+  onboot?: number;
+  protection?: number;
+  unprivileged?: number;
+  ostype?: string;
+  arch?: string;
+
+  // Features
+  features?: string;
+
+  // Startup
+  startup?: string;
+
+  // Dynamic fields (net0, mp0, etc.)
+  raw_config?: Record<string, unknown>;
+}
+
+export interface ConfigResponse<T> {
+  config: T;
+  digest: string;
+  node: string;
+  vmid: number;
+}
+
+export interface Snapshot {
+  name: string;
+  description?: string;
+  snaptime?: number;
+  vmstate?: number;
+  parent?: string;
+}
+
+export interface FirewallRule {
+  pos?: number;
+  type: string;
+  action: string;
+  enable?: number;
+  source?: string;
+  dest?: string;
+  sport?: string;
+  dport?: string;
+  proto?: string;
+  macro?: string;
+  iface?: string;
+  log?: string;
+  comment?: string;
+}
+
+export interface FirewallOptions {
+  enable?: number;
+  dhcp?: number;
+  dhcp6?: number;
+  ipfilter?: number;
+  log_level_in?: string;
+  log_level_out?: string;
+  macfilter?: number;
+  ndp?: number;
+  policy_in?: string;
+  policy_out?: string;
+  radv?: number;
+}

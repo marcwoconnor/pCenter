@@ -17,6 +17,9 @@ import type {
   TreeView,
   CreateFolderRequest,
   MoveResourceRequest,
+  VMConfig,
+  ContainerConfig,
+  ConfigResponse,
 } from '../types';
 
 const BASE_URL = '/api';
@@ -81,6 +84,22 @@ export const api = {
     fetchAPI<{ upid: string }>(`/clusters/${cluster}/vms/${vmid}/${action}`, { method: 'POST' }),
   clusterContainerAction: (cluster: string, vmid: number, action: 'start' | 'stop' | 'shutdown') =>
     fetchAPI<{ upid: string }>(`/clusters/${cluster}/containers/${vmid}/${action}`, { method: 'POST' }),
+
+  // Configuration (cluster-specific)
+  getVMConfig: (cluster: string, vmid: number) =>
+    fetchAPI<ConfigResponse<VMConfig>>(`/clusters/${cluster}/vms/${vmid}/config`),
+  getContainerConfig: (cluster: string, vmid: number) =>
+    fetchAPI<ConfigResponse<ContainerConfig>>(`/clusters/${cluster}/containers/${vmid}/config`),
+  updateVMConfig: (cluster: string, vmid: number, digest: string, changes: Record<string, unknown>, deleteKeys?: string[]) =>
+    fetchAPI<{ message: string }>(`/clusters/${cluster}/vms/${vmid}/config`, {
+      method: 'PUT',
+      body: JSON.stringify({ digest, changes, delete: deleteKeys }),
+    }),
+  updateContainerConfig: (cluster: string, vmid: number, digest: string, changes: Record<string, unknown>, deleteKeys?: string[]) =>
+    fetchAPI<{ message: string }>(`/clusters/${cluster}/containers/${vmid}/config`, {
+      method: 'PUT',
+      body: JSON.stringify({ digest, changes, delete: deleteKeys }),
+    }),
 
   // Console
   getConsoleURL: (type: 'vm' | 'ct', vmid: number) =>
