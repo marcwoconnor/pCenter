@@ -571,6 +571,7 @@ export interface Datacenter {
 export interface InventoryCluster {
   id: string;
   name: string;
+  agent_name?: string;  // What agents report as (for matching runtime data)
   datacenter_id?: string;
   datacenter_name?: string;
   status: ClusterStatus;

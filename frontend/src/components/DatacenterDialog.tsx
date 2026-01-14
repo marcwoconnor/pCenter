@@ -31,9 +31,7 @@ export function DatacenterDialog({
   // Cluster fields
   const [clusterName, setClusterName] = useState(cluster?.name || '');
   const [clusterDcId, setClusterDcId] = useState(cluster?.datacenter_id || parentDatacenterId || '');
-  const [discoveryNode, setDiscoveryNode] = useState(cluster?.discovery_node || '');
-  const [tokenId, setTokenId] = useState(cluster?.token_id || '');
-  const [insecure, setInsecure] = useState(cluster?.insecure ?? true);
+  const [clusterEnabled, setClusterEnabled] = useState(cluster?.enabled ?? true);
 
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -63,36 +61,25 @@ export function DatacenterDialog({
           await api.updateDatacenter(datacenter.id, { name, description: dcDescription.trim() || undefined });
         }
       } else {
-        // Cluster
+        // Cluster - just name, datacenter, and enabled
         const name = clusterName.trim();
         if (!name) {
           setError('Name is required');
           setSaving(false);
           return;
         }
-        if (!discoveryNode.trim()) {
-          setError('Discovery node is required');
-          setSaving(false);
-          return;
-        }
-        if (!tokenId.trim()) {
-          setError('Token ID is required');
-          setSaving(false);
-          return;
-        }
-
-        const payload = {
-          name,
-          datacenter_id: clusterDcId || undefined,
-          discovery_node: discoveryNode.trim(),
-          token_id: tokenId.trim(),
-          insecure,
-        };
 
         if (isCreate) {
-          await api.createInventoryCluster(payload);
+          await api.createInventoryCluster({
+            name,
+            datacenter_id: clusterDcId || undefined,
+          });
         } else if (cluster) {
-          await api.updateInventoryCluster(cluster.name, { ...payload, enabled: cluster.enabled });
+          await api.updateInventoryCluster(cluster.name, {
+            name,
+            datacenter_id: clusterDcId || undefined,
+            enabled: clusterEnabled,
+          });
         }
       }
 
@@ -166,12 +153,8 @@ export function DatacenterDialog({
                   value={clusterName}
                   onChange={(e) => setClusterName(e.target.value)}
                   placeholder="e.g., production"
-                  disabled={!isCreate}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
-                {!isCreate && (
-                  <p className="text-xs text-gray-500 mt-1">Cluster name cannot be changed</p>
-                )}
               </div>
               <div className="mb-3">
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -190,47 +173,29 @@ export function DatacenterDialog({
                   ))}
                 </select>
               </div>
-              <div className="mb-3">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Discovery Node
-                </label>
-                <input
-                  type="text"
-                  value={discoveryNode}
-                  onChange={(e) => setDiscoveryNode(e.target.value)}
-                  placeholder="https://pve01.example.com:8006"
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <p className="text-xs text-gray-500 mt-1">Any node in the Proxmox cluster</p>
-              </div>
-              <div className="mb-3">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Token ID
-                </label>
-                <input
-                  type="text"
-                  value={tokenId}
-                  onChange={(e) => setTokenId(e.target.value)}
-                  placeholder="user@realm!tokenname"
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Token secret must be configured in config.yaml
+              {!isCreate && (
+                <div className="mb-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={clusterEnabled}
+                      onChange={(e) => setClusterEnabled(e.target.checked)}
+                      className="rounded border-gray-300 dark:border-gray-600"
+                    />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">
+                      Enabled
+                    </span>
+                  </label>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Disabled clusters are not polled
+                  </p>
+                </div>
+              )}
+              {isCreate && (
+                <p className="text-xs text-gray-500 mb-3">
+                  After creating the cluster, add hosts by dragging them into the cluster in the tree.
                 </p>
-              </div>
-              <div className="mb-3">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={insecure}
-                    onChange={(e) => setInsecure(e.target.checked)}
-                    className="rounded border-gray-300 dark:border-gray-600"
-                  />
-                  <span className="text-sm text-gray-700 dark:text-gray-300">
-                    Skip TLS certificate verification
-                  </span>
-                </label>
-              </div>
+              )}
             </>
           )}
 

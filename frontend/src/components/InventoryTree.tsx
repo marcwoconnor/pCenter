@@ -2,11 +2,12 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useCluster } from '../context/ClusterContext';
 import { useFolders } from '../context/FolderContext';
 import type { SelectedObject } from '../context/ClusterContext';
-import type { Guest, Storage, ClusterInfo, NetworkInterface, Folder, TreeView, Datacenter, InventoryCluster } from '../types';
+import type { Guest, Storage, ClusterInfo, NetworkInterface, Folder, TreeView, Datacenter, InventoryCluster, InventoryHost } from '../types';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { MigrateDialog } from './MigrateDialog';
 import { FolderDialog } from './FolderDialog';
 import { DatacenterDialog } from './DatacenterDialog';
+import { AddHostDialog } from './AddHostDialog';
 import { api } from '../api/client';
 
 interface ContextMenuState {
@@ -196,6 +197,7 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
   const [datacenters, setDatacenters] = useState<Datacenter[]>([]);
   const [orphanClusters, setOrphanClusters] = useState<InventoryCluster[]>([]);
   const [datacenterDialog, setDatacenterDialog] = useState<DatacenterDialogState | null>(null);
+  const [addHostCluster, setAddHostCluster] = useState<string | null>(null);
 
   const filterLower = filter.toLowerCase();
 
@@ -585,6 +587,11 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
 
     return [
       {
+        label: 'Add Host',
+        icon: '➕',
+        action: () => setAddHostCluster(cluster.name),
+      },
+      {
         label: 'Edit Cluster',
         icon: '✏️',
         action: () => setDatacenterDialog({
@@ -621,6 +628,27 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
           if (confirm(`Delete cluster "${cluster.name}"? This cannot be undone.`)) {
             try {
               await api.deleteInventoryCluster(cluster.name);
+              fetchDatacenterTree();
+            } catch (err) {
+              alert('Failed to delete: ' + (err instanceof Error ? err.message : 'Unknown error'));
+            }
+          }
+        },
+        danger: true,
+      },
+    ];
+  };
+
+  // Get inventory host context menu items
+  const getInventoryHostMenuItems = (host: InventoryHost, clusterName: string): MenuItem[] => {
+    return [
+      {
+        label: 'Delete Host',
+        icon: '🗑️',
+        action: async () => {
+          if (confirm(`Remove host "${host.address}" from cluster "${clusterName}"?`)) {
+            try {
+              await api.deleteHost(host.id);
               fetchDatacenterTree();
             } catch (err) {
               alert('Failed to delete: ' + (err instanceof Error ? err.message : 'Unknown error'));
@@ -881,10 +909,44 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
     />
   );
 
+  // Get status color for inventory host
+  const getHostStatusColor = (status: string) => {
+    switch (status) {
+      case 'online': return 'online';
+      case 'connecting': return 'warning';
+      case 'offline':
+      case 'staged':
+      case 'error':
+      default: return 'stopped';
+    }
+  };
+
   // Helper to render a cluster node with its hosts
   const renderClusterWithNodes = (clusterName: string, inventoryCluster?: InventoryCluster) => {
-    const clusterNodes = nodesByCluster[clusterName] || [];
-    const runtimeCluster = clusters.find(c => c.name === clusterName);
+    // Use agent_name for runtime data lookups (what agents report), display name for UI
+    const lookupName = inventoryCluster?.agent_name || clusterName;
+    const clusterNodes = nodesByCluster[lookupName] || [];
+    const runtimeCluster = clusters.find(c => c.name === lookupName);
+    const inventoryHosts = inventoryCluster?.hosts || [];
+
+    // Determine what to show under the cluster - prefer runtime nodes if available
+    const hasRuntimeNodes = clusterNodes.length > 0;
+    const hasInventoryHosts = inventoryHosts.length > 0;
+
+    // Status badge based on cluster status
+    const getClusterStatusBadge = () => {
+      if (!inventoryCluster) return null;
+      switch (inventoryCluster.status) {
+        case 'empty':
+          return <span className="text-xs px-1.5 py-0.5 rounded bg-gray-600 text-gray-300">empty</span>;
+        case 'pending':
+          return <span className="text-xs px-1.5 py-0.5 rounded bg-yellow-600 text-yellow-100">pending</span>;
+        case 'error':
+          return <span className="text-xs px-1.5 py-0.5 rounded bg-red-600 text-red-100">error</span>;
+        default:
+          return null;
+      }
+    };
 
     return (
       <TreeNode
@@ -895,6 +957,7 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
           {inventoryCluster && !inventoryCluster.enabled && (
             <span className="text-xs px-1.5 py-0.5 rounded bg-gray-600 text-gray-300">disabled</span>
           )}
+          {getClusterStatusBadge()}
           <HABadge ha={runtimeCluster?.ha} />
         </>}
         isSelected={isSelected({ type: 'cluster', id: clusterName, name: clusterName, cluster: clusterName })}
@@ -908,38 +971,60 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
           }
         }}
         defaultExpanded
-        count={clusterNodes.length}
+        count={hasRuntimeNodes ? clusterNodes.length : inventoryHosts.length}
       >
-        {clusterNodes.map((node) => {
-          const nodeGuests = (guestsByClusterNode[clusterName]?.[node.node] || []).filter(filterGuest);
-          const vms = nodeGuests.filter(g => g.type === 'qemu');
-          const cts = nodeGuests.filter(g => g.type === 'lxc');
+        {hasRuntimeNodes ? (
+          // Show runtime nodes with guests (normal operational view)
+          clusterNodes.map((node) => {
+            const nodeGuests = (guestsByClusterNode[lookupName]?.[node.node] || []).filter(filterGuest);
+            const vms = nodeGuests.filter(g => g.type === 'qemu');
+            const cts = nodeGuests.filter(g => g.type === 'lxc');
 
-          return (
+            return (
+              <TreeNode
+                key={`${clusterName}-${node.node}`}
+                icon="🖥"
+                label={node.node}
+                status={node.status === 'online' ? 'online' : 'stopped'}
+                isSelected={isSelected({ type: 'node', id: node.node, name: node.node, cluster: clusterName })}
+                onClick={() => setSelectedObject({ type: 'node', id: node.node, name: node.node, cluster: clusterName })}
+                onContextMenu={(e) => showContextMenu(e, getNodeMenuItems(node.node, clusterName))}
+                defaultExpanded
+                count={nodeGuests.length}
+              >
+                {vms.length > 0 && (
+                  <TreeNode icon="📁" label="Virtual Machines" count={vms.length} defaultExpanded>
+                    {vms.map((vm) => renderGuestNode(vm, 'vm', 'hosts'))}
+                  </TreeNode>
+                )}
+                {cts.length > 0 && (
+                  <TreeNode icon="📁" label="Containers" count={cts.length} defaultExpanded>
+                    {cts.map((ct) => renderGuestNode(ct, 'ct', 'hosts'))}
+                  </TreeNode>
+                )}
+              </TreeNode>
+            );
+          })
+        ) : hasInventoryHosts ? (
+          // Show inventory hosts (configuration view - cluster not yet active)
+          inventoryHosts.map((host) => (
             <TreeNode
-              key={`${clusterName}-${node.node}`}
+              key={host.id}
               icon="🖥"
-              label={node.node}
-              status={node.status === 'online' ? 'online' : 'stopped'}
-              isSelected={isSelected({ type: 'node', id: node.node, name: node.node, cluster: clusterName })}
-              onClick={() => setSelectedObject({ type: 'node', id: node.node, name: node.node, cluster: clusterName })}
-              onContextMenu={(e) => showContextMenu(e, getNodeMenuItems(node.node, clusterName))}
-              defaultExpanded
-              count={nodeGuests.length}
-            >
-              {vms.length > 0 && (
-                <TreeNode icon="📁" label="Virtual Machines" count={vms.length} defaultExpanded>
-                  {vms.map((vm) => renderGuestNode(vm, 'vm', 'hosts'))}
-                </TreeNode>
-              )}
-              {cts.length > 0 && (
-                <TreeNode icon="📁" label="Containers" count={cts.length} defaultExpanded>
-                  {cts.map((ct) => renderGuestNode(ct, 'ct', 'hosts'))}
-                </TreeNode>
-              )}
-            </TreeNode>
-          );
-        })}
+              label={host.node_name || host.address}
+              status={getHostStatusColor(host.status) as 'online' | 'stopped' | 'warning'}
+              badge={host.error ? (
+                <span className="text-xs px-1.5 py-0.5 rounded bg-red-600 text-red-100" title={host.error}>!</span>
+              ) : undefined}
+              onContextMenu={(e) => showContextMenu(e, getInventoryHostMenuItems(host, clusterName))}
+            />
+          ))
+        ) : (
+          // Empty cluster - show hint
+          <div className="px-6 py-2 text-xs text-gray-500 italic">
+            No hosts. Right-click to add one.
+          </div>
+        )}
       </TreeNode>
     );
   };
@@ -980,6 +1065,16 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
               await fetchDatacenterTree();
             }}
             onClose={() => setDatacenterDialog(null)}
+          />
+        )}
+        {addHostCluster && (
+          <AddHostDialog
+            clusterName={addHostCluster}
+            onSubmit={async () => {
+              setAddHostCluster(null);
+              await fetchDatacenterTree();
+            }}
+            onClose={() => setAddHostCluster(null)}
           />
         )}
         <TreeNode
