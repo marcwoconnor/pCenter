@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/moconnor/pcenter/internal/agent"
 	"github.com/moconnor/pcenter/internal/folders"
 	"github.com/moconnor/pcenter/internal/metrics"
 	"github.com/moconnor/pcenter/internal/poller"
@@ -18,10 +19,11 @@ import (
 
 // Handler holds dependencies for API handlers
 type Handler struct {
-	store   *state.Store
-	poller  *poller.Poller
-	metrics *metrics.QueryService
-	folders *folders.Service
+	store    *state.Store
+	poller   *poller.Poller
+	metrics  *metrics.QueryService
+	folders  *folders.Service
+	agentHub *agent.Hub
 }
 
 // NewHandler creates a new API handler
@@ -42,14 +44,27 @@ func (h *Handler) SetFoldersService(f *folders.Service) {
 	h.folders = f
 }
 
+// SetAgentHub sets the agent hub for command execution
+func (h *Handler) SetAgentHub(hub *agent.Hub) {
+	h.agentHub = hub
+}
+
 // getClient returns the PVE client for a cluster/node combination
 func (h *Handler) getClient(cluster, node string) (*pve.Client, bool) {
+	if h.poller == nil {
+		return nil, false
+	}
 	clients := h.poller.GetClusterClients(cluster)
 	if clients == nil {
 		return nil, false
 	}
 	client, ok := clients[node]
 	return client, ok
+}
+
+// pollerAvailable returns true if the poller is running
+func (h *Handler) pollerAvailable() bool {
+	return h.poller != nil
 }
 
 // JSON helper
@@ -265,19 +280,21 @@ func (h *Handler) RunCephCommand(w http.ResponseWriter, r *http.Request) {
 
 	// Get any available client to run the command
 	var client *pve.Client
-	allClients := h.poller.GetAllClients()
-	for _, clients := range allClients {
-		for _, c := range clients {
-			client = c
-			break
-		}
-		if client != nil {
-			break
+	if h.poller != nil {
+		allClients := h.poller.GetAllClients()
+		for _, clients := range allClients {
+			for _, c := range clients {
+				client = c
+				break
+			}
+			if client != nil {
+				break
+			}
 		}
 	}
 
 	if client == nil {
-		writeError(w, http.StatusServiceUnavailable, "no cluster connection available")
+		writeError(w, http.StatusServiceUnavailable, "no cluster connection available (agent-only mode)")
 		return
 	}
 
@@ -299,6 +316,10 @@ func (h *Handler) RunCephCommand(w http.ResponseWriter, r *http.Request) {
 
 // GetSmart returns SMART data for all disks across all nodes
 func (h *Handler) GetSmart(w http.ResponseWriter, r *http.Request) {
+	if h.poller == nil {
+		writeJSON(w, []pve.SmartDisk{})
+		return
+	}
 	allClients := h.poller.GetAllClients()
 
 	var allDisks []pve.SmartDisk
@@ -456,6 +477,10 @@ func (h *Handler) GetClusterHA(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetQDeviceStatus(w http.ResponseWriter, r *http.Request) {
 	clusterName := r.PathValue("cluster")
 
+	if h.poller == nil {
+		writeError(w, http.StatusServiceUnavailable, "feature unavailable in agent-only mode")
+		return
+	}
 	clients := h.poller.GetClusterClients(clusterName)
 	if clients == nil {
 		writeError(w, http.StatusNotFound, "cluster not found")
@@ -500,6 +525,10 @@ func (h *Handler) GetMaintenancePreflight(w http.ResponseWriter, r *http.Request
 	clusterName := r.PathValue("cluster")
 	nodeName := r.PathValue("node")
 
+	if h.poller == nil {
+		writeError(w, http.StatusServiceUnavailable, "feature unavailable in agent-only mode")
+		return
+	}
 	clients := h.poller.GetClusterClients(clusterName)
 	if clients == nil {
 		writeError(w, http.StatusNotFound, "cluster not found")
@@ -612,6 +641,10 @@ func (h *Handler) EnterMaintenanceMode(w http.ResponseWriter, r *http.Request) {
 	clusterName := r.PathValue("cluster")
 	nodeName := r.PathValue("node")
 
+	if h.poller == nil {
+		writeError(w, http.StatusServiceUnavailable, "feature unavailable in agent-only mode")
+		return
+	}
 	clients := h.poller.GetClusterClients(clusterName)
 	if clients == nil {
 		writeError(w, http.StatusNotFound, "cluster not found")
@@ -753,6 +786,10 @@ func (h *Handler) ExitMaintenanceMode(w http.ResponseWriter, r *http.Request) {
 	clusterName := r.PathValue("cluster")
 	nodeName := r.PathValue("node")
 
+	if h.poller == nil {
+		writeError(w, http.StatusServiceUnavailable, "feature unavailable in agent-only mode")
+		return
+	}
 	clients := h.poller.GetClusterClients(clusterName)
 	if clients == nil {
 		writeError(w, http.StatusNotFound, "cluster not found")

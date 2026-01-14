@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/moconnor/pcenter/internal/agent"
 	"github.com/moconnor/pcenter/internal/poller"
 	"github.com/moconnor/pcenter/internal/state"
 )
@@ -43,7 +44,7 @@ func CORSMiddleware(origins []string) func(http.Handler) http.Handler {
 
 // NewRouter creates the HTTP router with all routes
 // Returns both the http.Handler and the Handler for configuration
-func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, corsOrigins []string) (http.Handler, *Handler) {
+func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.Hub, corsOrigins []string) (http.Handler, *Handler) {
 	h := NewHandler(store, p)
 
 	mux := http.NewServeMux()
@@ -53,8 +54,16 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, corsOrigins []str
 		writeJSON(w, map[string]string{"status": "ok"})
 	})
 
-	// WebSocket endpoint
+	// WebSocket endpoint (browser clients)
 	mux.HandleFunc("GET /ws", hub.HandleWebSocket)
+
+	// Agent WebSocket endpoint
+	if agentHub != nil {
+		mux.HandleFunc("GET /api/agent/ws", agentHub.HandleWebSocket)
+		h.SetAgentHub(agentHub)
+		mux.HandleFunc("POST /api/agent/command", h.AgentCommand)
+		mux.HandleFunc("GET /api/agent/connected", h.GetConnectedAgents)
+	}
 
 	// === Global endpoints (across all clusters) ===
 

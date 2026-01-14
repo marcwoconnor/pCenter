@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/moconnor/pcenter/internal/agent"
 	"github.com/moconnor/pcenter/internal/api"
 	"github.com/moconnor/pcenter/internal/config"
 	"github.com/moconnor/pcenter/internal/folders"
@@ -41,40 +42,50 @@ func main() {
 		os.Exit(1)
 	}
 
-	slog.Info("loaded config", "clusters", len(cfg.Clusters), "port", cfg.Server.Port, "drs", cfg.DRS.Enabled)
+	slog.Info("loaded config", "clusters", len(cfg.Clusters), "port", cfg.Server.Port, "drs", cfg.DRS.Enabled, "poller", cfg.Poller.Enabled)
 
 	// Create state store
 	store := state.New()
 
-	// Create multi-cluster poller with DRS
-	p := poller.New(store, 5*time.Second, cfg.DRS)
-
-	// Add configured clusters
-	for _, clusterCfg := range cfg.Clusters {
-		p.AddCluster(clusterCfg)
-		slog.Info("configured cluster", "name", clusterCfg.Name, "discovery", clusterCfg.DiscoveryNode)
-	}
-
-	// Create WebSocket hub
+	// Create WebSocket hub (browser clients)
 	hub := api.NewHub(store)
 	go hub.Run()
 
+	// Create agent hub (pve-agents)
+	agentHub := agent.NewHub(store)
+
 	// Broadcast state changes via WebSocket
-	p.OnChange(func() {
+	broadcastFn := func() {
 		hub.BroadcastState()
-	})
+	}
+	agentHub.OnChange(broadcastFn)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	p.Start(ctx)
-	defer p.Stop()
+	// Start agent hub cleanup loop (for stale commands)
+	go agentHub.StartCleanupLoop(ctx)
 
-	// Wait for initial discovery and poll
-	time.Sleep(2 * time.Second)
+	// Create and start poller only if enabled
+	var p *poller.Poller
+	if cfg.Poller.Enabled {
+		p = poller.New(store, 5*time.Second, cfg.DRS)
+		for _, clusterCfg := range cfg.Clusters {
+			p.AddCluster(clusterCfg)
+			slog.Info("configured cluster", "name", clusterCfg.Name, "discovery", clusterCfg.DiscoveryNode)
+		}
+		p.OnChange(broadcastFn)
+		p.Start(ctx)
+		defer p.Stop()
+
+		// Wait for initial discovery and poll
+		time.Sleep(2 * time.Second)
+	} else {
+		slog.Info("poller disabled - running in agent-only mode")
+	}
 
 	// Create HTTP server
-	router, handler := api.NewRouter(store, p, hub, cfg.Server.CORSOrigins)
+	router, handler := api.NewRouter(store, p, hub, agentHub, cfg.Server.CORSOrigins)
 
 	// Initialize metrics if enabled
 	var metricsDB *metrics.DB
