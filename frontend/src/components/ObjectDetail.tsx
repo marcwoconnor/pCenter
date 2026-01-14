@@ -333,47 +333,140 @@ function StorageSummary({ storage }: { storage: any }) {
 }
 
 function NodeVMs({ nodeId }: { nodeId: string }) {
-  const { guests, performAction } = useCluster();
-  const nodeGuests = guests.filter((g) => g.node === nodeId);
+  const { guests, performAction, setSelectedObject } = useCluster();
+  const nodeGuests = useMemo(
+    () => guests
+      .filter((g) => g.node === nodeId)
+      .sort((a, b) => {
+        // Running first, then by name
+        if (a.status === 'running' && b.status !== 'running') return -1;
+        if (a.status !== 'running' && b.status === 'running') return 1;
+        return a.name.localeCompare(b.name);
+      }),
+    [guests, nodeId]
+  );
+
+  const handleClick = (g: typeof nodeGuests[0]) => {
+    setSelectedObject({
+      type: g.type === 'qemu' ? 'vm' : 'ct',
+      id: g.vmid,
+      name: g.name,
+      node: g.node,
+      cluster: g.cluster,
+    });
+  };
+
+  if (nodeGuests.length === 0) {
+    return (
+      <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+        No virtual machines or containers on this node
+      </div>
+    );
+  }
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
-      <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-        <thead className="bg-gray-50 dark:bg-gray-700">
-          <tr>
-            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">CPU</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Memory</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-          {nodeGuests.map((g) => (
-            <tr key={g.vmid} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-              <td className="px-4 py-2 text-sm">{g.vmid}</td>
-              <td className="px-4 py-2 text-sm font-medium">{g.name}</td>
-              <td className="px-4 py-2 text-sm">{g.type === 'qemu' ? 'VM' : 'CT'}</td>
-              <td className="px-4 py-2 text-sm">
-                <span className={`px-2 py-0.5 rounded text-xs ${g.status === 'running' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+    <div className="space-y-2">
+      {nodeGuests.map((g) => {
+        const cpuPercent = g.status === 'running' ? g.cpu * 100 : 0;
+        const memPercent = g.maxmem > 0 ? (g.mem / g.maxmem) * 100 : 0;
+        const isRunning = g.status === 'running';
+
+        return (
+          <div
+            key={g.vmid}
+            className={`bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3
+              hover:border-blue-400 dark:hover:border-blue-500 cursor-pointer transition-colors
+              ${!isRunning ? 'opacity-60' : ''}`}
+            onClick={() => handleClick(g)}
+          >
+            <div className="flex items-center gap-4">
+              {/* Icon and Name */}
+              <div className="flex items-center gap-2 min-w-[200px]">
+                <span className="text-lg" title={g.type === 'qemu' ? 'Virtual Machine' : 'Container'}>
+                  {g.type === 'qemu' ? '💻' : '📦'}
+                </span>
+                <div>
+                  <div className="font-medium text-gray-900 dark:text-white text-sm">
+                    {g.name}
+                  </div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                    ID: {g.vmid}
+                  </div>
+                </div>
+              </div>
+
+              {/* Status */}
+              <div className="flex items-center gap-1.5 min-w-[80px]">
+                <span className={`w-2 h-2 rounded-full ${isRunning ? 'bg-green-500' : 'bg-gray-400'}`} />
+                <span className={`text-xs ${isRunning ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
                   {g.status}
                 </span>
-              </td>
-              <td className="px-4 py-2 text-sm">{g.status === 'running' ? `${(g.cpu * 100).toFixed(0)}%` : '-'}</td>
-              <td className="px-4 py-2 text-sm">{formatBytes(g.mem)} / {formatBytes(g.maxmem)}</td>
-              <td className="px-4 py-2 text-sm">
+              </div>
+
+              {/* CPU */}
+              <div className="flex-1 min-w-[120px]">
+                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
+                  <span>CPU</span>
+                  <span>{isRunning ? `${cpuPercent.toFixed(0)}%` : '-'}</span>
+                </div>
+                <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      cpuPercent > 80 ? 'bg-red-500' : cpuPercent > 50 ? 'bg-yellow-500' : 'bg-blue-500'
+                    }`}
+                    style={{ width: isRunning ? `${Math.min(cpuPercent, 100)}%` : '0%' }}
+                  />
+                </div>
+              </div>
+
+              {/* Memory */}
+              <div className="flex-1 min-w-[120px]">
+                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
+                  <span>Memory</span>
+                  <span>{isRunning ? `${memPercent.toFixed(0)}%` : '-'}</span>
+                </div>
+                <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      memPercent > 80 ? 'bg-red-500' : memPercent > 50 ? 'bg-yellow-500' : 'bg-green-500'
+                    }`}
+                    style={{ width: isRunning ? `${Math.min(memPercent, 100)}%` : '0%' }}
+                  />
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                 {g.status === 'stopped' ? (
-                  <button onClick={() => performAction(g.type === 'qemu' ? 'vm' : 'ct', g.vmid, 'start')} className="text-green-600 hover:underline text-xs">Start</button>
+                  <button
+                    onClick={() => performAction(g.type === 'qemu' ? 'vm' : 'ct', g.vmid, 'start')}
+                    className="px-2.5 py-1 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
+                  >
+                    Start
+                  </button>
                 ) : (
-                  <button onClick={() => performAction(g.type === 'qemu' ? 'vm' : 'ct', g.vmid, 'stop')} className="text-red-600 hover:underline text-xs">Stop</button>
+                  <>
+                    <button
+                      onClick={() => performAction(g.type === 'qemu' ? 'vm' : 'ct', g.vmid, 'shutdown')}
+                      className="px-2.5 py-1 text-xs bg-gray-600 hover:bg-gray-700 text-white rounded transition-colors"
+                      title="Graceful shutdown"
+                    >
+                      Shutdown
+                    </button>
+                    <button
+                      onClick={() => performAction(g.type === 'qemu' ? 'vm' : 'ct', g.vmid, 'stop')}
+                      className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
+                      title="Force stop"
+                    >
+                      Stop
+                    </button>
+                  </>
                 )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
