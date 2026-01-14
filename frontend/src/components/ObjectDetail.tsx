@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useCluster } from '../context/ClusterContext';
 import { formatBytes, formatUptime, api } from '../api/client';
 import { useMetrics } from '../hooks/useMetrics';
@@ -21,6 +21,7 @@ const nodeTabs: Tab[] = [
 
 const guestTabs: Tab[] = [
   { id: 'summary', label: 'Summary' },
+  { id: 'console', label: 'Console' },
   { id: 'monitor', label: 'Monitor' },
   { id: 'configure', label: 'Configure' },
 ];
@@ -147,6 +148,14 @@ export function ObjectDetail() {
         {activeTab === 'summary' && node && <NodeSummary node={node} />}
         {activeTab === 'summary' && guest && <GuestSummary guest={guest} />}
         {activeTab === 'summary' && storageItem && <StorageSummary storage={storageItem} />}
+        {activeTab === 'console' && guest && (
+          <ConsoleTab
+            vmid={guest.vmid}
+            type={guest.type === 'qemu' ? 'vm' : 'ct'}
+            name={guest.name}
+            isRunning={guest.status === 'running'}
+          />
+        )}
         {activeTab === 'vms' && node && <NodeVMs nodeId={node.node} />}
         {activeTab === 'monitor' && node && <NodeMonitorTab node={node.node} />}
         {activeTab === 'monitor' && guest && (
@@ -1488,6 +1497,178 @@ function PendingChangesPanel({ editor }: { editor: UseConfigEditorReturn }) {
             )}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Console tab with inline VNC viewer
+function ConsoleTab({
+  vmid,
+  type,
+  name,
+  isRunning,
+}: {
+  vmid: number;
+  type: 'vm' | 'ct';
+  name: string;
+  isRunning: boolean;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const rfbRef = useRef<any>(null);
+  const [status, setStatus] = useState<'connecting' | 'connected' | 'error' | 'closed'>('connecting');
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isRunning || !containerRef.current) return;
+
+    let rfb: any = null;
+    let mounted = true;
+
+    const connect = async () => {
+      try {
+        const ticketResp = await fetch(`/api/console/${type}/${vmid}/ticket`);
+        if (!ticketResp.ok) {
+          throw new Error(`Failed to get ticket: ${ticketResp.statusText}`);
+        }
+        const { ticket, port } = await ticketResp.json();
+
+        if (!mounted || !containerRef.current) return;
+
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/api/console/${type}/${vmid}/ws?ticket=${encodeURIComponent(ticket)}&port=${port}`;
+
+        const module = await import('@novnc/novnc/lib/rfb.js');
+        if (!mounted || !containerRef.current) return;
+
+        const RFB = module.default;
+
+        rfb = new RFB(containerRef.current, wsUrl, {
+          credentials: { password: ticket },
+        });
+
+        rfbRef.current = rfb;
+        rfb.scaleViewport = true;
+        rfb.clipViewport = true;
+        rfb.resizeSession = false;
+
+        rfb.addEventListener('connect', () => {
+          if (mounted) {
+            setStatus('connected');
+            // Force a resize after connection to ensure proper scaling
+            setTimeout(() => {
+              if (rfbRef.current) {
+                rfbRef.current.scaleViewport = true;
+              }
+            }, 100);
+            rfb.focus();
+          }
+        });
+
+        rfb.addEventListener('disconnect', (e: CustomEvent) => {
+          if (mounted) {
+            if (e.detail.clean) {
+              setStatus('closed');
+            } else {
+              setStatus('error');
+              setError('Connection lost');
+            }
+          }
+        });
+
+        rfb.addEventListener('securityfailure', (e: CustomEvent) => {
+          if (mounted) {
+            setStatus('error');
+            setError(`Security error: ${e.detail.reason}`);
+          }
+        });
+      } catch (err) {
+        if (mounted) {
+          setStatus('error');
+          setError(err instanceof Error ? err.message : 'Failed to initialize VNC');
+        }
+      }
+    };
+
+    connect();
+
+    // Handle container resize
+    const resizeObserver = new ResizeObserver(() => {
+      if (rfbRef.current) {
+        rfbRef.current.scaleViewport = true;
+      }
+    });
+    if (containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
+
+    return () => {
+      mounted = false;
+      resizeObserver.disconnect();
+      if (rfbRef.current) {
+        rfbRef.current.disconnect();
+        rfbRef.current = null;
+      }
+    };
+  }, [type, vmid, isRunning]);
+
+  // Reset state when switching VMs
+  useEffect(() => {
+    setStatus('connecting');
+    setError(null);
+  }, [vmid]);
+
+  if (!isRunning) {
+    return (
+      <div className="flex items-center justify-center h-full text-gray-500 dark:text-gray-400">
+        <div className="text-center">
+          <p className="text-lg mb-2">{type === 'vm' ? 'VM' : 'Container'} is not running</p>
+          <p className="text-sm">Start the {type === 'vm' ? 'VM' : 'container'} to access the console</p>
+        </div>
+      </div>
+    );
+  }
+
+  const handlePopout = () => {
+    const url = `/console/${type}/${vmid}/${encodeURIComponent(name)}`;
+    window.open(url, `console-${vmid}`, 'width=1024,height=768');
+  };
+
+  return (
+    <div className="flex flex-col" style={{ height: 'calc(100vh - 220px)' }}>
+      {/* Console toolbar */}
+      <div className="flex items-center justify-between px-3 py-2 bg-gray-800 rounded-t-lg flex-shrink-0">
+        <div className="flex items-center gap-3">
+          <span className={`px-2 py-0.5 text-xs rounded ${
+            status === 'connected' ? 'bg-green-600 text-white' :
+            status === 'connecting' ? 'bg-yellow-600 text-white' :
+            status === 'error' ? 'bg-red-600 text-white' :
+            'bg-gray-600 text-white'
+          }`}>
+            {status}
+          </span>
+        </div>
+        <button
+          onClick={handlePopout}
+          className="text-gray-400 hover:text-white hover:bg-blue-600 px-2 py-1 rounded text-sm"
+          title="Pop out to new window"
+        >
+          ⧉ Pop out
+        </button>
+      </div>
+
+      {/* VNC container */}
+      <div
+        className="flex-1 bg-black rounded-b-lg overflow-hidden"
+        onClick={() => rfbRef.current?.focus()}
+      >
+        {error ? (
+          <div className="flex items-center justify-center h-full text-red-400">
+            {error}
+          </div>
+        ) : (
+          <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+        )}
       </div>
     </div>
   );
