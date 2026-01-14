@@ -1,6 +1,11 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useCluster } from '../context/ClusterContext';
 import { formatBytes, formatUptime } from '../api/client';
+import { useMetrics } from '../hooks/useMetrics';
+import { MetricsChart } from './MetricsChart';
+import type { MetricSeries } from '../types';
+
+type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d';
 
 interface Tab {
   id: string;
@@ -142,7 +147,14 @@ export function ObjectDetail() {
         {activeTab === 'summary' && guest && <GuestSummary guest={guest} />}
         {activeTab === 'summary' && storageItem && <StorageSummary storage={storageItem} />}
         {activeTab === 'vms' && node && <NodeVMs nodeId={node.node} />}
-        {activeTab === 'monitor' && <MonitorTab />}
+        {activeTab === 'monitor' && node && <NodeMonitorTab node={node.node} />}
+        {activeTab === 'monitor' && guest && (
+          <GuestMonitorTab
+            vmid={guest.vmid}
+            type={guest.type === 'qemu' ? 'vm' : 'ct'}
+            isRunning={guest.status === 'running'}
+          />
+        )}
         {activeTab === 'configure' && <ConfigureTab />}
       </div>
     </div>
@@ -366,10 +378,259 @@ function NodeVMs({ nodeId }: { nodeId: string }) {
   );
 }
 
-function MonitorTab() {
+// Time range options for metrics charts
+const TIME_RANGES: { value: TimeRange; label: string }[] = [
+  { value: '1h', label: '1 Hour' },
+  { value: '6h', label: '6 Hours' },
+  { value: '24h', label: '24 Hours' },
+  { value: '7d', label: '7 Days' },
+  { value: '30d', label: '30 Days' },
+];
+
+// Stable metric arrays to prevent re-renders
+const GUEST_CPU_MEM_METRICS = ['cpu', 'mem_percent'];
+const GUEST_NET_METRICS = ['netin', 'netout'];
+const GUEST_DISK_METRICS = ['diskread', 'diskwrite'];
+const CT_SWAP_METRICS = ['swap_percent'];
+const NODE_CPU_MEM_METRICS = ['cpu', 'mem_percent'];
+const NODE_LOAD_METRICS = ['loadavg_1m', 'loadavg_5m', 'loadavg_15m'];
+
+function GuestMonitorTab({
+  vmid,
+  type,
+  isRunning,
+}: {
+  vmid: number;
+  type: 'vm' | 'ct';
+  isRunning: boolean;
+}) {
+  const [timeRange, setTimeRange] = useState<TimeRange>('1h');
+
+  // Fetch all metrics in one request
+  const { data, loading, error } = useMetrics({
+    resourceType: type,
+    resourceId: vmid.toString(),
+    metrics: type === 'ct'
+      ? [...GUEST_CPU_MEM_METRICS, ...GUEST_NET_METRICS, ...GUEST_DISK_METRICS, ...CT_SWAP_METRICS]
+      : [...GUEST_CPU_MEM_METRICS, ...GUEST_NET_METRICS, ...GUEST_DISK_METRICS],
+    timeRange,
+    enabled: isRunning,
+  });
+
+  // Split series by metric type for separate charts
+  const cpuSeries = useMemo(
+    () => data?.series?.filter((s: MetricSeries) => s.metric === 'cpu') || [],
+    [data?.series]
+  );
+  const memSeries = useMemo(
+    () => data?.series?.filter((s: MetricSeries) => s.metric === 'mem_percent') || [],
+    [data?.series]
+  );
+  const netSeries = useMemo(
+    () => data?.series?.filter((s: MetricSeries) => s.metric === 'netin' || s.metric === 'netout') || [],
+    [data?.series]
+  );
+  const diskSeries = useMemo(
+    () => data?.series?.filter((s: MetricSeries) => s.metric === 'diskread' || s.metric === 'diskwrite') || [],
+    [data?.series]
+  );
+  const swapSeries = useMemo(
+    () => data?.series?.filter((s: MetricSeries) => s.metric === 'swap_percent') || [],
+    [data?.series]
+  );
+
+  if (!isRunning) {
+    return (
+      <div className="text-gray-500 dark:text-gray-400 text-center py-8">
+        {type === 'vm' ? 'VM' : 'Container'} is not running. Start it to view performance metrics.
+      </div>
+    );
+  }
+
   return (
-    <div className="text-gray-500 text-center py-8">
-      Performance monitoring coming soon...
+    <div className="space-y-4">
+      {/* Time Range Selector */}
+      <div className="flex justify-between items-center">
+        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          Performance
+        </h3>
+        <div className="flex gap-1">
+          {TIME_RANGES.map((tr) => (
+            <button
+              key={tr.value}
+              onClick={() => setTimeRange(tr.value)}
+              className={`px-3 py-1 text-xs rounded transition-colors ${
+                timeRange === tr.value
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+              }`}
+            >
+              {tr.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {error && (
+        <div className="text-red-500 text-sm p-2 bg-red-100 dark:bg-red-900/20 rounded">
+          {error}
+        </div>
+      )}
+
+      {loading && !data && (
+        <div className="text-gray-500 text-center py-8">Loading metrics...</div>
+      )}
+
+      {/* Charts Grid - vCenter style 2x2 layout */}
+      <div className="grid md:grid-cols-2 gap-4">
+        {/* CPU Chart */}
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <MetricsChart
+            series={cpuSeries}
+            timeRange={timeRange}
+            title="CPU Usage"
+            height={180}
+            showLegend={false}
+          />
+        </div>
+
+        {/* Memory Chart */}
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <MetricsChart
+            series={memSeries}
+            timeRange={timeRange}
+            title="Memory Usage"
+            height={180}
+            showLegend={false}
+          />
+        </div>
+
+        {/* Network I/O Chart */}
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <MetricsChart
+            series={netSeries}
+            timeRange={timeRange}
+            title="Network I/O"
+            height={180}
+            showLegend={true}
+          />
+        </div>
+
+        {/* Disk I/O Chart */}
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <MetricsChart
+            series={diskSeries}
+            timeRange={timeRange}
+            title="Disk I/O"
+            height={180}
+            showLegend={true}
+          />
+        </div>
+
+        {/* Swap Chart - containers only */}
+        {type === 'ct' && swapSeries.length > 0 && (
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+            <MetricsChart
+              series={swapSeries}
+              timeRange={timeRange}
+              title="Swap Usage"
+              height={180}
+              showLegend={false}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function NodeMonitorTab({ node }: { node: string }) {
+  const [timeRange, setTimeRange] = useState<TimeRange>('1h');
+
+  const { data, loading, error } = useMetrics({
+    resourceType: 'node',
+    resourceId: node,
+    metrics: [...NODE_CPU_MEM_METRICS, ...NODE_LOAD_METRICS],
+    timeRange,
+  });
+
+  const cpuSeries = useMemo(
+    () => data?.series?.filter((s: MetricSeries) => s.metric === 'cpu') || [],
+    [data?.series]
+  );
+  const memSeries = useMemo(
+    () => data?.series?.filter((s: MetricSeries) => s.metric === 'mem_percent') || [],
+    [data?.series]
+  );
+  const loadSeries = useMemo(
+    () => data?.series?.filter((s: MetricSeries) => s.metric.startsWith('loadavg')) || [],
+    [data?.series]
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          Performance
+        </h3>
+        <div className="flex gap-1">
+          {TIME_RANGES.map((tr) => (
+            <button
+              key={tr.value}
+              onClick={() => setTimeRange(tr.value)}
+              className={`px-3 py-1 text-xs rounded transition-colors ${
+                timeRange === tr.value
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+              }`}
+            >
+              {tr.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {error && (
+        <div className="text-red-500 text-sm p-2 bg-red-100 dark:bg-red-900/20 rounded">
+          {error}
+        </div>
+      )}
+
+      {loading && !data && (
+        <div className="text-gray-500 text-center py-8">Loading metrics...</div>
+      )}
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <MetricsChart
+            series={cpuSeries}
+            timeRange={timeRange}
+            title="CPU Usage"
+            height={180}
+            showLegend={false}
+          />
+        </div>
+
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <MetricsChart
+            series={memSeries}
+            timeRange={timeRange}
+            title="Memory Usage"
+            height={180}
+            showLegend={false}
+          />
+        </div>
+
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 md:col-span-2">
+          <MetricsChart
+            series={loadSeries}
+            timeRange={timeRange}
+            title="Load Average"
+            height={180}
+            showLegend={true}
+          />
+        </div>
+      </div>
     </div>
   );
 }
