@@ -152,7 +152,7 @@ func main() {
 
 	// Load clusters from inventory and start poller
 	if cfg.Poller.Enabled && p != nil {
-		clusterConfigs, err := inventoryService.GetAllClusterConfigs(ctx, cfg.ClusterSecrets)
+		clusterConfigs, err := inventoryService.GetClusterConfigs(ctx, cfg.ClusterSecrets)
 		if err != nil {
 			slog.Error("failed to load cluster configs", "error", err)
 			os.Exit(1)
@@ -265,19 +265,31 @@ func migrateConfigClusters(ctx context.Context, svc *inventory.Service, cfg *con
 	}
 	slog.Info("created default datacenter", "id", dc.ID)
 
-	// Import each cluster
+	// Import each cluster with its host
 	for _, legacy := range cfg.Clusters {
-		_, err := svc.CreateCluster(ctx, inventory.CreateClusterRequest{
-			Name:          legacy.Name,
-			DatacenterID:  &dc.ID,
-			DiscoveryNode: legacy.DiscoveryNode,
-			TokenID:       legacy.TokenID,
-			Insecure:      legacy.Insecure,
+		cluster, err := svc.CreateCluster(ctx, inventory.CreateClusterRequest{
+			Name:         legacy.Name,
+			DatacenterID: &dc.ID,
 		})
 		if err != nil {
 			slog.Warn("failed to migrate cluster", "name", legacy.Name, "error", err)
 			continue
 		}
+
+		// Add the host from legacy config
+		host, err := svc.AddHost(ctx, cluster.ID, inventory.AddHostRequest{
+			Address:  legacy.DiscoveryNode,
+			TokenID:  legacy.TokenID,
+			Insecure: legacy.Insecure,
+		})
+		if err != nil {
+			slog.Warn("failed to add host during migration", "cluster", legacy.Name, "error", err)
+		} else {
+			// Mark host as online and cluster as active (since it was working before)
+			svc.SetHostStatus(ctx, host.ID, inventory.HostStatusOnline, "", "")
+			svc.SetClusterStatus(ctx, cluster.ID, inventory.ClusterStatusActive)
+		}
+
 		slog.Info("migrated cluster", "name", legacy.Name, "datacenter", dc.Name)
 	}
 

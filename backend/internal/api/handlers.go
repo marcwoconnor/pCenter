@@ -2949,3 +2949,200 @@ func (h *Handler) MoveClusterToDatacenter(w http.ResponseWriter, r *http.Request
 
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// === Inventory Host Handlers ===
+
+// ListClusterHosts returns hosts for a cluster
+func (h *Handler) ListClusterHosts(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	clusterName := r.PathValue("name")
+	if clusterName == "" {
+		writeError(w, http.StatusBadRequest, "cluster name is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	cluster, err := h.inventory.GetClusterByName(ctx, clusterName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if cluster == nil {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	hosts, err := h.inventory.ListHostsByCluster(ctx, cluster.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if hosts == nil {
+		hosts = []inventory.InventoryHost{}
+	}
+
+	writeJSON(w, hosts)
+}
+
+// AddClusterHost adds a host to a cluster
+func (h *Handler) AddClusterHost(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	clusterName := r.PathValue("name")
+	if clusterName == "" {
+		writeError(w, http.StatusBadRequest, "cluster name is required")
+		return
+	}
+
+	var req inventory.AddHostRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	host, err := h.inventory.AddHostByClusterName(ctx, clusterName, req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "host_add",
+			ResourceType: "host",
+			ResourceID:   host.ID,
+			ResourceName: req.Address,
+			Cluster:      clusterName,
+		})
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, host)
+}
+
+// GetHost returns a host by ID
+func (h *Handler) GetHost(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	hostID := r.PathValue("id")
+	if hostID == "" {
+		writeError(w, http.StatusBadRequest, "host ID is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	host, err := h.inventory.GetHost(ctx, hostID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if host == nil {
+		writeError(w, http.StatusNotFound, "host not found")
+		return
+	}
+
+	writeJSON(w, host)
+}
+
+// UpdateHost updates a host
+func (h *Handler) UpdateHost(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	hostID := r.PathValue("id")
+	if hostID == "" {
+		writeError(w, http.StatusBadRequest, "host ID is required")
+		return
+	}
+
+	var req inventory.UpdateHostRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := h.inventory.UpdateHost(ctx, hostID, req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "host_update",
+			ResourceType: "host",
+			ResourceID:   hostID,
+			ResourceName: req.Address,
+		})
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// DeleteHost deletes a host
+func (h *Handler) DeleteHost(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	hostID := r.PathValue("id")
+	if hostID == "" {
+		writeError(w, http.StatusBadRequest, "host ID is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	host, err := h.inventory.GetHost(ctx, hostID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if host == nil {
+		writeError(w, http.StatusNotFound, "host not found")
+		return
+	}
+
+	if err := h.inventory.DeleteHost(ctx, hostID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "host_delete",
+			ResourceType: "host",
+			ResourceID:   hostID,
+			ResourceName: host.Address,
+		})
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}

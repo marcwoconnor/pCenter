@@ -23,10 +23,13 @@ import type {
   ActivityEntry,
   Datacenter,
   InventoryCluster,
+  InventoryHost,
   CreateDatacenterRequest,
   UpdateDatacenterRequest,
   CreateClusterRequest,
   UpdateClusterRequest,
+  AddHostRequest,
+  UpdateHostRequest,
   DatacenterTreeResponse,
 } from '../types';
 
@@ -234,6 +237,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ datacenter_id: datacenterId }),
     }),
+
+  // Inventory Hosts (per-cluster)
+  getClusterHosts: (clusterName: string) =>
+    fetchAPI<InventoryHost[]>(`/inventory/clusters/${clusterName}/hosts`),
+  addClusterHost: (clusterName: string, req: AddHostRequest) =>
+    fetchAPI<InventoryHost>(`/inventory/clusters/${clusterName}/hosts`, {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+  getHost: (id: string) => fetchAPI<InventoryHost>(`/inventory/hosts/${id}`),
+  updateHost: (id: string, req: UpdateHostRequest) =>
+    fetchAPI<void>(`/inventory/hosts/${id}`, { method: 'PUT', body: JSON.stringify(req) }),
+  deleteHost: (id: string) =>
+    fetchAPI<void>(`/inventory/hosts/${id}`, { method: 'DELETE' }),
 };
 
 // Helper functions

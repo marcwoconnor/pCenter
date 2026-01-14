@@ -201,6 +201,13 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	mux.HandleFunc("DELETE /api/inventory/clusters/{name}", h.DeleteInventoryCluster)
 	mux.HandleFunc("POST /api/inventory/clusters/{name}/move", h.MoveClusterToDatacenter)
 
+	// Inventory Hosts (per-cluster)
+	mux.HandleFunc("GET /api/inventory/clusters/{name}/hosts", h.ListClusterHosts)
+	mux.HandleFunc("POST /api/inventory/clusters/{name}/hosts", h.AddClusterHost)
+	mux.HandleFunc("GET /api/inventory/hosts/{id}", h.GetHost)
+	mux.HandleFunc("PUT /api/inventory/hosts/{id}", h.UpdateHost)
+	mux.HandleFunc("DELETE /api/inventory/hosts/{id}", h.DeleteHost)
+
 	// Serve static files and SPA fallback
 	staticDir := "./frontend"
 	if dir := os.Getenv("STATIC_DIR"); dir != "" {

@@ -556,6 +556,9 @@ export interface ActivityEntry {
 
 // Datacenter/Cluster inventory types
 
+export type ClusterStatus = 'empty' | 'pending' | 'active' | 'error';
+export type HostStatus = 'staged' | 'connecting' | 'online' | 'offline' | 'error';
+
 export interface Datacenter {
   id: string;
   name: string;
@@ -570,10 +573,22 @@ export interface InventoryCluster {
   name: string;
   datacenter_id?: string;
   datacenter_name?: string;
-  discovery_node: string;
+  status: ClusterStatus;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  hosts?: InventoryHost[];
+}
+
+export interface InventoryHost {
+  id: string;
+  cluster_id: string;
+  address: string;
   token_id: string;
   insecure: boolean;
-  enabled: boolean;
+  status: HostStatus;
+  error?: string;
+  node_name?: string;
   created_at: string;
   updated_at: string;
 }
@@ -591,18 +606,26 @@ export interface UpdateDatacenterRequest {
 export interface CreateClusterRequest {
   name: string;
   datacenter_id?: string;
-  discovery_node: string;
-  token_id: string;
-  insecure: boolean;
 }
 
 export interface UpdateClusterRequest {
   name: string;
   datacenter_id?: string;
-  discovery_node: string;
-  token_id: string;
-  insecure: boolean;
   enabled: boolean;
+}
+
+export interface AddHostRequest {
+  address: string;
+  token_id: string;
+  token_secret: string;
+  insecure: boolean;
+}
+
+export interface UpdateHostRequest {
+  address: string;
+  token_id: string;
+  token_secret?: string;
+  insecure: boolean;
 }
 
 export interface DatacenterTreeResponse {
