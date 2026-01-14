@@ -95,6 +95,7 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 
 	// Migrations & DRS (global)
 	mux.HandleFunc("GET /api/migrations", h.GetMigrations)
+	mux.HandleFunc("DELETE /api/migrations/{upid}", h.ClearMigration)
 	mux.HandleFunc("GET /api/drs/recommendations", h.GetDRSRecommendations)
 
 	// Console - ticket endpoint and websocket proxy (legacy, searches all clusters)
@@ -168,6 +169,9 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	mux.HandleFunc("GET /api/metrics/vm/{vmid}", h.GetVMMetrics)
 	mux.HandleFunc("GET /api/metrics/ct/{vmid}", h.GetContainerMetrics)
 	mux.HandleFunc("GET /api/clusters/{cluster}/metrics", h.GetClusterMetrics)
+
+	// --- Activity endpoints ---
+	mux.HandleFunc("GET /api/activity", h.GetActivity)
 
 	// --- Folders endpoints ---
 	mux.HandleFunc("GET /api/folders/{tree}", h.GetFolderTree)

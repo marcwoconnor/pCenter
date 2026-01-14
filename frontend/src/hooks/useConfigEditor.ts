@@ -48,7 +48,7 @@ export function useConfigEditor({
   initialConfig,
   initialDigest,
 }: UseConfigEditorOptions): UseConfigEditorReturn {
-  const [originalConfig] = useState<ConfigType>(initialConfig);
+  const [originalConfig, setOriginalConfig] = useState<ConfigType>(initialConfig);
   const [digest, setDigest] = useState(initialDigest);
   const [changes, setChanges] = useState<Map<string, { value: unknown; label: string }>>(new Map());
   const [applying, setApplying] = useState(false);
@@ -138,10 +138,11 @@ export function useConfigEditor({
       // Success - clear changes and fetch new config to get new digest
       setChanges(new Map());
 
-      // Fetch updated config for new digest
+      // Fetch updated config for new digest and update original
       const newConfig = type === 'vm'
         ? await api.getVMConfig(cluster, vmid)
         : await api.getContainerConfig(cluster, vmid);
+      setOriginalConfig(newConfig.config);
       setDigest(newConfig.digest);
 
     } catch (err) {

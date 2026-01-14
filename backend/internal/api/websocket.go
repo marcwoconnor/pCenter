@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
+	"github.com/moconnor/pcenter/internal/activity"
 	"github.com/moconnor/pcenter/internal/pve"
 	"github.com/moconnor/pcenter/internal/state"
 )
@@ -98,6 +99,29 @@ func (h *Hub) BroadcastState() {
 	if clientCount > 0 {
 		h.broadcast <- msg
 		slog.Debug("broadcast state", "clients", clientCount)
+	}
+}
+
+// BroadcastActivity sends an activity entry to all clients
+func (h *Hub) BroadcastActivity(entry activity.Entry) {
+	msg := WSMessage{
+		Type:    "activity",
+		Payload: entry,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		slog.Error("failed to marshal activity", "error", err)
+		return
+	}
+
+	h.mu.RLock()
+	clientCount := len(h.clients)
+	h.mu.RUnlock()
+
+	if clientCount > 0 {
+		h.broadcast <- data
+		slog.Debug("broadcast activity", "action", entry.Action, "clients", clientCount)
 	}
 }
 

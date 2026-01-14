@@ -599,6 +599,50 @@ func (c *Client) GetTaskStatus(ctx context.Context, upid string) (*Task, error) 
 	return &task, nil
 }
 
+// TaskLogEntry represents a single line in the task log
+type TaskLogEntry struct {
+	N int    `json:"n"` // line number
+	T string `json:"t"` // text
+}
+
+// GetTaskLog returns the task log entries
+func (c *Client) GetTaskLog(ctx context.Context, upid string, limit int) ([]TaskLogEntry, error) {
+	if limit == 0 {
+		limit = 50
+	}
+	entries, err := get[[]TaskLogEntry](c, ctx, fmt.Sprintf("/nodes/%s/tasks/%s/log?limit=%d", c.nodeName, url.PathEscape(upid), limit))
+	if err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+// GetTaskError fetches the task log and extracts the error message
+func (c *Client) GetTaskError(ctx context.Context, upid string) string {
+	entries, err := c.GetTaskLog(ctx, upid, 20)
+	if err != nil {
+		return ""
+	}
+
+	// Look for ERROR: line which has the detailed message
+	for _, entry := range entries {
+		if strings.Contains(entry.T, "ERROR:") {
+			// Extract the part after ERROR:
+			parts := strings.SplitN(entry.T, "ERROR:", 2)
+			if len(parts) == 2 {
+				// Clean up - remove timestamp prefix if present, extract the actual error
+				errMsg := strings.TrimSpace(parts[1])
+				// Format: "migration aborted (duration 00:00:00): actual error message"
+				if colonIdx := strings.LastIndex(errMsg, "):"); colonIdx != -1 {
+					return strings.TrimSpace(errMsg[colonIdx+2:])
+				}
+				return errMsg
+			}
+		}
+	}
+	return ""
+}
+
 // --- Ceph operations ---
 
 // GetCephStatus returns Ceph cluster status (if available)
@@ -1102,7 +1146,13 @@ func (c *Client) MigrateContainer(ctx context.Context, vmid int, targetNode stri
 		"target": targetNode,
 	}
 	if online {
+		// Note: LXC live migration is not currently implemented in Proxmox
+		// This will likely fail, but we pass it through for future compatibility
 		params["online"] = "1"
+	} else {
+		// For running containers without live migration, use restart mode
+		// This stops the container, migrates, and starts it on the new node
+		params["restart"] = "1"
 	}
 	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/migrate", c.nodeName, vmid), params)
 	if err != nil {

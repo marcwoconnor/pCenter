@@ -20,6 +20,7 @@ import type {
   VMConfig,
   ContainerConfig,
   ConfigResponse,
+  ActivityEntry,
 } from '../types';
 
 const BASE_URL = '/api';
@@ -187,6 +188,19 @@ export const api = {
     }),
   moveResource: (req: MoveResourceRequest, tree: TreeView) =>
     fetchAPI<void>(`/resources/move?tree=${tree}`, { method: 'POST', body: JSON.stringify(req) }),
+
+  // Activity
+  getActivity: (params?: { limit?: number; offset?: number; resource_type?: string; resource_id?: string; cluster?: string; action?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.limit) query.set('limit', params.limit.toString());
+    if (params?.offset) query.set('offset', params.offset.toString());
+    if (params?.resource_type) query.set('resource_type', params.resource_type);
+    if (params?.resource_id) query.set('resource_id', params.resource_id);
+    if (params?.cluster) query.set('cluster', params.cluster);
+    if (params?.action) query.set('action', params.action);
+    const qs = query.toString();
+    return fetchAPI<ActivityEntry[]>(`/activity${qs ? `?${qs}` : ''}`);
+  },
 };
 
 // Helper functions

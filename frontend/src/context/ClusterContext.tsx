@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { api } from '../api/client';
-import type { Summary, Node, Guest, Storage, ClusterInfo, MigrationProgress, DRSRecommendation } from '../types';
+import type { Summary, Node, Guest, Storage, ClusterInfo, MigrationProgress, DRSRecommendation, ActivityEntry } from '../types';
 
 interface CephHealthCheck {
   severity: string;
@@ -49,6 +49,7 @@ interface ClusterState {
   ceph: CephStatus | null;
   migrations: MigrationProgress[];
   drsRecommendations: DRSRecommendation[];
+  activityEntries: ActivityEntry[];
   // UI state
   tasks: Task[];
   isConnected: boolean;
@@ -106,6 +107,7 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
   const [ceph, setCeph] = useState<CephStatus | null>(null);
   const [migrations, setMigrations] = useState<MigrationProgress[]>([]);
   const [drsRecommendations, setDRSRecommendations] = useState<DRSRecommendation[]>([]);
+  const [activityEntries, setActivityEntries] = useState<ActivityEntry[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -128,6 +130,9 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
       setDRSRecommendations(state.drs_recommendations || []);
       setError(null);
       setIsLoading(false);
+    } else if (msg.type === 'activity') {
+      const entry = msg.payload as ActivityEntry;
+      setActivityEntries(prev => [entry, ...prev].slice(0, 100));
     }
   }, []);
 
@@ -162,6 +167,11 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
       fetchData();
     }
   }, [isConnected, isLoading]);
+
+  // Fetch initial activity entries
+  useEffect(() => {
+    api.getActivity({ limit: 50 }).then(setActivityEntries).catch(console.error);
+  }, []);
 
   const addTask = useCallback((task: Task) => {
     setTasks((prev) => [task, ...prev].slice(0, 50)); // Keep last 50 tasks
@@ -279,6 +289,7 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
       ceph,
       migrations,
       drsRecommendations,
+      activityEntries,
       tasks,
       isConnected,
       isLoading,

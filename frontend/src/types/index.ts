@@ -540,3 +540,16 @@ export interface FirewallOptions {
   policy_out?: string;
   radv?: number;
 }
+
+// Activity log entry
+export interface ActivityEntry {
+  id: number;
+  timestamp: string;
+  action: string;
+  resource_type: string;
+  resource_id: string;
+  resource_name?: string;
+  cluster: string;
+  details?: string;
+  status: string;
+}

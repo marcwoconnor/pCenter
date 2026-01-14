@@ -11,11 +11,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/moconnor/pcenter/internal/activity"
 	"github.com/moconnor/pcenter/internal/agent"
 	"github.com/moconnor/pcenter/internal/api"
 	"github.com/moconnor/pcenter/internal/config"
 	"github.com/moconnor/pcenter/internal/folders"
 	"github.com/moconnor/pcenter/internal/metrics"
+	"github.com/moconnor/pcenter/internal/migration"
 	"github.com/moconnor/pcenter/internal/poller"
 	"github.com/moconnor/pcenter/internal/state"
 )
@@ -90,6 +92,9 @@ func main() {
 	// Set clusters config for on-demand client creation (agent-only mode)
 	handler.SetClusters(cfg.Clusters)
 
+	// Set broadcast callback for handler (migrations, etc.)
+	handler.SetOnChange(broadcastFn)
+
 	// Initialize metrics if enabled
 	var metricsDB *metrics.DB
 	if cfg.Metrics.Enabled {
@@ -133,6 +138,28 @@ func main() {
 	foldersService := folders.NewService(foldersDB)
 	handler.SetFoldersService(foldersService)
 	slog.Info("folders enabled", "database", cfg.Folders.DatabasePath)
+
+	// Initialize activity logging
+	activityDB, err := activity.OpenDB(cfg.Activity.DatabasePath)
+	if err != nil {
+		slog.Error("failed to open activity database", "error", err)
+		os.Exit(1)
+	}
+	defer activityDB.Close()
+
+	activityService := activity.NewService(activityDB, cfg.Activity.RetentionDays)
+	activityService.OnLog(func(e activity.Entry) {
+		hub.BroadcastActivity(e)
+	})
+	activityService.StartCleanup()
+	handler.SetActivityService(activityService)
+	slog.Info("activity logging enabled", "database", cfg.Activity.DatabasePath, "retention_days", cfg.Activity.RetentionDays)
+
+	// Start migration monitor (tracks task status for active migrations)
+	migrationMonitor := migration.NewMonitor(store, cfg.Clusters, 3*time.Second)
+	migrationMonitor.OnChange(broadcastFn)
+	migrationMonitor.SetActivity(activityService)
+	go migrationMonitor.Start(ctx)
 
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),

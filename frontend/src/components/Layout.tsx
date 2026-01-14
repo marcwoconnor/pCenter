@@ -3,6 +3,7 @@ import { NavLink, useLocation } from 'react-router-dom';
 import { useCluster } from '../context/ClusterContext';
 import { TasksBar } from './TasksBar';
 import { Console } from './Console';
+import { ActivityPanel } from './ActivityPanel';
 
 const navItems = [
   { path: '/', label: 'Home', icon: '⌂' },
@@ -182,6 +183,9 @@ export function Layout({ children, sidebar }: LayoutProps) {
           {children}
         </main>
       </div>
+
+      {/* Activity Panel */}
+      <ActivityPanel />
 
       {/* Tasks Bar */}
       <TasksBar />

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/moconnor/pcenter/internal/activity"
 	"github.com/moconnor/pcenter/internal/agent"
 	"github.com/moconnor/pcenter/internal/config"
 	"github.com/moconnor/pcenter/internal/folders"
@@ -24,8 +25,10 @@ type Handler struct {
 	poller   *poller.Poller
 	metrics  *metrics.QueryService
 	folders  *folders.Service
+	activity *activity.Service
 	agentHub *agent.Hub
 	clusters []config.ClusterConfig // For on-demand client creation
+	onChange func()                 // Callback to broadcast state changes
 }
 
 // NewHandler creates a new API handler
@@ -44,6 +47,16 @@ func (h *Handler) SetMetricsService(m *metrics.QueryService) {
 // SetFoldersService sets the folders service
 func (h *Handler) SetFoldersService(f *folders.Service) {
 	h.folders = f
+}
+
+// SetActivityService sets the activity logging service
+func (h *Handler) SetActivityService(a *activity.Service) {
+	h.activity = a
+}
+
+// SetOnChange sets a callback for state changes (broadcasts to WebSocket)
+func (h *Handler) SetOnChange(fn func()) {
+	h.onChange = fn
 }
 
 // SetAgentHub sets the agent hub for command execution
@@ -1094,6 +1107,17 @@ func (h *Handler) GetMigrations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, h.store.GetMigrations())
 }
 
+// ClearMigration removes a stale migration from tracking
+func (h *Handler) ClearMigration(w http.ResponseWriter, r *http.Request) {
+	upid := r.PathValue("upid")
+	if upid == "" {
+		writeError(w, http.StatusBadRequest, "upid required")
+		return
+	}
+	h.store.RemoveMigration(upid)
+	writeJSON(w, map[string]string{"message": "migration cleared"})
+}
+
 // GetDRSRecommendations returns all DRS recommendations
 func (h *Handler) GetDRSRecommendations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, h.store.GetAllDRSRecommendations())
@@ -1176,6 +1200,30 @@ func (h *Handler) MigrateVM(w http.ResponseWriter, r *http.Request) {
 		Status:    "running",
 	})
 
+	// Log activity
+	if h.activity != nil {
+		details, _ := json.Marshal(map[string]interface{}{
+			"from_node": vm.Node,
+			"to_node":   req.TargetNode,
+			"online":    req.Online,
+			"upid":      upid,
+		})
+		h.activity.Log(activity.Entry{
+			Action:       activity.ActionMigrate,
+			ResourceType: "vm",
+			ResourceID:   vmidStr,
+			ResourceName: vm.Name,
+			Cluster:      vm.Cluster,
+			Details:      string(details),
+			Status:       "started",
+		})
+	}
+
+	// Broadcast state so UI shows migration immediately
+	if h.onChange != nil {
+		h.onChange()
+	}
+
 	writeJSON(w, map[string]string{"upid": upid})
 }
 
@@ -1236,6 +1284,30 @@ func (h *Handler) MigrateContainer(w http.ResponseWriter, r *http.Request) {
 		Progress:  0,
 		Status:    "running",
 	})
+
+	// Log activity
+	if h.activity != nil {
+		details, _ := json.Marshal(map[string]interface{}{
+			"from_node": ct.Node,
+			"to_node":   req.TargetNode,
+			"online":    req.Online,
+			"upid":      upid,
+		})
+		h.activity.Log(activity.Entry{
+			Action:       activity.ActionMigrate,
+			ResourceType: "ct",
+			ResourceID:   vmidStr,
+			ResourceName: ct.Name,
+			Cluster:      ct.Cluster,
+			Details:      string(details),
+			Status:       "started",
+		})
+	}
+
+	// Broadcast state so UI shows migration immediately
+	if h.onChange != nil {
+		h.onChange()
+	}
 
 	writeJSON(w, map[string]string{"upid": upid})
 }
@@ -1304,6 +1376,30 @@ func (h *Handler) ClusterMigrateVM(w http.ResponseWriter, r *http.Request) {
 		Status:    "running",
 	})
 
+	// Log activity
+	if h.activity != nil {
+		details, _ := json.Marshal(map[string]interface{}{
+			"from_node": vm.Node,
+			"to_node":   req.TargetNode,
+			"online":    req.Online,
+			"upid":      upid,
+		})
+		h.activity.Log(activity.Entry{
+			Action:       activity.ActionMigrate,
+			ResourceType: "vm",
+			ResourceID:   vmidStr,
+			ResourceName: vm.Name,
+			Cluster:      clusterName,
+			Details:      string(details),
+			Status:       "started",
+		})
+	}
+
+	// Broadcast state so UI shows migration immediately
+	if h.onChange != nil {
+		h.onChange()
+	}
+
 	writeJSON(w, map[string]string{"upid": upid})
 }
 
@@ -1370,6 +1466,30 @@ func (h *Handler) ClusterMigrateContainer(w http.ResponseWriter, r *http.Request
 		Progress:  0,
 		Status:    "running",
 	})
+
+	// Log activity
+	if h.activity != nil {
+		details, _ := json.Marshal(map[string]interface{}{
+			"from_node": ct.Node,
+			"to_node":   req.TargetNode,
+			"online":    req.Online,
+			"upid":      upid,
+		})
+		h.activity.Log(activity.Entry{
+			Action:       activity.ActionMigrate,
+			ResourceType: "ct",
+			ResourceID:   vmidStr,
+			ResourceName: ct.Name,
+			Cluster:      clusterName,
+			Details:      string(details),
+			Status:       "started",
+		})
+	}
+
+	// Broadcast state so UI shows migration immediately
+	if h.onChange != nil {
+		h.onChange()
+	}
 
 	writeJSON(w, map[string]string{"upid": upid})
 }
@@ -1462,6 +1582,31 @@ func (h *Handler) ApplyDRSRecommendation(w http.ResponseWriter, r *http.Request)
 
 	// Remove the recommendation since we've acted on it
 	h.store.RemoveDRSRecommendation(clusterName, recID)
+
+	// Log activity
+	if h.activity != nil {
+		details, _ := json.Marshal(map[string]interface{}{
+			"from_node":   found.FromNode,
+			"to_node":     found.ToNode,
+			"online":      online,
+			"upid":        upid,
+			"drs_reason":  found.Reason,
+		})
+		h.activity.Log(activity.Entry{
+			Action:       activity.ActionDRSApply,
+			ResourceType: found.GuestType,
+			ResourceID:   strconv.Itoa(found.VMID),
+			ResourceName: found.GuestName,
+			Cluster:      clusterName,
+			Details:      string(details),
+			Status:       "started",
+		})
+	}
+
+	// Broadcast state so UI shows migration immediately
+	if h.onChange != nil {
+		h.onChange()
+	}
 
 	writeJSON(w, map[string]string{"upid": upid, "message": "migration started"})
 }
@@ -2260,6 +2405,23 @@ func (h *Handler) UpdateClusterVMConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Log activity
+	if h.activity != nil {
+		changedKeys := make([]string, 0, len(req.Changes))
+		for k := range req.Changes {
+			changedKeys = append(changedKeys, k)
+		}
+		details, _ := json.Marshal(map[string]interface{}{"changed": changedKeys})
+		h.activity.Log(activity.Entry{
+			Action:       activity.ActionConfigUpdate,
+			ResourceType: "vm",
+			ResourceID:   vmidStr,
+			ResourceName: vm.Name,
+			Cluster:      clusterName,
+			Details:      string(details),
+		})
+	}
+
 	writeJSON(w, map[string]string{"message": "configuration updated"})
 }
 
@@ -2316,5 +2478,61 @@ func (h *Handler) UpdateClusterContainerConfig(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Log activity
+	if h.activity != nil {
+		changedKeys := make([]string, 0, len(req.Changes))
+		for k := range req.Changes {
+			changedKeys = append(changedKeys, k)
+		}
+		details, _ := json.Marshal(map[string]interface{}{"changed": changedKeys})
+		h.activity.Log(activity.Entry{
+			Action:       activity.ActionConfigUpdate,
+			ResourceType: "ct",
+			ResourceID:   vmidStr,
+			ResourceName: ct.Name,
+			Cluster:      clusterName,
+			Details:      string(details),
+		})
+	}
+
 	writeJSON(w, map[string]string{"message": "configuration updated"})
+}
+
+// GetActivity retrieves activity log entries
+func (h *Handler) GetActivity(w http.ResponseWriter, r *http.Request) {
+	if h.activity == nil {
+		writeError(w, http.StatusServiceUnavailable, "activity logging not enabled")
+		return
+	}
+
+	params := activity.QueryParams{
+		Limit:        50,
+		ResourceType: r.URL.Query().Get("resource_type"),
+		ResourceID:   r.URL.Query().Get("resource_id"),
+		Cluster:      r.URL.Query().Get("cluster"),
+		Action:       r.URL.Query().Get("action"),
+	}
+
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if limit, err := strconv.Atoi(limitStr); err == nil {
+			params.Limit = limit
+		}
+	}
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if offset, err := strconv.Atoi(offsetStr); err == nil {
+			params.Offset = offset
+		}
+	}
+
+	entries, err := h.activity.Query(params)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if entries == nil {
+		entries = []activity.Entry{}
+	}
+
+	writeJSON(w, entries)
 }

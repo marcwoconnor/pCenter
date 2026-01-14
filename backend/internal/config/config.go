@@ -17,9 +17,16 @@ type Config struct {
 	Server   ServerConfig    `yaml:"server"`
 	Metrics  MetricsConfig   `yaml:"metrics"`
 	Folders  FoldersConfig   `yaml:"folders"`
+	Activity ActivityConfig  `yaml:"activity"`
 
 	// Legacy: flat nodes array (auto-converted to single cluster)
 	Nodes []NodeConfig `yaml:"nodes,omitempty"`
+}
+
+// ActivityConfig holds activity logging settings
+type ActivityConfig struct {
+	DatabasePath  string `yaml:"database_path"`
+	RetentionDays int    `yaml:"retention_days"`
 }
 
 // PollerConfig holds poller settings
@@ -135,6 +142,14 @@ func Load(path string) (*Config, error) {
 	// Folders defaults
 	if cfg.Folders.DatabasePath == "" {
 		cfg.Folders.DatabasePath = "data/folders.db"
+	}
+
+	// Activity defaults
+	if cfg.Activity.DatabasePath == "" {
+		cfg.Activity.DatabasePath = "data/activity.db"
+	}
+	if cfg.Activity.RetentionDays == 0 {
+		cfg.Activity.RetentionDays = 30
 	}
 
 	// Metrics defaults
