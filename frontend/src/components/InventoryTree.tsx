@@ -1,11 +1,12 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useCluster } from '../context/ClusterContext';
 import { useFolders } from '../context/FolderContext';
 import type { SelectedObject } from '../context/ClusterContext';
-import type { Guest, Storage, ClusterInfo, NetworkInterface, Folder, TreeView } from '../types';
+import type { Guest, Storage, ClusterInfo, NetworkInterface, Folder, TreeView, Datacenter, InventoryCluster, DatacenterTreeResponse } from '../types';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { MigrateDialog } from './MigrateDialog';
 import { FolderDialog } from './FolderDialog';
+import { DatacenterDialog } from './DatacenterDialog';
 import { api } from '../api/client';
 
 interface ContextMenuState {
@@ -175,6 +176,14 @@ interface FolderDialogState {
   treeView: TreeView;
 }
 
+// Datacenter dialog state
+interface DatacenterDialogState {
+  mode: 'create-dc' | 'edit-dc' | 'create-cluster' | 'edit-cluster';
+  datacenter?: Datacenter;
+  cluster?: InventoryCluster;
+  parentDatacenterId?: string;
+}
+
 export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
   const { clusters, nodes, guests, storage, selectedObject, setSelectedObject, performAction, openConsole } = useCluster();
   const { hostsTree, vmsTree, createFolder, renameFolder, deleteFolder, moveFolder, moveResource } = useFolders();
@@ -183,7 +192,29 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
   const [networkInterfaces, setNetworkInterfaces] = useState<NetworkInterface[]>([]);
   const [folderDialog, setFolderDialog] = useState<FolderDialogState | null>(null);
 
+  // Datacenter/cluster inventory state
+  const [datacenters, setDatacenters] = useState<Datacenter[]>([]);
+  const [orphanClusters, setOrphanClusters] = useState<InventoryCluster[]>([]);
+  const [datacenterDialog, setDatacenterDialog] = useState<DatacenterDialogState | null>(null);
+
   const filterLower = filter.toLowerCase();
+
+  // Fetch datacenter tree for hosts view
+  const fetchDatacenterTree = useCallback(async () => {
+    try {
+      const tree = await api.getDatacenterTree();
+      setDatacenters(tree.datacenters || []);
+      setOrphanClusters(tree.orphan_clusters || []);
+    } catch (e) {
+      console.error('Failed to fetch datacenter tree:', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (view === 'hosts') {
+      fetchDatacenterTree();
+    }
+  }, [view, fetchDatacenterTree]);
 
   // Collect all resource IDs that are in folders (to exclude from default lists)
   const collectFolderMembers = (folders: Folder[]): Set<string> => {
@@ -483,6 +514,140 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
     ];
   };
 
+  // Get datacenter context menu items
+  const getDatacenterMenuItems = (dc: Datacenter): MenuItem[] => {
+    return [
+      {
+        label: 'Add Cluster',
+        icon: '➕',
+        action: () => setDatacenterDialog({
+          mode: 'create-cluster',
+          parentDatacenterId: dc.id,
+        }),
+      },
+      {
+        label: 'Edit Datacenter',
+        icon: '✏️',
+        action: () => setDatacenterDialog({
+          mode: 'edit-dc',
+          datacenter: dc,
+        }),
+      },
+      { label: '', action: () => {}, divider: true },
+      {
+        label: 'Delete Datacenter',
+        icon: '🗑️',
+        action: async () => {
+          if (confirm(`Delete datacenter "${dc.name}"? Clusters will become unassigned.`)) {
+            try {
+              await api.deleteDatacenter(dc.id);
+              fetchDatacenterTree();
+            } catch (err) {
+              alert('Failed to delete: ' + (err instanceof Error ? err.message : 'Unknown error'));
+            }
+          }
+        },
+        danger: true,
+      },
+    ];
+  };
+
+  // Get inventory cluster context menu items (for configuration)
+  const getInventoryClusterMenuItems = (cluster: InventoryCluster): MenuItem[] => {
+    // Build "Move to Datacenter" submenu
+    const moveSubmenu: MenuItem[] = [
+      {
+        label: '(Unassigned)',
+        icon: '📤',
+        action: async () => {
+          try {
+            await api.moveClusterToDatacenter(cluster.name, undefined);
+            fetchDatacenterTree();
+          } catch (err) {
+            alert('Move failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
+          }
+        },
+      },
+      { label: '', action: () => {}, divider: true },
+      ...datacenters.map(dc => ({
+        label: dc.name,
+        icon: '🏢',
+        action: async () => {
+          try {
+            await api.moveClusterToDatacenter(cluster.name, dc.id);
+            fetchDatacenterTree();
+          } catch (err) {
+            alert('Move failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
+          }
+        },
+      })),
+    ];
+
+    return [
+      {
+        label: 'Edit Cluster',
+        icon: '✏️',
+        action: () => setDatacenterDialog({
+          mode: 'edit-cluster',
+          cluster,
+        }),
+      },
+      {
+        label: 'Move to Datacenter',
+        icon: '↔️',
+        action: () => {},
+        submenu: moveSubmenu,
+      },
+      { label: '', action: () => {}, divider: true },
+      {
+        label: cluster.enabled ? 'Disable' : 'Enable',
+        icon: cluster.enabled ? '⏸️' : '▶️',
+        action: async () => {
+          try {
+            await api.updateInventoryCluster(cluster.name, {
+              ...cluster,
+              enabled: !cluster.enabled,
+            });
+            fetchDatacenterTree();
+          } catch (err) {
+            alert('Failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
+          }
+        },
+      },
+      {
+        label: 'Delete Cluster',
+        icon: '🗑️',
+        action: async () => {
+          if (confirm(`Delete cluster "${cluster.name}"? This cannot be undone.`)) {
+            try {
+              await api.deleteInventoryCluster(cluster.name);
+              fetchDatacenterTree();
+            } catch (err) {
+              alert('Failed to delete: ' + (err instanceof Error ? err.message : 'Unknown error'));
+            }
+          }
+        },
+        danger: true,
+      },
+    ];
+  };
+
+  // Get root menu items for hosts view
+  const getRootHostsMenuItems = (): MenuItem[] => {
+    return [
+      {
+        label: 'Add Datacenter',
+        icon: '🏢',
+        action: () => setDatacenterDialog({ mode: 'create-dc' }),
+      },
+      {
+        label: 'Add Cluster',
+        icon: '🏛️',
+        action: () => setDatacenterDialog({ mode: 'create-cluster' }),
+      },
+    ];
+  };
+
   const getStorageMenuItems = (_s: Storage): MenuItem[] => {
     return [
       {
@@ -716,9 +881,73 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
     />
   );
 
-  // Hosts & Clusters View - physical infrastructure hierarchy (no folders per vCenter)
+  // Helper to render a cluster node with its hosts
+  const renderClusterWithNodes = (clusterName: string, inventoryCluster?: InventoryCluster) => {
+    const clusterNodes = nodesByCluster[clusterName] || [];
+    const runtimeCluster = clusters.find(c => c.name === clusterName);
+
+    return (
+      <TreeNode
+        key={clusterName}
+        icon="🏛"
+        label={clusterName}
+        badge={<>
+          {inventoryCluster && !inventoryCluster.enabled && (
+            <span className="text-xs px-1.5 py-0.5 rounded bg-gray-600 text-gray-300">disabled</span>
+          )}
+          <HABadge ha={runtimeCluster?.ha} />
+        </>}
+        isSelected={isSelected({ type: 'cluster', id: clusterName, name: clusterName, cluster: clusterName })}
+        onClick={() => setSelectedObject({ type: 'cluster', id: clusterName, name: clusterName, cluster: clusterName })}
+        onContextMenu={(e) => {
+          // Show inventory menu if we have cluster config, otherwise runtime menu
+          if (inventoryCluster) {
+            showContextMenu(e, getInventoryClusterMenuItems(inventoryCluster));
+          } else {
+            showContextMenu(e, getClusterMenuItems(clusterName));
+          }
+        }}
+        defaultExpanded
+        count={clusterNodes.length}
+      >
+        {clusterNodes.map((node) => {
+          const nodeGuests = (guestsByClusterNode[clusterName]?.[node.node] || []).filter(filterGuest);
+          const vms = nodeGuests.filter(g => g.type === 'qemu');
+          const cts = nodeGuests.filter(g => g.type === 'lxc');
+
+          return (
+            <TreeNode
+              key={`${clusterName}-${node.node}`}
+              icon="🖥"
+              label={node.node}
+              status={node.status === 'online' ? 'online' : 'stopped'}
+              isSelected={isSelected({ type: 'node', id: node.node, name: node.node, cluster: clusterName })}
+              onClick={() => setSelectedObject({ type: 'node', id: node.node, name: node.node, cluster: clusterName })}
+              onContextMenu={(e) => showContextMenu(e, getNodeMenuItems(node.node, clusterName))}
+              defaultExpanded
+              count={nodeGuests.length}
+            >
+              {vms.length > 0 && (
+                <TreeNode icon="📁" label="Virtual Machines" count={vms.length} defaultExpanded>
+                  {vms.map((vm) => renderGuestNode(vm, 'vm', 'hosts'))}
+                </TreeNode>
+              )}
+              {cts.length > 0 && (
+                <TreeNode icon="📁" label="Containers" count={cts.length} defaultExpanded>
+                  {cts.map((ct) => renderGuestNode(ct, 'ct', 'hosts'))}
+                </TreeNode>
+              )}
+            </TreeNode>
+          );
+        })}
+      </TreeNode>
+    );
+  };
+
+  // Hosts & Clusters View - with datacenter hierarchy
   if (view === 'hosts') {
     const totalNodes = sortedNodes.length;
+    const hasDatacenters = datacenters.length > 0 || orphanClusters.length > 0;
 
     return (
       <div className="py-2">
@@ -739,16 +968,65 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
             }}
           />
         )}
+        {datacenterDialog && (
+          <DatacenterDialog
+            mode={datacenterDialog.mode}
+            datacenter={datacenterDialog.datacenter}
+            cluster={datacenterDialog.cluster}
+            parentDatacenterId={datacenterDialog.parentDatacenterId}
+            datacenters={datacenters}
+            onSubmit={async () => {
+              setDatacenterDialog(null);
+              await fetchDatacenterTree();
+            }}
+            onClose={() => setDatacenterDialog(null)}
+          />
+        )}
         <TreeNode
           icon="🏢"
           label="pCenter"
           defaultExpanded
           count={totalNodes}
-          isSelected={isSelected({ type: 'datacenter', id: 'datacenter', name: 'pCenter' })}
-          onClick={() => setSelectedObject({ type: 'datacenter', id: 'datacenter', name: 'pCenter' })}
+          isSelected={isSelected({ type: 'datacenter', id: 'root', name: 'pCenter' })}
+          onClick={() => setSelectedObject({ type: 'datacenter', id: 'root', name: 'pCenter' })}
+          onContextMenu={(e) => showContextMenu(e, getRootHostsMenuItems())}
         >
-          {sortedClusters.length === 0 ? (
-            // Fallback if no clusters defined - show nodes directly
+          {hasDatacenters ? (
+            <>
+              {/* Render datacenters with their clusters */}
+              {datacenters.map((dc) => (
+                <TreeNode
+                  key={dc.id}
+                  icon="🏢"
+                  label={dc.name}
+                  defaultExpanded
+                  count={dc.clusters?.length || 0}
+                  isSelected={isSelected({ type: 'datacenter', id: dc.id, name: dc.name })}
+                  onClick={() => setSelectedObject({ type: 'datacenter', id: dc.id, name: dc.name })}
+                  onContextMenu={(e) => showContextMenu(e, getDatacenterMenuItems(dc))}
+                >
+                  {dc.clusters?.map((invCluster) =>
+                    renderClusterWithNodes(invCluster.name, invCluster)
+                  )}
+                </TreeNode>
+              ))}
+
+              {/* Render orphan clusters (no datacenter) */}
+              {orphanClusters.length > 0 && (
+                <TreeNode
+                  icon="📤"
+                  label="Unassigned"
+                  defaultExpanded
+                  count={orphanClusters.length}
+                >
+                  {orphanClusters.map((invCluster) =>
+                    renderClusterWithNodes(invCluster.name, invCluster)
+                  )}
+                </TreeNode>
+              )}
+            </>
+          ) : sortedClusters.length === 0 ? (
+            // Fallback if no clusters at all - show nodes directly
             sortedNodes.map((node) => {
               const nodeGuests = (guestsByClusterNode['default']?.[node.node] || []).filter(filterGuest);
               const vms = nodeGuests.filter(g => g.type === 'qemu');
@@ -780,55 +1058,8 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
               );
             })
           ) : (
-            // Multi-cluster view
-            sortedClusters.map((cluster) => {
-              const clusterNodes = nodesByCluster[cluster.name] || [];
-
-              return (
-                <TreeNode
-                  key={cluster.name}
-                  icon="🏛"
-                  label={cluster.name}
-                  badge={<HABadge ha={cluster.ha} />}
-                  isSelected={isSelected({ type: 'cluster', id: cluster.name, name: cluster.name, cluster: cluster.name })}
-                  onClick={() => setSelectedObject({ type: 'cluster', id: cluster.name, name: cluster.name, cluster: cluster.name })}
-                  onContextMenu={(e) => showContextMenu(e, getClusterMenuItems(cluster.name))}
-                  defaultExpanded
-                  count={clusterNodes.length}
-                >
-                  {clusterNodes.map((node) => {
-                    const nodeGuests = (guestsByClusterNode[cluster.name]?.[node.node] || []).filter(filterGuest);
-                    const vms = nodeGuests.filter(g => g.type === 'qemu');
-                    const cts = nodeGuests.filter(g => g.type === 'lxc');
-
-                    return (
-                      <TreeNode
-                        key={`${cluster.name}-${node.node}`}
-                        icon="🖥"
-                        label={node.node}
-                        status={node.status === 'online' ? 'online' : 'stopped'}
-                        isSelected={isSelected({ type: 'node', id: node.node, name: node.node, cluster: cluster.name })}
-                        onClick={() => setSelectedObject({ type: 'node', id: node.node, name: node.node, cluster: cluster.name })}
-                        onContextMenu={(e) => showContextMenu(e, getNodeMenuItems(node.node, cluster.name))}
-                        defaultExpanded
-                        count={nodeGuests.length}
-                      >
-                        {vms.length > 0 && (
-                          <TreeNode icon="📁" label="Virtual Machines" count={vms.length} defaultExpanded>
-                            {vms.map((vm) => renderGuestNode(vm, 'vm', 'hosts'))}
-                          </TreeNode>
-                        )}
-                        {cts.length > 0 && (
-                          <TreeNode icon="📁" label="Containers" count={cts.length} defaultExpanded>
-                            {cts.map((ct) => renderGuestNode(ct, 'ct', 'hosts'))}
-                          </TreeNode>
-                        )}
-                      </TreeNode>
-                    );
-                  })}
-                </TreeNode>
-              );
-            })
+            // Runtime clusters only (no inventory datacenters yet)
+            sortedClusters.map((cluster) => renderClusterWithNodes(cluster.name))
           )}
         </TreeNode>
       </div>
