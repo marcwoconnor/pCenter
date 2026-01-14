@@ -21,6 +21,13 @@ import type {
   ContainerConfig,
   ConfigResponse,
   ActivityEntry,
+  Datacenter,
+  InventoryCluster,
+  CreateDatacenterRequest,
+  UpdateDatacenterRequest,
+  CreateClusterRequest,
+  UpdateClusterRequest,
+  DatacenterTreeResponse,
 } from '../types';
 
 const BASE_URL = '/api';
@@ -201,6 +208,32 @@ export const api = {
     const qs = query.toString();
     return fetchAPI<ActivityEntry[]>(`/activity${qs ? `?${qs}` : ''}`);
   },
+
+  // Datacenters
+  getDatacenters: () => fetchAPI<Datacenter[]>('/datacenters'),
+  getDatacenter: (id: string) => fetchAPI<Datacenter>(`/datacenters/${id}`),
+  createDatacenter: (req: CreateDatacenterRequest) =>
+    fetchAPI<Datacenter>('/datacenters', { method: 'POST', body: JSON.stringify(req) }),
+  updateDatacenter: (id: string, req: UpdateDatacenterRequest) =>
+    fetchAPI<void>(`/datacenters/${id}`, { method: 'PUT', body: JSON.stringify(req) }),
+  deleteDatacenter: (id: string) =>
+    fetchAPI<void>(`/datacenters/${id}`, { method: 'DELETE' }),
+  getDatacenterTree: () => fetchAPI<DatacenterTreeResponse>('/datacenters/tree'),
+
+  // Inventory Clusters (configuration)
+  getInventoryClusters: () => fetchAPI<InventoryCluster[]>('/inventory/clusters'),
+  getInventoryCluster: (name: string) => fetchAPI<InventoryCluster>(`/inventory/clusters/${name}`),
+  createInventoryCluster: (req: CreateClusterRequest) =>
+    fetchAPI<InventoryCluster>('/inventory/clusters', { method: 'POST', body: JSON.stringify(req) }),
+  updateInventoryCluster: (name: string, req: UpdateClusterRequest) =>
+    fetchAPI<void>(`/inventory/clusters/${name}`, { method: 'PUT', body: JSON.stringify(req) }),
+  deleteInventoryCluster: (name: string) =>
+    fetchAPI<void>(`/inventory/clusters/${name}`, { method: 'DELETE' }),
+  moveClusterToDatacenter: (name: string, datacenterId?: string) =>
+    fetchAPI<void>(`/inventory/clusters/${name}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ datacenter_id: datacenterId }),
+    }),
 };
 
 // Helper functions

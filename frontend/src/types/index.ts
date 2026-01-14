@@ -553,3 +553,59 @@ export interface ActivityEntry {
   details?: string;
   status: string;
 }
+
+// Datacenter/Cluster inventory types
+
+export interface Datacenter {
+  id: string;
+  name: string;
+  description?: string;
+  created_at: string;
+  updated_at: string;
+  clusters?: InventoryCluster[];
+}
+
+export interface InventoryCluster {
+  id: string;
+  name: string;
+  datacenter_id?: string;
+  datacenter_name?: string;
+  discovery_node: string;
+  token_id: string;
+  insecure: boolean;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateDatacenterRequest {
+  name: string;
+  description?: string;
+}
+
+export interface UpdateDatacenterRequest {
+  name: string;
+  description?: string;
+}
+
+export interface CreateClusterRequest {
+  name: string;
+  datacenter_id?: string;
+  discovery_node: string;
+  token_id: string;
+  insecure: boolean;
+}
+
+export interface UpdateClusterRequest {
+  name: string;
+  datacenter_id?: string;
+  discovery_node: string;
+  token_id: string;
+  insecure: boolean;
+  enabled: boolean;
+}
+
+export interface DatacenterTreeResponse {
+  datacenters: Datacenter[];
+  orphan_clusters: InventoryCluster[];
+}

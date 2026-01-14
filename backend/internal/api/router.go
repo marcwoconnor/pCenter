@@ -183,6 +183,24 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	mux.HandleFunc("DELETE /api/folders/{id}/members", h.RemoveFolderMember)
 	mux.HandleFunc("POST /api/resources/move", h.MoveResource)
 
+	// --- Inventory endpoints (datacenter/cluster management) ---
+
+	// Datacenters
+	mux.HandleFunc("GET /api/datacenters", h.ListDatacenters)
+	mux.HandleFunc("POST /api/datacenters", h.CreateDatacenter)
+	mux.HandleFunc("GET /api/datacenters/{id}", h.GetDatacenter)
+	mux.HandleFunc("PUT /api/datacenters/{id}", h.UpdateDatacenter)
+	mux.HandleFunc("DELETE /api/datacenters/{id}", h.DeleteDatacenter)
+	mux.HandleFunc("GET /api/datacenters/tree", h.GetDatacenterTree)
+
+	// Inventory Clusters (configuration, separate from runtime /api/clusters)
+	mux.HandleFunc("GET /api/inventory/clusters", h.ListInventoryClusters)
+	mux.HandleFunc("POST /api/inventory/clusters", h.CreateInventoryCluster)
+	mux.HandleFunc("GET /api/inventory/clusters/{name}", h.GetInventoryCluster)
+	mux.HandleFunc("PUT /api/inventory/clusters/{name}", h.UpdateInventoryCluster)
+	mux.HandleFunc("DELETE /api/inventory/clusters/{name}", h.DeleteInventoryCluster)
+	mux.HandleFunc("POST /api/inventory/clusters/{name}/move", h.MoveClusterToDatacenter)
+
 	// Serve static files and SPA fallback
 	staticDir := "./frontend"
 	if dir := os.Getenv("STATIC_DIR"); dir != "" {

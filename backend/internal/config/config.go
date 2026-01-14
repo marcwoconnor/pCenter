@@ -19,6 +19,13 @@ type Config struct {
 	Folders  FoldersConfig   `yaml:"folders"`
 	Activity ActivityConfig  `yaml:"activity"`
 
+	// ClusterSecrets maps cluster name to API token secret
+	// Secrets stay in config/env, cluster definitions move to inventory DB
+	ClusterSecrets map[string]string `yaml:"cluster_secrets"`
+
+	// Inventory settings for datacenter/cluster management
+	Inventory InventoryConfig `yaml:"inventory"`
+
 	// Legacy: flat nodes array (auto-converted to single cluster)
 	Nodes []NodeConfig `yaml:"nodes,omitempty"`
 }
@@ -36,6 +43,11 @@ type PollerConfig struct {
 
 // FoldersConfig holds folder organization settings
 type FoldersConfig struct {
+	DatabasePath string `yaml:"database_path"`
+}
+
+// InventoryConfig holds datacenter/cluster inventory settings
+type InventoryConfig struct {
 	DatabasePath string `yaml:"database_path"`
 }
 
@@ -144,6 +156,11 @@ func Load(path string) (*Config, error) {
 		cfg.Folders.DatabasePath = "data/folders.db"
 	}
 
+	// Inventory defaults
+	if cfg.Inventory.DatabasePath == "" {
+		cfg.Inventory.DatabasePath = "data/inventory.db"
+	}
+
 	// Activity defaults
 	if cfg.Activity.DatabasePath == "" {
 		cfg.Activity.DatabasePath = "data/activity.db"
@@ -176,11 +193,13 @@ func Load(path string) (*Config, error) {
 	// We use a pointer check approach - if not in config, default to true
 	// For now, if clusters are configured, poller is enabled by default
 
-	// Validate clusters (only required if poller is enabled)
-	if len(cfg.Clusters) == 0 && cfg.Poller.Enabled {
-		return nil, fmt.Errorf("at least one cluster must be configured (or set poller.enabled: false for agent-only mode)")
+	// Initialize ClusterSecrets map if nil
+	if cfg.ClusterSecrets == nil {
+		cfg.ClusterSecrets = make(map[string]string)
 	}
 
+	// Validate legacy clusters array and populate ClusterSecrets for backward compatibility
+	// Clusters can also be defined in inventory DB, so empty clusters array is OK
 	for i, cluster := range cfg.Clusters {
 		if cluster.Name == "" {
 			return nil, fmt.Errorf("cluster %d: name is required", i)
@@ -197,6 +216,10 @@ func Load(path string) (*Config, error) {
 		// Default to insecure for self-signed certs
 		if !strings.HasPrefix(cluster.DiscoveryNode, "http") {
 			cfg.Clusters[i].Insecure = true
+		}
+		// Auto-populate ClusterSecrets from legacy clusters for backward compat
+		if _, exists := cfg.ClusterSecrets[cluster.Name]; !exists {
+			cfg.ClusterSecrets[cluster.Name] = cluster.TokenSecret
 		}
 	}
 

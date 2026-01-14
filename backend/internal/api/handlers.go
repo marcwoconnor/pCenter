@@ -13,6 +13,7 @@ import (
 	"github.com/moconnor/pcenter/internal/agent"
 	"github.com/moconnor/pcenter/internal/config"
 	"github.com/moconnor/pcenter/internal/folders"
+	"github.com/moconnor/pcenter/internal/inventory"
 	"github.com/moconnor/pcenter/internal/metrics"
 	"github.com/moconnor/pcenter/internal/poller"
 	"github.com/moconnor/pcenter/internal/pve"
@@ -21,14 +22,15 @@ import (
 
 // Handler holds dependencies for API handlers
 type Handler struct {
-	store    *state.Store
-	poller   *poller.Poller
-	metrics  *metrics.QueryService
-	folders  *folders.Service
-	activity *activity.Service
-	agentHub *agent.Hub
-	clusters []config.ClusterConfig // For on-demand client creation
-	onChange func()                 // Callback to broadcast state changes
+	store     *state.Store
+	poller    *poller.Poller
+	metrics   *metrics.QueryService
+	folders   *folders.Service
+	activity  *activity.Service
+	inventory *inventory.Service
+	agentHub  *agent.Hub
+	clusters  []config.ClusterConfig // For on-demand client creation
+	onChange  func()                 // Callback to broadcast state changes
 }
 
 // NewHandler creates a new API handler
@@ -52,6 +54,11 @@ func (h *Handler) SetFoldersService(f *folders.Service) {
 // SetActivityService sets the activity logging service
 func (h *Handler) SetActivityService(a *activity.Service) {
 	h.activity = a
+}
+
+// SetInventoryService sets the inventory service for datacenter/cluster management
+func (h *Handler) SetInventoryService(inv *inventory.Service) {
+	h.inventory = inv
 }
 
 // SetOnChange sets a callback for state changes (broadcasts to WebSocket)
@@ -2535,4 +2542,410 @@ func (h *Handler) GetActivity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, entries)
+}
+
+// === Datacenter Handlers ===
+
+// ListDatacenters returns all datacenters
+func (h *Handler) ListDatacenters(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	datacenters, err := h.inventory.ListDatacenters(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if datacenters == nil {
+		datacenters = []inventory.Datacenter{}
+	}
+
+	writeJSON(w, datacenters)
+}
+
+// GetDatacenter returns a datacenter by ID
+func (h *Handler) GetDatacenter(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "datacenter id is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	dc, err := h.inventory.GetDatacenter(ctx, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if dc == nil {
+		writeError(w, http.StatusNotFound, "datacenter not found")
+		return
+	}
+
+	writeJSON(w, dc)
+}
+
+// CreateDatacenter creates a new datacenter
+func (h *Handler) CreateDatacenter(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	var req inventory.CreateDatacenterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	dc, err := h.inventory.CreateDatacenter(ctx, req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "datacenter_create",
+			ResourceType: "datacenter",
+			ResourceID:   dc.ID,
+			ResourceName: dc.Name,
+		})
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, dc)
+}
+
+// UpdateDatacenter updates a datacenter
+func (h *Handler) UpdateDatacenter(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "datacenter id is required")
+		return
+	}
+
+	var req inventory.UpdateDatacenterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := h.inventory.UpdateDatacenter(ctx, id, req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "datacenter_update",
+			ResourceType: "datacenter",
+			ResourceID:   id,
+			ResourceName: req.Name,
+		})
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// DeleteDatacenter deletes a datacenter
+func (h *Handler) DeleteDatacenter(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "datacenter id is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	// Get DC name for logging before delete
+	dc, _ := h.inventory.GetDatacenter(ctx, id)
+	dcName := ""
+	if dc != nil {
+		dcName = dc.Name
+	}
+
+	if err := h.inventory.DeleteDatacenter(ctx, id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "datacenter_delete",
+			ResourceType: "datacenter",
+			ResourceID:   id,
+			ResourceName: dcName,
+		})
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// GetDatacenterTree returns datacenters with their clusters
+func (h *Handler) GetDatacenterTree(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	datacenters, orphanClusters, err := h.inventory.GetDatacenterTree(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"datacenters":     datacenters,
+		"orphan_clusters": orphanClusters,
+	})
+}
+
+// === Cluster Inventory Handlers ===
+
+// ListInventoryClusters returns all clusters from inventory
+func (h *Handler) ListInventoryClusters(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	clusters, err := h.inventory.ListClusters(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if clusters == nil {
+		clusters = []inventory.Cluster{}
+	}
+
+	writeJSON(w, clusters)
+}
+
+// GetInventoryCluster returns a cluster by name
+func (h *Handler) GetInventoryCluster(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "cluster name is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	cluster, err := h.inventory.GetClusterByName(ctx, name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if cluster == nil {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	writeJSON(w, cluster)
+}
+
+// CreateInventoryCluster creates a new cluster
+func (h *Handler) CreateInventoryCluster(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	var req inventory.CreateClusterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	cluster, err := h.inventory.CreateCluster(ctx, req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "cluster_create",
+			ResourceType: "cluster",
+			ResourceID:   cluster.ID,
+			ResourceName: cluster.Name,
+		})
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, cluster)
+}
+
+// UpdateInventoryCluster updates a cluster
+func (h *Handler) UpdateInventoryCluster(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "cluster name is required")
+		return
+	}
+
+	var req inventory.UpdateClusterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := h.inventory.UpdateClusterByName(ctx, name, req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "cluster_update",
+			ResourceType: "cluster",
+			ResourceID:   name,
+			ResourceName: req.Name,
+		})
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// DeleteInventoryCluster deletes a cluster
+func (h *Handler) DeleteInventoryCluster(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "cluster name is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := h.inventory.DeleteClusterByName(ctx, name); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "cluster_delete",
+			ResourceType: "cluster",
+			ResourceID:   name,
+			ResourceName: name,
+		})
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// MoveClusterToDatacenter moves a cluster to a datacenter
+func (h *Handler) MoveClusterToDatacenter(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "cluster name is required")
+		return
+	}
+
+	var req struct {
+		DatacenterID *string `json:"datacenter_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := h.inventory.MoveClusterToDatacenter(ctx, name, req.DatacenterID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		dcName := "(orphan)"
+		if req.DatacenterID != nil {
+			if dc, _ := h.inventory.GetDatacenter(ctx, *req.DatacenterID); dc != nil {
+				dcName = dc.Name
+			}
+		}
+		h.activity.Log(activity.Entry{
+			Action:       "cluster_move",
+			ResourceType: "cluster",
+			ResourceID:   name,
+			ResourceName: name,
+			Details:      fmt.Sprintf(`{"datacenter":"%s"}`, dcName),
+		})
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

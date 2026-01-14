@@ -16,6 +16,7 @@ import (
 	"github.com/moconnor/pcenter/internal/api"
 	"github.com/moconnor/pcenter/internal/config"
 	"github.com/moconnor/pcenter/internal/folders"
+	"github.com/moconnor/pcenter/internal/inventory"
 	"github.com/moconnor/pcenter/internal/metrics"
 	"github.com/moconnor/pcenter/internal/migration"
 	"github.com/moconnor/pcenter/internal/poller"
@@ -68,20 +69,11 @@ func main() {
 	// Start agent hub cleanup loop (for stale commands)
 	go agentHub.StartCleanupLoop(ctx)
 
-	// Create and start poller only if enabled
+	// Create poller (started later after inventory is loaded)
 	var p *poller.Poller
 	if cfg.Poller.Enabled {
 		p = poller.New(store, 5*time.Second, cfg.DRS)
-		for _, clusterCfg := range cfg.Clusters {
-			p.AddCluster(clusterCfg)
-			slog.Info("configured cluster", "name", clusterCfg.Name, "discovery", clusterCfg.DiscoveryNode)
-		}
 		p.OnChange(broadcastFn)
-		p.Start(ctx)
-		defer p.Stop()
-
-		// Wait for initial discovery and poll
-		time.Sleep(2 * time.Second)
 	} else {
 		slog.Info("poller disabled - running in agent-only mode")
 	}
@@ -138,6 +130,45 @@ func main() {
 	foldersService := folders.NewService(foldersDB)
 	handler.SetFoldersService(foldersService)
 	slog.Info("folders enabled", "database", cfg.Folders.DatabasePath)
+
+	// Initialize inventory database (datacenter/cluster management)
+	inventoryDB, err := inventory.Open(cfg.Inventory.DatabasePath)
+	if err != nil {
+		slog.Error("failed to open inventory database", "error", err)
+		os.Exit(1)
+	}
+	defer inventoryDB.Close()
+
+	inventoryService := inventory.NewService(inventoryDB)
+	handler.SetInventoryService(inventoryService)
+
+	// Migrate clusters from config.yaml to inventory DB (one-time)
+	if err := migrateConfigClusters(ctx, inventoryService, cfg); err != nil {
+		slog.Error("failed to migrate clusters", "error", err)
+		// Non-fatal - continue with existing inventory
+	}
+
+	slog.Info("inventory enabled", "database", cfg.Inventory.DatabasePath)
+
+	// Load clusters from inventory and start poller
+	if cfg.Poller.Enabled && p != nil {
+		clusterConfigs, err := inventoryService.GetAllClusterConfigs(ctx, cfg.ClusterSecrets)
+		if err != nil {
+			slog.Error("failed to load cluster configs", "error", err)
+			os.Exit(1)
+		}
+
+		for _, clusterCfg := range clusterConfigs {
+			p.AddCluster(clusterCfg)
+			slog.Info("configured cluster", "name", clusterCfg.Name, "discovery", clusterCfg.DiscoveryNode)
+		}
+
+		p.Start(ctx)
+		defer p.Stop()
+
+		// Wait for initial discovery and poll
+		time.Sleep(2 * time.Second)
+	}
 
 	// Initialize activity logging
 	activityDB, err := activity.OpenDB(cfg.Activity.DatabasePath)
@@ -204,4 +235,51 @@ func main() {
 	}
 
 	slog.Info("goodbye!")
+}
+
+// migrateConfigClusters imports clusters from config.yaml into inventory DB (one-time migration)
+func migrateConfigClusters(ctx context.Context, svc *inventory.Service, cfg *config.Config) error {
+	// Check if inventory already has clusters
+	count, err := svc.ClusterCount(ctx)
+	if err != nil {
+		return fmt.Errorf("check cluster count: %w", err)
+	}
+	if count > 0 {
+		return nil // Already have clusters, skip migration
+	}
+
+	// Check if legacy clusters exist in config
+	if len(cfg.Clusters) == 0 {
+		return nil // Nothing to migrate
+	}
+
+	slog.Info("migrating clusters from config.yaml", "count", len(cfg.Clusters))
+
+	// Create "Default" datacenter
+	dc, err := svc.CreateDatacenter(ctx, inventory.CreateDatacenterRequest{
+		Name:        "Default",
+		Description: "Auto-created during migration from config.yaml",
+	})
+	if err != nil {
+		return fmt.Errorf("create default datacenter: %w", err)
+	}
+	slog.Info("created default datacenter", "id", dc.ID)
+
+	// Import each cluster
+	for _, legacy := range cfg.Clusters {
+		_, err := svc.CreateCluster(ctx, inventory.CreateClusterRequest{
+			Name:          legacy.Name,
+			DatacenterID:  &dc.ID,
+			DiscoveryNode: legacy.DiscoveryNode,
+			TokenID:       legacy.TokenID,
+			Insecure:      legacy.Insecure,
+		})
+		if err != nil {
+			slog.Warn("failed to migrate cluster", "name", legacy.Name, "error", err)
+			continue
+		}
+		slog.Info("migrated cluster", "name", legacy.Name, "datacenter", dc.Name)
+	}
+
+	return nil
 }
