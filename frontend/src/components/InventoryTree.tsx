@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useCluster } from '../context/ClusterContext';
 import { useFolders } from '../context/FolderContext';
 import type { SelectedObject } from '../context/ClusterContext';
-import type { Guest, Storage, ClusterInfo, NetworkInterface, Folder, TreeView, Datacenter, InventoryCluster, DatacenterTreeResponse } from '../types';
+import type { Guest, Storage, ClusterInfo, NetworkInterface, Folder, TreeView, Datacenter, InventoryCluster } from '../types';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { MigrateDialog } from './MigrateDialog';
 import { FolderDialog } from './FolderDialog';
