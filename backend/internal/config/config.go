@@ -12,6 +12,7 @@ import (
 // Config holds all application configuration
 type Config struct {
 	Clusters []ClusterConfig `yaml:"clusters"`
+	Poller   PollerConfig    `yaml:"poller"`
 	DRS      DRSConfig       `yaml:"drs"`
 	Server   ServerConfig    `yaml:"server"`
 	Metrics  MetricsConfig   `yaml:"metrics"`
@@ -19,6 +20,11 @@ type Config struct {
 
 	// Legacy: flat nodes array (auto-converted to single cluster)
 	Nodes []NodeConfig `yaml:"nodes,omitempty"`
+}
+
+// PollerConfig holds poller settings
+type PollerConfig struct {
+	Enabled bool `yaml:"enabled"` // Default: true
 }
 
 // FoldersConfig holds folder organization settings
@@ -151,9 +157,13 @@ func Load(path string) (*Config, error) {
 		cfg.Metrics.Retention.WeeklyMonths = 12
 	}
 
-	// Validate clusters
-	if len(cfg.Clusters) == 0 {
-		return nil, fmt.Errorf("at least one cluster must be configured")
+	// Poller defaults to enabled unless explicitly set to false
+	// We use a pointer check approach - if not in config, default to true
+	// For now, if clusters are configured, poller is enabled by default
+
+	// Validate clusters (only required if poller is enabled)
+	if len(cfg.Clusters) == 0 && cfg.Poller.Enabled {
+		return nil, fmt.Errorf("at least one cluster must be configured (or set poller.enabled: false for agent-only mode)")
 	}
 
 	for i, cluster := range cfg.Clusters {

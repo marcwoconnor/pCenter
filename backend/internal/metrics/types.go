@@ -111,6 +111,8 @@ var MetricTypes = []MetricType{
 	{16, "ceph_used", "bytes"},
 	{17, "ceph_avail", "bytes"},
 	{18, "ceph_health", "enum"},
+	{19, "pgpgin", "pages_per_sec"},  // memory pages read from disk
+	{20, "pgpgout", "pages_per_sec"}, // memory pages written to disk
 }
 
 // MetricTypeByName returns the metric type ID for a given name

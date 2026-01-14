@@ -27,6 +27,8 @@ type lastSample struct {
 	netout    int64
 	diskread  int64
 	diskwrite int64
+	pgpgin    int64
+	pgpgout   int64
 }
 
 // NewCollector creates a new metrics collector
@@ -205,6 +207,52 @@ func (c *Collector) collectNodes(cluster string, cs *state.ClusterStore, ts int6
 					ResourceID:   resID,
 					MetricTypeID: MetricTypeByName("loadavg_15m"),
 					Value:        la15,
+				})
+			}
+		}
+	}
+
+	// Memory paging rates from vmstats
+	vmStats := cs.GetVmStats()
+	for nodeName, stats := range vmStats {
+		if stats == nil {
+			continue
+		}
+
+		key := cluster + ":vmstat:" + nodeName
+		c.mu.Lock()
+		last, hasLast := c.lastSamples[key]
+		c.lastSamples[key] = lastSample{
+			timestamp: ts,
+			pgpgin:    stats.PgpgIn,
+			pgpgout:   stats.PgpgOut,
+		}
+		c.mu.Unlock()
+
+		if hasLast && ts > last.timestamp {
+			elapsed := float64(ts - last.timestamp)
+
+			// pgpgin rate (pages/sec) - convert to KB/sec (*4 since page size is 4KB)
+			if stats.PgpgIn >= last.pgpgin {
+				metrics = append(metrics, RawMetric{
+					Timestamp:    ts,
+					Cluster:      cluster,
+					ResourceType: "node",
+					ResourceID:   nodeName,
+					MetricTypeID: MetricTypeByName("pgpgin"),
+					Value:        float64(stats.PgpgIn-last.pgpgin) / elapsed,
+				})
+			}
+
+			// pgpgout rate (pages/sec) - convert to KB/sec (*4 since page size is 4KB)
+			if stats.PgpgOut >= last.pgpgout {
+				metrics = append(metrics, RawMetric{
+					Timestamp:    ts,
+					Cluster:      cluster,
+					ResourceType: "node",
+					ResourceID:   nodeName,
+					MetricTypeID: MetricTypeByName("pgpgout"),
+					Value:        float64(stats.PgpgOut-last.pgpgout) / elapsed,
 				})
 			}
 		}
@@ -440,13 +488,15 @@ func (c *Collector) collectContainers(cluster string, cs *state.ClusterStore, ts
 			})
 		}
 
-		// Network I/O rates
+		// Network and Disk I/O rates
 		c.mu.Lock()
 		last, hasLast := c.lastSamples[key]
 		c.lastSamples[key] = lastSample{
 			timestamp: ts,
 			netin:     ct.NetIn,
 			netout:    ct.NetOut,
+			diskread:  ct.DiskRead,
+			diskwrite: ct.DiskWrite,
 		}
 		c.mu.Unlock()
 
@@ -472,6 +522,28 @@ func (c *Collector) collectContainers(cluster string, cs *state.ClusterStore, ts
 					ResourceID:   resID,
 					MetricTypeID: MetricTypeByName("netout"),
 					Value:        float64(ct.NetOut-last.netout) / elapsed,
+				})
+			}
+
+			if ct.DiskRead >= last.diskread {
+				metrics = append(metrics, RawMetric{
+					Timestamp:    ts,
+					Cluster:      cluster,
+					ResourceType: "ct",
+					ResourceID:   resID,
+					MetricTypeID: MetricTypeByName("diskread"),
+					Value:        float64(ct.DiskRead-last.diskread) / elapsed,
+				})
+			}
+
+			if ct.DiskWrite >= last.diskwrite {
+				metrics = append(metrics, RawMetric{
+					Timestamp:    ts,
+					Cluster:      cluster,
+					ResourceType: "ct",
+					ResourceID:   resID,
+					MetricTypeID: MetricTypeByName("diskwrite"),
+					Value:        float64(ct.DiskWrite-last.diskwrite) / elapsed,
 				})
 			}
 		}

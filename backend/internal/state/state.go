@@ -29,6 +29,7 @@ type ClusterStore struct {
 	name        string
 	nodes       map[string]pve.Node        // keyed by node name
 	nodeDetails map[string]*pve.NodeStatus // keyed by node name (version, kernel, etc.)
+	vmStats     map[string]*pve.VmStats    // keyed by node name (memory paging stats)
 	vms         map[int]pve.VM             // keyed by VMID (unique within cluster)
 	containers  map[int]pve.Container      // keyed by VMID
 	storage     map[string][]pve.Storage   // keyed by node name
@@ -100,6 +101,7 @@ func (s *Store) GetOrCreateCluster(name string) *ClusterStore {
 		name:              name,
 		nodes:             make(map[string]pve.Node),
 		nodeDetails:       make(map[string]*pve.NodeStatus),
+		vmStats:           make(map[string]*pve.VmStats),
 		vms:               make(map[int]pve.VM),
 		containers:        make(map[int]pve.Container),
 		storage:           make(map[string][]pve.Storage),
@@ -203,6 +205,25 @@ func (cs *ClusterStore) GetNodeDetails() map[string]*pve.NodeStatus {
 	result := make(map[string]*pve.NodeStatus)
 	for name, details := range cs.nodeDetails {
 		result[name] = details
+	}
+	return result
+}
+
+// SetVmStats updates memory paging stats for a node
+func (cs *ClusterStore) SetVmStats(nodeName string, stats *pve.VmStats) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.vmStats[nodeName] = stats
+}
+
+// GetVmStats returns memory paging stats for all nodes
+func (cs *ClusterStore) GetVmStats() map[string]*pve.VmStats {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+
+	result := make(map[string]*pve.VmStats)
+	for name, stats := range cs.vmStats {
+		result[name] = stats
 	}
 	return result
 }

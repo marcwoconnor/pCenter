@@ -44,6 +44,8 @@ const METRIC_LABELS: Record<string, string> = {
   netout: 'Net Out',
   diskread: 'Disk Read',
   diskwrite: 'Disk Write',
+  pgpgin: 'Page In',
+  pgpgout: 'Page Out',
   swap_percent: 'Swap',
   ceph_health: 'Ceph Health',
 };
@@ -63,8 +65,19 @@ function formatValue(value: number, unit: string): string {
   if (unit === 'percent') return `${value.toFixed(1)}%`;
   if (unit === 'bytes') return formatBytes(value);
   if (unit === 'bytes_per_sec') return `${formatBytes(value)}/s`;
+  if (unit === 'pages_per_sec') return `${formatPages(value)}/s`;
   if (unit === 'ratio') return value.toFixed(2);
   return value.toFixed(1);
+}
+
+function formatPages(pages: number): string {
+  // Convert pages to KB (page size = 4KB typically)
+  const kb = pages * 4;
+  if (kb < 1024) return `${kb.toFixed(0)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toFixed(1)} MB`;
+  const gb = mb / 1024;
+  return `${gb.toFixed(2)} GB`;
 }
 
 function formatBytes(bytes: number): string {

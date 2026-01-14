@@ -1304,3 +1304,55 @@ func (c *Client) GetSDNControllers(ctx context.Context) ([]SDNController, error)
 	}
 	return controllers, nil
 }
+
+// --- Memory stats from /proc/vmstat ---
+
+// VmStats contains memory activity counters from /proc/vmstat
+type VmStats struct {
+	Node      string `json:"node"`
+	PgpgIn    int64  `json:"pgpgin"`    // pages paged in from disk
+	PgpgOut   int64  `json:"pgpgout"`   // pages paged out to disk
+	PswpIn    int64  `json:"pswpin"`    // pages swapped in
+	PswpOut   int64  `json:"pswpout"`   // pages swapped out
+	PgFault   int64  `json:"pgfault"`   // page faults
+	PgMajFault int64 `json:"pgmajfault"` // major page faults (require I/O)
+}
+
+// GetVmStats fetches /proc/vmstat counters from the node via SSH
+func (c *Client) GetVmStats(ctx context.Context) (*VmStats, error) {
+	host := c.getHostFromURL()
+	if host == "" {
+		return nil, fmt.Errorf("could not determine node host")
+	}
+
+	output, err := runSSHCommand(ctx, host, "cat /proc/vmstat | grep -E '^(pgpgin|pgpgout|pswpin|pswpout|pgfault|pgmajfault) '")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get vmstat: %w", err)
+	}
+
+	stats := &VmStats{Node: c.nodeName}
+	for _, line := range strings.Split(output, "\n") {
+		parts := strings.Fields(line)
+		if len(parts) != 2 {
+			continue
+		}
+		var val int64
+		fmt.Sscanf(parts[1], "%d", &val)
+		switch parts[0] {
+		case "pgpgin":
+			stats.PgpgIn = val
+		case "pgpgout":
+			stats.PgpgOut = val
+		case "pswpin":
+			stats.PswpIn = val
+		case "pswpout":
+			stats.PswpOut = val
+		case "pgfault":
+			stats.PgFault = val
+		case "pgmajfault":
+			stats.PgMajFault = val
+		}
+	}
+
+	return stats, nil
+}

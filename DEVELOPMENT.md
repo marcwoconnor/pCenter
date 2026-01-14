@@ -2,6 +2,15 @@
 
 Proxmox datacenter manager - vCenter alternative
 
+## Project Evolution
+
+**v1 (Current - pcenter @ 10.31.11.50):** Polling architecture - pCenter pulls from Proxmox nodes
+**v2 (In Development - pcenter2 @ 10.31.11.51):** Agent architecture - pve-agent pushes to pCenter
+
+### Key Planning Documents
+- `docs/pve-agent-spec.md` - Complete Proxmox API surface (200+ endpoints)
+- `docs/pve-agent-project-plan.md` - Full implementation plan and architecture
+
 ## Stack
 - **Backend**: Go 1.22+ (Chi router, SQLite)
 - **Frontend**: React 18 + TypeScript + Vite + TailwindCSS + shadcn/ui
@@ -233,3 +242,63 @@ metrics:
      }, 30000);
    }, []); // Empty deps - runs once
    ```
+
+## PVE Agent (v2 Architecture)
+
+### Overview
+Replace polling with push-based agents running on each Proxmox node.
+
+```
+pve-agent (on each PVE node)
+    │
+    ├── Collects: node status, VMs, CTs, storage, ceph, /proc metrics
+    ├── Pushes: WebSocket to pCenter every 5 seconds
+    └── Executes: Commands received from pCenter (start/stop/migrate/etc)
+```
+
+### Benefits over Polling
+- Real-time updates (instant vs 5-sec delay)
+- No SSH needed (agent reads /proc locally)
+- Simpler firewall (agents connect outbound)
+- Better scalability (distributed collection)
+- Event-driven (VM started → immediate notification)
+
+### Agent Structure
+```
+pve-agent/
+├── cmd/pve-agent/main.go      # Entry point
+├── internal/
+│   ├── collector/             # Gathers data from local PVE
+│   ├── executor/              # Runs commands from pCenter
+│   ├── client/                # WebSocket to pCenter
+│   └── types/                 # Shared types
+├── pve-agent.service          # systemd unit
+└── go.mod
+```
+
+### pCenter Changes for v2
+```
+backend/internal/
+├── agent/
+│   ├── hub.go                 # WebSocket hub for agents
+│   ├── protocol.go            # Message types
+│   └── handler.go             # Process agent data
+```
+
+### Deployment Commands
+```bash
+# Build agent
+cd pve-agent && GOOS=linux go build -o pve-agent ./cmd/pve-agent
+
+# Deploy to node
+scp pve-agent root@pve04:/usr/local/bin/
+scp pve-agent.service root@pve04:/etc/systemd/system/
+ssh root@pve04 "systemctl daemon-reload && systemctl enable --now pve-agent"
+
+# Check agent status
+ssh root@pve04 "journalctl -u pve-agent -f"
+```
+
+### Development Instance
+- **pcenter2**: New LXC for v2 development (separate from production v1)
+- Keep v1 running at pcenter (10.31.11.50) during development

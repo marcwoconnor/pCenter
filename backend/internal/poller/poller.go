@@ -295,17 +295,18 @@ func (cp *ClusterPoller) fetchNode(ctx context.Context, client *pve.Client) {
 	var (
 		node        pve.Node
 		nodeDetails *pve.NodeStatus
+		vmStats     *pve.VmStats
 		vms         []pve.VM
 		cts         []pve.Container
 		storage     []pve.Storage
 		ceph        *pve.CephStatus
 		netIfaces   []pve.NetworkInterface
 
-		nodeErr, detailsErr, vmErr, ctErr, storageErr, cephErr, netErr error
-		wg                                                              sync.WaitGroup
+		nodeErr, detailsErr, vmStatsErr, vmErr, ctErr, storageErr, cephErr, netErr error
+		wg                                                                          sync.WaitGroup
 	)
 
-	wg.Add(7)
+	wg.Add(8)
 
 	go func() {
 		defer wg.Done()
@@ -320,6 +321,11 @@ func (cp *ClusterPoller) fetchNode(ctx context.Context, client *pve.Client) {
 	go func() {
 		defer wg.Done()
 		nodeDetails, detailsErr = client.GetNodeDetails(fetchCtx)
+	}()
+
+	go func() {
+		defer wg.Done()
+		vmStats, vmStatsErr = client.GetVmStats(fetchCtx)
 	}()
 
 	go func() {
@@ -376,6 +382,9 @@ func (cp *ClusterPoller) fetchNode(ctx context.Context, client *pve.Client) {
 	if detailsErr != nil {
 		slog.Warn("failed to fetch node details", "cluster", cp.name, "node", nodeName, "error", detailsErr)
 	}
+	if vmStatsErr != nil {
+		slog.Warn("failed to fetch vmstats", "cluster", cp.name, "node", nodeName, "error", vmStatsErr)
+	}
 
 	// Update cluster state
 	cp.clusterStore.UpdateNode(nodeName, node, vms, cts, storage, ceph)
@@ -388,6 +397,11 @@ func (cp *ClusterPoller) fetchNode(ctx context.Context, client *pve.Client) {
 	// Update node details (version, kernel, etc.)
 	if detailsErr == nil && nodeDetails != nil {
 		cp.clusterStore.SetNodeDetails(nodeName, nodeDetails)
+	}
+
+	// Update vmstats (memory paging counters)
+	if vmStatsErr == nil && vmStats != nil {
+		cp.clusterStore.SetVmStats(nodeName, vmStats)
 	}
 
 	slog.Debug("polled node",

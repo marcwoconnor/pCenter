@@ -68,25 +68,27 @@ type VM struct {
 
 // Container represents an LXC container
 type Container struct {
-	Cluster string  `json:"cluster,omitempty"` // populated by us
-	VMID    int     `json:"vmid"`
-	Name    string  `json:"name"`
-	Node    string  `json:"node,omitempty"` // populated by us
-	Status  string  `json:"status"`         // running, stopped
-	CPU     float64 `json:"cpu"`
-	CPUs    int     `json:"cpus"`
-	Mem     int64   `json:"mem"`
-	MaxMem  int64   `json:"maxmem"`
-	Swap    int64   `json:"swap"`
-	MaxSwap int64   `json:"maxswap"`
-	Disk    int64   `json:"disk"`
-	MaxDisk int64   `json:"maxdisk"`
-	Uptime  int64   `json:"uptime"`
-	NetIn   int64   `json:"netin"`
-	NetOut  int64   `json:"netout"`
-	Type    string  `json:"type,omitempty"` // lxc
-	Tags    string  `json:"tags,omitempty"`
-	HAState string  `json:"ha_state,omitempty"` // started, stopped, etc if HA managed
+	Cluster   string  `json:"cluster,omitempty"` // populated by us
+	VMID      int     `json:"vmid"`
+	Name      string  `json:"name"`
+	Node      string  `json:"node,omitempty"` // populated by us
+	Status    string  `json:"status"`         // running, stopped
+	CPU       float64 `json:"cpu"`
+	CPUs      int     `json:"cpus"`
+	Mem       int64   `json:"mem"`
+	MaxMem    int64   `json:"maxmem"`
+	Swap      int64   `json:"swap"`
+	MaxSwap   int64   `json:"maxswap"`
+	Disk      int64   `json:"disk"`
+	MaxDisk   int64   `json:"maxdisk"`
+	Uptime    int64   `json:"uptime"`
+	NetIn     int64   `json:"netin"`
+	NetOut    int64   `json:"netout"`
+	DiskRead  int64   `json:"diskread"`
+	DiskWrite int64   `json:"diskwrite"`
+	Type      string  `json:"type,omitempty"` // lxc
+	Tags      string  `json:"tags,omitempty"`
+	HAState   string  `json:"ha_state,omitempty"` // started, stopped, etc if HA managed
 }
 
 // Storage represents a storage location

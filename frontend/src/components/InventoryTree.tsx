@@ -312,11 +312,10 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
   const getGuestMenuItems = (guest: Guest, treeView: TreeView): MenuItem[] => {
     const isRunning = guest.status === 'running';
     const type = guest.type === 'qemu' ? 'vm' : 'ct';
-    const folders = treeView === 'hosts' ? hostsTree : vmsTree;
-    const flatFolders = flattenFolders(folders);
 
-    // Build "Move to" submenu
-    const moveToSubmenu: MenuItem[] = [
+    // "Move to" only available in VMs & Templates view (vCenter behavior)
+    const flatFolders = treeView === 'vms' ? flattenFolders(vmsTree) : [];
+    const moveToSubmenu: MenuItem[] = treeView === 'vms' ? [
       {
         label: '(Root)',
         icon: '🏢',
@@ -350,7 +349,7 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
           }
         },
       })),
-    ];
+    ] : [];
 
     return [
       {
@@ -383,12 +382,13 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
         icon: '↔',
         action: () => setMigrateGuest(guest),
       },
-      {
+      // "Move to" only in VMs & Templates view (vCenter behavior)
+      ...(treeView === 'vms' ? [{
         label: 'Move to',
         icon: '📂',
         action: () => {},
         submenu: moveToSubmenu,
-      },
+      }] : []),
       { label: '', action: () => {}, divider: true },
       {
         label: 'Snapshot',
@@ -544,8 +544,9 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
     ];
   };
 
-  // Get datacenter/root context menu items
+  // Get datacenter/root context menu items (folders only in VMs view per vCenter)
   const getRootMenuItems = (treeView: TreeView): MenuItem[] => {
+    if (treeView !== 'vms') return [];
     return [
       {
         label: 'New Folder',
@@ -687,7 +688,7 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
     </TreeNode>
   );
 
-  // Render guest node with context menu - now draggable
+  // Render guest node with context menu - draggable only in VMs view
   const renderGuestNode = (guest: Guest, type: 'vm' | 'ct', treeView: TreeView) => (
     <TreeNode
       key={`${guest.cluster}-${guest.vmid}`}
@@ -705,17 +706,17 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
       isSelected={isSelected({ type, id: guest.vmid, name: guest.name, node: guest.node, cluster: guest.cluster })}
       onClick={() => setSelectedObject({ type, id: guest.vmid, name: guest.name, node: guest.node, cluster: guest.cluster })}
       onContextMenu={(e) => showContextMenu(e, getGuestMenuItems(guest, treeView))}
-      draggable
-      dragData={{
+      draggable={treeView === 'vms'}
+      dragData={treeView === 'vms' ? {
         type: 'resource',
         resourceType: type,
         resourceId: guest.vmid.toString(),
         cluster: guest.cluster,
-      }}
+      } : undefined}
     />
   );
 
-  // Hosts & Clusters View - Now with cluster hierarchy and folders
+  // Hosts & Clusters View - physical infrastructure hierarchy (no folders per vCenter)
   if (view === 'hosts') {
     const totalNodes = sortedNodes.length;
 
@@ -738,27 +739,14 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
             }}
           />
         )}
-        {folderDialog && (
-          <FolderDialog
-            mode={folderDialog.mode}
-            initialName={folderDialog.initialName}
-            onSubmit={handleFolderDialogSubmit}
-            onClose={() => setFolderDialog(null)}
-          />
-        )}
         <TreeNode
           icon="🏢"
           label="pCenter"
           defaultExpanded
-          count={totalNodes + hostsTree.length}
+          count={totalNodes}
           isSelected={isSelected({ type: 'datacenter', id: 'datacenter', name: 'pCenter' })}
           onClick={() => setSelectedObject({ type: 'datacenter', id: 'datacenter', name: 'pCenter' })}
-          onContextMenu={(e) => showContextMenu(e, getRootMenuItems('hosts'))}
-          droppable
-          onDrop={(data) => handleRootDrop('hosts', data)}
         >
-          {/* Render folders first */}
-          {hostsTree.map((folder) => renderFolderNode(folder, 'hosts'))}
           {sortedClusters.length === 0 ? (
             // Fallback if no clusters defined - show nodes directly
             sortedNodes.map((node) => {

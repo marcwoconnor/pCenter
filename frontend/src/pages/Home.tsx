@@ -249,26 +249,118 @@ function MaintenanceModal({
 
 type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d';
 
+// Type for metrics series
+type MetricsSeries = { metric: string; resource_id: string; unit: string; data: { ts: number; value: number }[] };
+type MetricsData = { series: MetricsSeries[] } | null;
+
+// Aggregate network metrics by node (sum all VMs/CTs on each node)
+function aggregateByNode(
+  series: MetricsSeries[],
+  metric: string,
+  vmidToNode: Map<string, string>
+): MetricsSeries[] {
+  // Group series by node
+  const nodeData = new Map<string, Map<number, number>>();
+
+  for (const s of series) {
+    if (s.metric !== metric) continue;
+    const node = vmidToNode.get(s.resource_id) || 'unknown';
+
+    if (!nodeData.has(node)) {
+      nodeData.set(node, new Map());
+    }
+    const nodeMap = nodeData.get(node)!;
+
+    for (const point of s.data) {
+      const existing = nodeMap.get(point.ts) || 0;
+      nodeMap.set(point.ts, existing + point.value);
+    }
+  }
+
+  // Convert back to series format
+  const result: MetricsSeries[] = [];
+  for (const [node, dataMap] of nodeData) {
+    const data = Array.from(dataMap.entries())
+      .map(([ts, value]) => ({ ts, value }))
+      .sort((a, b) => a.ts - b.ts);
+    result.push({
+      metric,
+      resource_id: node,
+      unit: 'bytes_per_sec',
+      data,
+    });
+  }
+
+  return result;
+}
+
 // Memoized metrics panel to prevent re-renders from WebSocket updates
 const MetricsPanel = memo(function MetricsPanel({
-  metricsData,
-  metricsLoading,
+  nodeMetrics,
+  vmNetMetrics,
+  ctNetMetrics,
+  guests,
+  loading,
   timeRange,
 }: {
-  metricsData: { series: { metric: string; resource_id: string; unit: string; data: { ts: number; value: number }[] }[] } | null;
-  metricsLoading: boolean;
+  nodeMetrics: MetricsData;
+  vmNetMetrics: MetricsData;
+  ctNetMetrics: MetricsData;
+  guests: { vmid: number; node: string }[];
+  loading: boolean;
   timeRange: TimeRange;
 }) {
+  // Build vmid -> node lookup
+  const vmidToNode = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const g of guests) {
+      map.set(g.vmid.toString(), g.node);
+    }
+    return map;
+  }, [guests]);
+
+  // Node metrics
   const cpuSeries = useMemo(
-    () => metricsData?.series?.filter(s => s.metric === 'cpu') ?? [],
-    [metricsData?.series]
+    () => nodeMetrics?.series?.filter(s => s.metric === 'cpu') ?? [],
+    [nodeMetrics?.series]
   );
-  const memSeries = useMemo(
-    () => metricsData?.series?.filter(s => s.metric === 'mem_percent') ?? [],
-    [metricsData?.series]
+  const pgpgInSeries = useMemo(
+    () => nodeMetrics?.series?.filter(s => s.metric === 'pgpgin') ?? [],
+    [nodeMetrics?.series]
+  );
+  const pgpgOutSeries = useMemo(
+    () => nodeMetrics?.series?.filter(s => s.metric === 'pgpgout') ?? [],
+    [nodeMetrics?.series]
   );
 
-  if (metricsLoading) {
+  // Guest I/O metrics - aggregate by node
+  const allGuestSeries = useMemo(() => {
+    const vmSeries = vmNetMetrics?.series ?? [];
+    const ctSeries = ctNetMetrics?.series ?? [];
+    return [...vmSeries, ...ctSeries];
+  }, [vmNetMetrics?.series, ctNetMetrics?.series]);
+
+  // Network I/O by node
+  const netInByNode = useMemo(
+    () => aggregateByNode(allGuestSeries, 'netin', vmidToNode),
+    [allGuestSeries, vmidToNode]
+  );
+  const netOutByNode = useMemo(
+    () => aggregateByNode(allGuestSeries, 'netout', vmidToNode),
+    [allGuestSeries, vmidToNode]
+  );
+
+  // Disk I/O by node
+  const diskReadByNode = useMemo(
+    () => aggregateByNode(allGuestSeries, 'diskread', vmidToNode),
+    [allGuestSeries, vmidToNode]
+  );
+  const diskWriteByNode = useMemo(
+    () => aggregateByNode(allGuestSeries, 'diskwrite', vmidToNode),
+    [allGuestSeries, vmidToNode]
+  );
+
+  if (loading) {
     return (
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
         <div className="text-sm text-gray-500 text-center py-8">Loading metrics...</div>
@@ -276,7 +368,12 @@ const MetricsPanel = memo(function MetricsPanel({
     );
   }
 
-  if (!metricsData?.series || metricsData.series.length === 0) {
+  const hasNodeMetrics = nodeMetrics?.series && nodeMetrics.series.length > 0;
+  const hasMemMetrics = pgpgInSeries.length > 0 || pgpgOutSeries.length > 0;
+  const hasNetMetrics = netInByNode.length > 0 || netOutByNode.length > 0;
+  const hasDiskMetrics = diskReadByNode.length > 0 || diskWriteByNode.length > 0;
+
+  if (!hasNodeMetrics && !hasMemMetrics && !hasNetMetrics && !hasDiskMetrics) {
     return (
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
         <div className="text-sm text-gray-500 text-center py-8">
@@ -288,26 +385,45 @@ const MetricsPanel = memo(function MetricsPanel({
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-      <div className="space-y-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <MetricsChart
           series={cpuSeries}
           timeRange={timeRange}
           title="CPU Usage (%)"
-          height={180}
+          height={160}
         />
-        <MetricsChart
-          series={memSeries}
-          timeRange={timeRange}
-          title="Memory Usage (%)"
-          height={180}
-        />
+        {hasMemMetrics && (
+          <MetricsChart
+            series={[...pgpgInSeries, ...pgpgOutSeries]}
+            timeRange={timeRange}
+            title="Memory I/O"
+            height={160}
+          />
+        )}
+        {hasDiskMetrics && (
+          <MetricsChart
+            series={[...diskReadByNode, ...diskWriteByNode]}
+            timeRange={timeRange}
+            title="Disk I/O"
+            height={160}
+          />
+        )}
+        {hasNetMetrics && (
+          <MetricsChart
+            series={[...netInByNode, ...netOutByNode]}
+            timeRange={timeRange}
+            title="Network I/O"
+            height={160}
+          />
+        )}
       </div>
     </div>
   );
 });
 
 // Stable reference for metrics to fetch
-const DEFAULT_METRICS = ['cpu', 'mem_percent'] as const;
+const NODE_METRICS = ['cpu', 'pgpgin', 'pgpgout'] as const;
+const GUEST_METRICS = ['netin', 'netout', 'diskread', 'diskwrite'] as const;
 
 export function Home() {
   const { summary, nodes, guests, ceph, drsRecommendations, isLoading } = useCluster();
@@ -317,11 +433,29 @@ export function Home() {
   // Memoize cluster name to prevent unnecessary refetches
   const clusterName = useMemo(() => nodes[0]?.cluster || '', [nodes[0]?.cluster]);
 
-  // Fetch cluster-wide metrics
-  const { data: metricsData, loading: metricsLoading } = useMetrics({
+  // Fetch node metrics (cpu, mem, disk)
+  const { data: nodeMetrics, loading: nodeMetricsLoading } = useMetrics({
     cluster: clusterName,
     resourceType: 'node',
-    metrics: DEFAULT_METRICS as unknown as string[],
+    metrics: NODE_METRICS as unknown as string[],
+    timeRange,
+    enabled: !!clusterName,
+  });
+
+  // Fetch VM network metrics (aggregate across all VMs)
+  const { data: vmNetMetrics, loading: vmNetLoading } = useMetrics({
+    cluster: clusterName,
+    resourceType: 'vm',
+    metrics: GUEST_METRICS as unknown as string[],
+    timeRange,
+    enabled: !!clusterName,
+  });
+
+  // Fetch CT network metrics
+  const { data: ctNetMetrics, loading: ctNetLoading } = useMetrics({
+    cluster: clusterName,
+    resourceType: 'ct',
+    metrics: GUEST_METRICS as unknown as string[],
     timeRange,
     enabled: !!clusterName,
   });
@@ -558,8 +692,11 @@ export function Home() {
           </div>
         </div>
         <MetricsPanel
-          metricsData={metricsData}
-          metricsLoading={metricsLoading}
+          nodeMetrics={nodeMetrics}
+          vmNetMetrics={vmNetMetrics}
+          ctNetMetrics={ctNetMetrics}
+          guests={guests}
+          loading={nodeMetricsLoading || vmNetLoading || ctNetLoading}
           timeRange={timeRange}
         />
       </div>
