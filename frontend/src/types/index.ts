@@ -19,6 +19,14 @@ export interface Node {
   loadavg?: string[];
 }
 
+export interface GuestNIC {
+  name: string;    // net0, net1, etc.
+  bridge: string;  // vmbr0, vmbr1, etc.
+  mac?: string;
+  model?: string;  // virtio, e1000, etc.
+  tag?: number;    // VLAN tag
+}
+
 export interface Guest {
   cluster: string;
   vmid: number;
@@ -35,6 +43,7 @@ export interface Guest {
   uptime: number;
   tags?: string;
   ha_state?: string;
+  nics?: GuestNIC[];
 }
 
 export interface VM {

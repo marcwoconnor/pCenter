@@ -43,52 +43,63 @@ type NodeStatusResponse struct {
 	LoadAvg []string `json:"loadavg"`
 }
 
+// GuestNIC represents a network interface on a VM/CT
+type GuestNIC struct {
+	Name   string `json:"name"`             // net0, net1, etc.
+	Bridge string `json:"bridge"`           // vmbr0, vmbr1, etc.
+	MAC    string `json:"mac,omitempty"`    // MAC address
+	Model  string `json:"model,omitempty"`  // virtio, e1000, etc. (VMs only)
+	Tag    int    `json:"tag,omitempty"`    // VLAN tag
+}
+
 // VM represents a QEMU virtual machine
 type VM struct {
-	Cluster   string  `json:"cluster,omitempty"` // populated by us
-	VMID      int     `json:"vmid"`
-	Name      string  `json:"name"`
-	Node      string  `json:"node,omitempty"` // populated by us
-	Status    string  `json:"status"`         // running, stopped, paused
-	CPU       float64 `json:"cpu"`
-	CPUs      int     `json:"cpus"`
-	Mem       int64   `json:"mem"`
-	MaxMem    int64   `json:"maxmem"`
-	Disk      int64   `json:"disk"`
-	MaxDisk   int64   `json:"maxdisk"`
-	Uptime    int64   `json:"uptime"`
-	NetIn     int64   `json:"netin"`
-	NetOut    int64   `json:"netout"`
-	DiskRead  int64   `json:"diskread"`
-	DiskWrite int64   `json:"diskwrite"`
-	Template  bool    `json:"template"`
-	Tags      string  `json:"tags,omitempty"`
-	HAState   string  `json:"ha_state,omitempty"` // started, stopped, etc if HA managed
+	Cluster   string     `json:"cluster,omitempty"` // populated by us
+	VMID      int        `json:"vmid"`
+	Name      string     `json:"name"`
+	Node      string     `json:"node,omitempty"` // populated by us
+	Status    string     `json:"status"`         // running, stopped, paused
+	CPU       float64    `json:"cpu"`
+	CPUs      int        `json:"cpus"`
+	Mem       int64      `json:"mem"`
+	MaxMem    int64      `json:"maxmem"`
+	Disk      int64      `json:"disk"`
+	MaxDisk   int64      `json:"maxdisk"`
+	Uptime    int64      `json:"uptime"`
+	NetIn     int64      `json:"netin"`
+	NetOut    int64      `json:"netout"`
+	DiskRead  int64      `json:"diskread"`
+	DiskWrite int64      `json:"diskwrite"`
+	Template  bool       `json:"template"`
+	Tags      string     `json:"tags,omitempty"`
+	HAState   string     `json:"ha_state,omitempty"` // started, stopped, etc if HA managed
+	NICs      []GuestNIC `json:"nics,omitempty"`     // network interfaces
 }
 
 // Container represents an LXC container
 type Container struct {
-	Cluster   string  `json:"cluster,omitempty"` // populated by us
-	VMID      int     `json:"vmid"`
-	Name      string  `json:"name"`
-	Node      string  `json:"node,omitempty"` // populated by us
-	Status    string  `json:"status"`         // running, stopped
-	CPU       float64 `json:"cpu"`
-	CPUs      int     `json:"cpus"`
-	Mem       int64   `json:"mem"`
-	MaxMem    int64   `json:"maxmem"`
-	Swap      int64   `json:"swap"`
-	MaxSwap   int64   `json:"maxswap"`
-	Disk      int64   `json:"disk"`
-	MaxDisk   int64   `json:"maxdisk"`
-	Uptime    int64   `json:"uptime"`
-	NetIn     int64   `json:"netin"`
-	NetOut    int64   `json:"netout"`
-	DiskRead  int64   `json:"diskread"`
-	DiskWrite int64   `json:"diskwrite"`
-	Type      string  `json:"type,omitempty"` // lxc
-	Tags      string  `json:"tags,omitempty"`
-	HAState   string  `json:"ha_state,omitempty"` // started, stopped, etc if HA managed
+	Cluster   string     `json:"cluster,omitempty"` // populated by us
+	VMID      int        `json:"vmid"`
+	Name      string     `json:"name"`
+	Node      string     `json:"node,omitempty"` // populated by us
+	Status    string     `json:"status"`         // running, stopped
+	CPU       float64    `json:"cpu"`
+	CPUs      int        `json:"cpus"`
+	Mem       int64      `json:"mem"`
+	MaxMem    int64      `json:"maxmem"`
+	Swap      int64      `json:"swap"`
+	MaxSwap   int64      `json:"maxswap"`
+	Disk      int64      `json:"disk"`
+	MaxDisk   int64      `json:"maxdisk"`
+	Uptime    int64      `json:"uptime"`
+	NetIn     int64      `json:"netin"`
+	NetOut    int64      `json:"netout"`
+	DiskRead  int64      `json:"diskread"`
+	DiskWrite int64      `json:"diskwrite"`
+	Type      string     `json:"type,omitempty"` // lxc
+	Tags      string     `json:"tags,omitempty"`
+	HAState   string     `json:"ha_state,omitempty"` // started, stopped, etc if HA managed
+	NICs      []GuestNIC `json:"nics,omitempty"`     // network interfaces
 }
 
 // Storage represents a storage location

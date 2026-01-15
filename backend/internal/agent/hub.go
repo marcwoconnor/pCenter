@@ -193,42 +193,52 @@ type NodeStatus struct {
 	LoadAvg    []string `json:"loadavg,omitempty"`
 }
 
+type GuestNIC struct {
+	Name   string `json:"name"`
+	Bridge string `json:"bridge"`
+	MAC    string `json:"mac,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Tag    int    `json:"tag,omitempty"`
+}
+
 type VMStatus struct {
-	VMID      int     `json:"vmid"`
-	Name      string  `json:"name"`
-	Status    string  `json:"status"`
-	CPU       float64 `json:"cpu"`
-	CPUs      int     `json:"cpus"`
-	Mem       int64   `json:"mem"`
-	MaxMem    int64   `json:"maxmem"`
-	Disk      int64   `json:"disk"`
-	MaxDisk   int64   `json:"maxdisk"`
-	NetIn     int64   `json:"netin"`
-	NetOut    int64   `json:"netout"`
-	DiskRead  int64   `json:"diskread"`
-	DiskWrite int64   `json:"diskwrite"`
-	Uptime    int64   `json:"uptime"`
-	Template  bool    `json:"template"`
+	VMID      int        `json:"vmid"`
+	Name      string     `json:"name"`
+	Status    string     `json:"status"`
+	CPU       float64    `json:"cpu"`
+	CPUs      int        `json:"cpus"`
+	Mem       int64      `json:"mem"`
+	MaxMem    int64      `json:"maxmem"`
+	Disk      int64      `json:"disk"`
+	MaxDisk   int64      `json:"maxdisk"`
+	NetIn     int64      `json:"netin"`
+	NetOut    int64      `json:"netout"`
+	DiskRead  int64      `json:"diskread"`
+	DiskWrite int64      `json:"diskwrite"`
+	Uptime    int64      `json:"uptime"`
+	Template  bool       `json:"template"`
+	NICs      []GuestNIC `json:"nics,omitempty"`
 }
 
 type CTStatus struct {
-	VMID      int     `json:"vmid"`
-	Name      string  `json:"name"`
-	Status    string  `json:"status"`
-	CPU       float64 `json:"cpu"`
-	CPUs      int     `json:"cpus"`
-	Mem       int64   `json:"mem"`
-	MaxMem    int64   `json:"maxmem"`
-	Disk      int64   `json:"disk"`
-	MaxDisk   int64   `json:"maxdisk"`
-	Swap      int64   `json:"swap"`
-	MaxSwap   int64   `json:"maxswap"`
-	NetIn     int64   `json:"netin"`
-	NetOut    int64   `json:"netout"`
-	DiskRead  int64   `json:"diskread"`
-	DiskWrite int64   `json:"diskwrite"`
-	Uptime    int64   `json:"uptime"`
-	Template  bool    `json:"template"`
+	VMID      int        `json:"vmid"`
+	Name      string     `json:"name"`
+	Status    string     `json:"status"`
+	CPU       float64    `json:"cpu"`
+	CPUs      int        `json:"cpus"`
+	Mem       int64      `json:"mem"`
+	MaxMem    int64      `json:"maxmem"`
+	Disk      int64      `json:"disk"`
+	MaxDisk   int64      `json:"maxdisk"`
+	Swap      int64      `json:"swap"`
+	MaxSwap   int64      `json:"maxswap"`
+	NetIn     int64      `json:"netin"`
+	NetOut    int64      `json:"netout"`
+	DiskRead  int64      `json:"diskread"`
+	DiskWrite int64      `json:"diskwrite"`
+	Uptime    int64      `json:"uptime"`
+	Template  bool       `json:"template"`
+	NICs      []GuestNIC `json:"nics,omitempty"`
 }
 
 type StorageStatus struct {
@@ -359,6 +369,17 @@ func (a *AgentConn) handleStatus(data json.RawMessage) {
 	// Convert VMs
 	vms := make([]pve.VM, len(status.VMs))
 	for i, vm := range status.VMs {
+		// Convert NICs
+		nics := make([]pve.GuestNIC, len(vm.NICs))
+		for j, nic := range vm.NICs {
+			nics[j] = pve.GuestNIC{
+				Name:   nic.Name,
+				Bridge: nic.Bridge,
+				MAC:    nic.MAC,
+				Model:  nic.Model,
+				Tag:    nic.Tag,
+			}
+		}
 		vms[i] = pve.VM{
 			VMID:      vm.VMID,
 			Name:      vm.Name,
@@ -377,12 +398,24 @@ func (a *AgentConn) handleStatus(data json.RawMessage) {
 			DiskWrite: vm.DiskWrite,
 			Uptime:    vm.Uptime,
 			Template:  vm.Template,
+			NICs:      nics,
 		}
 	}
 
 	// Convert containers
 	cts := make([]pve.Container, len(status.Containers))
 	for i, ct := range status.Containers {
+		// Convert NICs
+		nics := make([]pve.GuestNIC, len(ct.NICs))
+		for j, nic := range ct.NICs {
+			nics[j] = pve.GuestNIC{
+				Name:   nic.Name,
+				Bridge: nic.Bridge,
+				MAC:    nic.MAC,
+				Model:  nic.Model,
+				Tag:    nic.Tag,
+			}
+		}
 		cts[i] = pve.Container{
 			VMID:      ct.VMID,
 			Name:      ct.Name,
@@ -402,6 +435,7 @@ func (a *AgentConn) handleStatus(data json.RawMessage) {
 			DiskRead:  ct.DiskRead,
 			DiskWrite: ct.DiskWrite,
 			Uptime:    ct.Uptime,
+			NICs:      nics,
 		}
 	}
 

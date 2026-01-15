@@ -3,12 +3,12 @@ import { Layout } from '../components/Layout';
 import { InventoryTree } from '../components/InventoryTree';
 import { useCluster } from '../context/ClusterContext';
 import { api } from '../api/client';
-import type { NetworkInterface, SDNZone, SDNVNet, SDNSubnet } from '../types';
+import type { NetworkInterface, SDNZone, SDNVNet, SDNSubnet, Guest } from '../types';
 
 type TabType = 'topology' | 'interfaces' | 'zones' | 'vnets';
 
 export function NetworkPage() {
-  const { clusters, nodes } = useCluster();
+  const { clusters, nodes, guests } = useCluster();
   const [filter, setFilter] = useState('');
   const [activeTab, setActiveTab] = useState<TabType>('topology');
   const [isLoading, setIsLoading] = useState(true);
@@ -180,6 +180,7 @@ export function NetworkPage() {
                       key={nodeName}
                       nodeName={nodeName}
                       interfaces={interfaces.filter(i => i.node === nodeName)}
+                      guests={guests.filter(g => g.node === nodeName)}
                     />
                   ))
                 )}
@@ -426,9 +427,11 @@ function InterfaceDetails({ iface }: { iface: NetworkInterface }) {
 function NodeTopology({
   nodeName,
   interfaces,
+  guests,
 }: {
   nodeName: string;
   interfaces: NetworkInterface[];
+  guests: Guest[];
 }) {
   // Get bridges, VLANs, and physical NICs - sorted for stable render order
   const bridgeIfaces = interfaces
@@ -438,6 +441,25 @@ function NodeTopology({
     .filter(i => i.type === 'vlan')
     .sort((a, b) => a.iface.localeCompare(b.iface));
   const physicalNics = interfaces.filter(i => i.type === 'eth');
+
+  // Group guests by bridge they're connected to
+  const guestsByBridge = useMemo(() => {
+    const map: Record<string, Guest[]> = {};
+    for (const guest of guests) {
+      if (guest.nics) {
+        for (const nic of guest.nics) {
+          if (nic.bridge) {
+            if (!map[nic.bridge]) map[nic.bridge] = [];
+            // Avoid duplicates if guest has multiple NICs on same bridge
+            if (!map[nic.bridge].find(g => g.vmid === guest.vmid)) {
+              map[nic.bridge].push(guest);
+            }
+          }
+        }
+      }
+    }
+    return map;
+  }, [guests]);
 
   if (bridgeIfaces.length === 0) {
     return null;
@@ -457,8 +479,14 @@ function NodeTopology({
           const otherPorts = ports.filter(p => !physicalNics.find(n => n.iface === p));
           // Find VLANs attached to this bridge (vlan-raw-device matches bridge name)
           const bridgeVlans = vlanIfaces.filter(v => v['vlan-raw-device'] === bridge.iface);
+          // Get guests connected to this bridge
+          const bridgeGuests = guestsByBridge[bridge.iface] || [];
 
-          const leftItems = bridgeVlans.length + 1; // VLANs + VM placeholder
+          // Show up to 5 guests, then summarize
+          const displayGuests = bridgeGuests.slice(0, 5);
+          const moreCount = bridgeGuests.length - 5;
+
+          const leftItems = bridgeVlans.length + Math.max(1, displayGuests.length + (moreCount > 0 ? 1 : 0));
           const rightItems = Math.max(1, uplinks.length + otherPorts.length);
 
           return (
@@ -475,11 +503,16 @@ function NodeTopology({
                     {bridge.cidr || bridge.address}
                   </span>
                 )}
+                {bridgeGuests.length > 0 && (
+                  <span className="text-sm text-purple-600 dark:text-purple-400">
+                    ({bridgeGuests.length} guest{bridgeGuests.length !== 1 ? 's' : ''})
+                  </span>
+                )}
               </div>
 
               {/* Main diagram */}
               <div className="flex items-stretch">
-                {/* Left: Port Groups / VLANs */}
+                {/* Left: VLANs + VMs/CTs */}
                 <div className="flex flex-col gap-1 min-w-[140px]">
                   {bridgeVlans.map((vlan) => (
                     <div key={vlan.iface} className="flex items-center justify-end h-10">
@@ -495,11 +528,39 @@ function NodeTopology({
                       </div>
                     </div>
                   ))}
-                  <div className="flex items-center justify-end h-10">
-                    <div className="px-3 py-1 rounded bg-purple-600 text-white text-xs">
-                      <div className="font-semibold">VM Network</div>
+                  {/* Display actual guests */}
+                  {displayGuests.length > 0 ? (
+                    <>
+                      {displayGuests.map((guest) => (
+                        <div key={guest.vmid} className="flex items-center justify-end h-10">
+                          <div className={`px-3 py-1 rounded text-xs text-right flex items-center gap-1 ${
+                            guest.status === 'running'
+                              ? 'bg-purple-600 text-white'
+                              : 'bg-gray-400 text-white'
+                          }`}>
+                            <span>{guest.type === 'qemu' ? '💻' : '📦'}</span>
+                            <div>
+                              <div className="font-semibold">{guest.vmid}</div>
+                              <div className="text-[10px] opacity-80 truncate max-w-[80px]">{guest.name}</div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      {moreCount > 0 && (
+                        <div className="flex items-center justify-end h-10">
+                          <div className="px-3 py-1 rounded bg-purple-400 text-white text-xs">
+                            +{moreCount} more
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="flex items-center justify-end h-10">
+                      <div className="px-3 py-1 rounded bg-gray-300 dark:bg-gray-600 text-gray-600 dark:text-gray-300 text-xs italic">
+                        No VMs
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
 
                 {/* SVG connecting lines + switch */}
