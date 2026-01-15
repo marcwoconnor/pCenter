@@ -32,6 +32,8 @@ import type {
   AddHostRequest,
   UpdateHostRequest,
   DatacenterTreeResponse,
+  CreateVMRequest,
+  CreateContainerRequest,
 } from '../types';
 
 const BASE_URL = '/api';
@@ -113,6 +115,20 @@ export const api = {
     fetchAPI<{ message: string }>(`/clusters/${cluster}/containers/${vmid}/config`, {
       method: 'PUT',
       body: JSON.stringify({ digest, changes, delete: deleteKeys }),
+    }),
+
+  // Create VM/Container
+  getNextVMID: (cluster: string) =>
+    fetchAPI<{ vmid: number }>(`/clusters/${cluster}/nextid`),
+  createVM: (cluster: string, node: string, req: CreateVMRequest) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/nodes/${node}/vms`, {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+  createContainer: (cluster: string, node: string, req: CreateContainerRequest) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/nodes/${node}/containers`, {
+      method: 'POST',
+      body: JSON.stringify(req),
     }),
 
   // Console

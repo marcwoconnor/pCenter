@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -228,21 +230,22 @@ func (h *Handler) GetContainer(w http.ResponseWriter, r *http.Request) {
 // GetAllGuests returns all VMs and containers combined (across all clusters)
 func (h *Handler) GetAllGuests(w http.ResponseWriter, r *http.Request) {
 	type Guest struct {
-		Cluster string  `json:"cluster"`
-		VMID    int     `json:"vmid"`
-		Name    string  `json:"name"`
-		Node    string  `json:"node"`
-		Type    string  `json:"type"` // "qemu" or "lxc"
-		Status  string  `json:"status"`
-		CPU     float64 `json:"cpu"`
-		CPUs    int     `json:"cpus"`
-		Mem     int64   `json:"mem"`
-		MaxMem  int64   `json:"maxmem"`
-		Disk    int64   `json:"disk"`
-		MaxDisk int64   `json:"maxdisk"`
-		Uptime  int64   `json:"uptime"`
-		Tags    string  `json:"tags,omitempty"`
-		HAState string  `json:"ha_state,omitempty"`
+		Cluster string         `json:"cluster"`
+		VMID    int            `json:"vmid"`
+		Name    string         `json:"name"`
+		Node    string         `json:"node"`
+		Type    string         `json:"type"` // "qemu" or "lxc"
+		Status  string         `json:"status"`
+		CPU     float64        `json:"cpu"`
+		CPUs    int            `json:"cpus"`
+		Mem     int64          `json:"mem"`
+		MaxMem  int64          `json:"maxmem"`
+		Disk    int64          `json:"disk"`
+		MaxDisk int64          `json:"maxdisk"`
+		Uptime  int64          `json:"uptime"`
+		Tags    string         `json:"tags,omitempty"`
+		HAState string         `json:"ha_state,omitempty"`
+		NICs    []pve.GuestNIC `json:"nics,omitempty"`
 	}
 
 	var guests []Guest
@@ -264,6 +267,7 @@ func (h *Handler) GetAllGuests(w http.ResponseWriter, r *http.Request) {
 			Uptime:  vm.Uptime,
 			Tags:    vm.Tags,
 			HAState: vm.HAState,
+			NICs:    vm.NICs,
 		})
 	}
 
@@ -284,8 +288,17 @@ func (h *Handler) GetAllGuests(w http.ResponseWriter, r *http.Request) {
 			Uptime:  ct.Uptime,
 			Tags:    ct.Tags,
 			HAState: ct.HAState,
+			NICs:    ct.NICs,
 		})
 	}
+
+	// IMPORTANT: Sort by VMID for consistent ordering.
+	// Go map iteration is random - without sorting, REST API responses have
+	// different order each call, causing UI instability. See websocket.go
+	// for the same fix applied to WebSocket broadcasts.
+	sort.Slice(guests, func(i, j int) bool {
+		return guests[i].VMID < guests[j].VMID
+	})
 
 	writeJSON(w, guests)
 }
@@ -1202,6 +1215,129 @@ func (h *Handler) ClusterContainerAction(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// GetNextVMID returns the next available VMID for a cluster
+func (h *Handler) GetNextVMID(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	// Get any node from the cluster to use for the API call
+	clusterNodes := cs.GetNodes()
+	if len(clusterNodes) == 0 {
+		writeError(w, http.StatusInternalServerError, "no nodes in cluster")
+		return
+	}
+
+	// Use first node - nextid is a cluster-level endpoint
+	client, ok := h.getClient(clusterName, clusterNodes[0].Node)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "failed to get client")
+		return
+	}
+
+	vmid, err := client.GetNextVMID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, map[string]int{"vmid": vmid})
+}
+
+// CreateClusterVM creates a new VM on a specific node
+func (h *Handler) CreateClusterVM(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+
+	_, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	var req pve.CreateVMRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate required fields
+	if req.VMID <= 0 {
+		writeError(w, http.StatusBadRequest, "vmid is required")
+		return
+	}
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	client, ok := h.getClient(clusterName, nodeName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found in cluster")
+		return
+	}
+
+	upid, err := client.CreateVM(r.Context(), &req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	slog.Info("created VM", "cluster", clusterName, "node", nodeName, "vmid", req.VMID, "name", req.Name)
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// CreateClusterContainer creates a new container on a specific node
+func (h *Handler) CreateClusterContainer(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+
+	_, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	var req pve.CreateContainerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate required fields
+	if req.VMID <= 0 {
+		writeError(w, http.StatusBadRequest, "vmid is required")
+		return
+	}
+	if req.Hostname == "" {
+		writeError(w, http.StatusBadRequest, "hostname is required")
+		return
+	}
+	if req.Template == "" {
+		writeError(w, http.StatusBadRequest, "ostemplate is required")
+		return
+	}
+
+	client, ok := h.getClient(clusterName, nodeName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found in cluster")
+		return
+	}
+
+	upid, err := client.CreateContainer(r.Context(), &req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	slog.Info("created container", "cluster", clusterName, "node", nodeName, "vmid", req.VMID, "hostname", req.Hostname)
 	writeJSON(w, map[string]string{"upid": upid})
 }
 

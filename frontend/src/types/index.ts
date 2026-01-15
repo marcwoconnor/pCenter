@@ -654,3 +654,34 @@ export interface DatacenterTreeResponse {
   datacenters: Datacenter[];
   orphan_clusters: InventoryCluster[];
 }
+
+// VM/Container creation types
+
+export interface CreateVMRequest {
+  vmid: number;
+  name: string;
+  cores: number;
+  memory: number;      // MB
+  storage: string;     // e.g., "local-lvm"
+  disk_size: number;   // GB
+  iso?: string;        // e.g., "local:iso/ubuntu.iso"
+  ostype?: string;     // l26, win10, etc.
+  network?: string;    // bridge name (e.g., vmbr0)
+  start?: boolean;
+}
+
+export interface CreateContainerRequest {
+  vmid: number;
+  hostname: string;
+  ostemplate: string;  // REQUIRED: e.g., "local:vztmpl/ubuntu.tar.gz"
+  cores: number;
+  memory: number;      // MB
+  swap: number;        // MB
+  storage: string;     // root storage
+  disk_size: number;   // GB
+  network?: string;    // bridge name
+  password?: string;
+  ssh_public_keys?: string;
+  start?: boolean;
+  unprivileged: boolean;
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"sort"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -204,6 +205,7 @@ type Guest struct {
 	Uptime  int64   `json:"uptime"`
 	Tags    string  `json:"tags,omitempty"`
 	HAState string  `json:"ha_state,omitempty"`
+	NICs    []pve.GuestNIC `json:"nics,omitempty"`
 }
 
 // StorageInfo contains storage details
@@ -330,6 +332,7 @@ func (h *Hub) buildStateMessage() []byte {
 			Uptime:  vm.Uptime,
 			Tags:    vm.Tags,
 			HAState: vm.HAState,
+			NICs:    vm.NICs,
 		})
 	}
 	for _, ct := range h.store.GetContainers() {
@@ -349,8 +352,19 @@ func (h *Hub) buildStateMessage() []byte {
 			Uptime:  ct.Uptime,
 			Tags:    ct.Tags,
 			HAState: ct.HAState,
+			NICs:    ct.NICs,
 		})
 	}
+
+	// IMPORTANT: Sort guests by VMID for consistent ordering.
+	// Go map iteration order is random, so without sorting, the guest order
+	// changes on every WebSocket broadcast. This caused the Network page's
+	// Virtual Switches view to constantly rearrange VMs, making the UI unusable.
+	// The frontend receives this data via useCluster() context, and any order
+	// change triggers React re-renders with elements in new positions.
+	sort.Slice(guests, func(i, j int) bool {
+		return guests[i].VMID < guests[j].VMID
+	})
 
 	// Build storage list
 	var storageList []StorageInfo

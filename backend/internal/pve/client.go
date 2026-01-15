@@ -236,6 +236,21 @@ func (c *Client) GetNodeDetails(ctx context.Context) (*NodeStatus, error) {
 	}, nil
 }
 
+// GetNextVMID returns the next available VMID for the cluster
+func (c *Client) GetNextVMID(ctx context.Context) (int, error) {
+	data, err := c.request(ctx, http.MethodGet, "/cluster/nextid", nil)
+	if err != nil {
+		return 0, err
+	}
+	var resp APIResponse[string]
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return 0, fmt.Errorf("unmarshal nextid: %w", err)
+	}
+	var vmid int
+	fmt.Sscanf(resp.Data, "%d", &vmid)
+	return vmid, nil
+}
+
 // --- VM operations ---
 
 // GetVMs returns all VMs on this node
@@ -416,6 +431,55 @@ func (c *Client) ShutdownVM(ctx context.Context, vmid int) (string, error) {
 	return resp.Data, nil
 }
 
+// CreateVM creates a new QEMU virtual machine
+func (c *Client) CreateVM(ctx context.Context, req *CreateVMRequest) (string, error) {
+	params := map[string]string{
+		"vmid":   fmt.Sprintf("%d", req.VMID),
+		"name":   req.Name,
+		"cores":  fmt.Sprintf("%d", req.Cores),
+		"memory": fmt.Sprintf("%d", req.Memory),
+	}
+
+	// Add disk if storage specified
+	if req.Storage != "" && req.DiskSize > 0 {
+		params["scsi0"] = fmt.Sprintf("%s:%d", req.Storage, req.DiskSize)
+		params["scsihw"] = "virtio-scsi-single"
+	}
+
+	// Add ISO if specified
+	if req.ISO != "" {
+		params["ide2"] = req.ISO + ",media=cdrom"
+		params["boot"] = "order=ide2;scsi0"
+	}
+
+	// Add OS type
+	if req.OSType != "" {
+		params["ostype"] = req.OSType
+	} else {
+		params["ostype"] = "l26" // Default to Linux
+	}
+
+	// Add network if specified
+	if req.Network != "" {
+		params["net0"] = fmt.Sprintf("virtio,bridge=%s", req.Network)
+	} else {
+		params["net0"] = "virtio,bridge=vmbr0" // Default network
+	}
+
+	// Start after creation if requested
+	if req.Start {
+		params["start"] = "1"
+	}
+
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/qemu", c.nodeName), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil // returns UPID
+}
+
 // --- Container operations ---
 
 // GetContainers returns all LXC containers on this node
@@ -556,6 +620,58 @@ func (c *Client) ShutdownContainer(ctx context.Context, vmid int) (string, error
 	var resp APIResponse[string]
 	json.Unmarshal(data, &resp)
 	return resp.Data, nil
+}
+
+// CreateContainer creates a new LXC container
+func (c *Client) CreateContainer(ctx context.Context, req *CreateContainerRequest) (string, error) {
+	params := map[string]string{
+		"vmid":       fmt.Sprintf("%d", req.VMID),
+		"hostname":   req.Hostname,
+		"ostemplate": req.Template,
+		"cores":      fmt.Sprintf("%d", req.Cores),
+		"memory":     fmt.Sprintf("%d", req.Memory),
+		"swap":       fmt.Sprintf("%d", req.Swap),
+	}
+
+	// Root filesystem
+	if req.Storage != "" && req.DiskSize > 0 {
+		params["rootfs"] = fmt.Sprintf("%s:%d", req.Storage, req.DiskSize)
+	}
+
+	// Network
+	if req.Network != "" {
+		params["net0"] = fmt.Sprintf("name=eth0,bridge=%s,ip=dhcp", req.Network)
+	} else {
+		params["net0"] = "name=eth0,bridge=vmbr0,ip=dhcp"
+	}
+
+	// Authentication
+	if req.Password != "" {
+		params["password"] = req.Password
+	}
+	if req.SSHKeys != "" {
+		params["ssh-public-keys"] = req.SSHKeys
+	}
+
+	// Unprivileged container (default true for security)
+	if req.Unprivileged {
+		params["unprivileged"] = "1"
+	} else {
+		params["unprivileged"] = "0"
+	}
+
+	// Start after creation
+	if req.Start {
+		params["start"] = "1"
+	}
+
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/lxc", c.nodeName), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil // returns UPID
 }
 
 // --- Storage operations ---

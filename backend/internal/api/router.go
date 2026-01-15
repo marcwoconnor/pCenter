@@ -125,6 +125,11 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	mux.HandleFunc("GET /api/clusters/{cluster}/containers/{vmid}/config", h.GetClusterContainerConfig)
 	mux.HandleFunc("PUT /api/clusters/{cluster}/containers/{vmid}/config", h.UpdateClusterContainerConfig)
 
+	// Create VMs and containers
+	mux.HandleFunc("GET /api/clusters/{cluster}/nextid", h.GetNextVMID)
+	mux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/vms", h.CreateClusterVM)
+	mux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/containers", h.CreateClusterContainer)
+
 	// Cluster HA status
 	mux.HandleFunc("GET /api/clusters/{cluster}/ha/status", h.GetClusterHA)
 
