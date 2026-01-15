@@ -1,16 +1,16 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Layout } from '../components/Layout';
 import { InventoryTree } from '../components/InventoryTree';
 import { useCluster } from '../context/ClusterContext';
 import { api } from '../api/client';
 import type { NetworkInterface, SDNZone, SDNVNet, SDNSubnet } from '../types';
 
-type TabType = 'interfaces' | 'zones' | 'vnets';
+type TabType = 'topology' | 'interfaces' | 'zones' | 'vnets';
 
 export function NetworkPage() {
   const { clusters, nodes } = useCluster();
   const [filter, setFilter] = useState('');
-  const [activeTab, setActiveTab] = useState<TabType>('interfaces');
+  const [activeTab, setActiveTab] = useState<TabType>('topology');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -20,22 +20,21 @@ export function NetworkPage() {
   const [subnets, setSubnets] = useState<SDNSubnet[]>([]);
   const hasFetched = useRef(false);
 
+  // Stable cluster names string to avoid effect re-running on every WebSocket update
+  const clusterNamesKey = useMemo(() => {
+    let names: string[] = [];
+    if (clusters && clusters.length > 0) {
+      names = clusters.map(c => c.name);
+    } else if (nodes && nodes.length > 0) {
+      names = [...new Set(nodes.map(n => n.cluster).filter(Boolean))];
+    }
+    return names.length > 0 ? names.sort().join(',') : 'default';
+  }, [clusters, nodes]);
+
   useEffect(() => {
+    const clusterNames = clusterNamesKey.split(',');
+
     async function fetchNetworkData() {
-      // Get cluster names from clusters array or derive from nodes
-      let clusterNames: string[] = [];
-      if (clusters && clusters.length > 0) {
-        clusterNames = clusters.map(c => c.name);
-      } else if (nodes && nodes.length > 0) {
-        // Derive unique cluster names from nodes
-        clusterNames = [...new Set(nodes.map(n => n.cluster).filter(Boolean))];
-      }
-
-      if (clusterNames.length === 0) {
-        // No clusters yet, try default
-        clusterNames = ['default'];
-      }
-
       // Only show loading on initial fetch, not refreshes
       if (!hasFetched.current) {
         setIsLoading(true);
@@ -61,6 +60,11 @@ export function NetworkPage() {
           }
         }
 
+        // Sort interfaces for stable rendering order
+        allInterfaces.sort((a, b) =>
+          a.node.localeCompare(b.node) || a.iface.localeCompare(b.iface)
+        );
+
         setInterfaces(allInterfaces);
         setZones(allZones);
         setVNets(allVNets);
@@ -78,7 +82,7 @@ export function NetworkPage() {
     fetchNetworkData();
     const interval = setInterval(fetchNetworkData, 30000);
     return () => clearInterval(interval);
-  }, [clusters, nodes]);
+  }, [clusterNamesKey]);
 
   const sidebar = (
     <div className="flex flex-col h-full">
@@ -97,7 +101,13 @@ export function NetworkPage() {
     </div>
   );
 
-  const tabs: { id: TabType; label: string; count: number }[] = [
+  // Get unique nodes for topology view
+  const nodeNames = useMemo(() => {
+    return [...new Set(interfaces.map(i => i.node))].sort();
+  }, [interfaces]);
+
+  const tabs: { id: TabType; label: string; count?: number }[] = [
+    { id: 'topology', label: 'Virtual Switches' },
     { id: 'interfaces', label: 'Interfaces', count: interfaces.length },
     { id: 'zones', label: 'SDN Zones', count: zones.length },
     { id: 'vnets', label: 'VNets', count: vnets.length },
@@ -137,7 +147,7 @@ export function NetworkPage() {
                 }`}
               >
                 {tab.label}
-                {tab.count > 0 && (
+                {tab.count !== undefined && tab.count > 0 && (
                   <span className="ml-2 px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700">
                     {tab.count}
                   </span>
@@ -157,6 +167,25 @@ export function NetworkPage() {
           </div>
         ) : (
           <>
+            {/* Virtual Switches Topology Tab */}
+            {activeTab === 'topology' && (
+              <div className="space-y-8">
+                {nodeNames.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    No network interfaces found
+                  </div>
+                ) : (
+                  nodeNames.map(nodeName => (
+                    <NodeTopology
+                      key={nodeName}
+                      nodeName={nodeName}
+                      interfaces={interfaces.filter(i => i.node === nodeName)}
+                    />
+                  ))
+                )}
+              </div>
+            )}
+
             {/* Interfaces Tab */}
             {activeTab === 'interfaces' && (
               <div className="space-y-6">
@@ -390,5 +419,183 @@ function InterfaceDetails({ iface }: { iface: NetworkInterface }) {
     <span className="text-xs">{details.join(', ')}</span>
   ) : (
     <span className="text-gray-400">-</span>
+  );
+}
+
+// Node topology diagram - vCenter-style virtual switch view
+function NodeTopology({
+  nodeName,
+  interfaces,
+}: {
+  nodeName: string;
+  interfaces: NetworkInterface[];
+}) {
+  // Get bridges, VLANs, and physical NICs - sorted for stable render order
+  const bridgeIfaces = interfaces
+    .filter(i => i.type === 'bridge' || i.type === 'OVSBridge')
+    .sort((a, b) => a.iface.localeCompare(b.iface));
+  const vlanIfaces = interfaces
+    .filter(i => i.type === 'vlan')
+    .sort((a, b) => a.iface.localeCompare(b.iface));
+  const physicalNics = interfaces.filter(i => i.type === 'eth');
+
+  if (bridgeIfaces.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
+      <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
+        <span>🖥</span> {nodeName}
+      </h3>
+
+      <div className="space-y-8">
+        {bridgeIfaces.map(bridge => {
+          // Parse bridge_ports
+          const ports = bridge.bridge_ports?.split(/\s+/).filter(Boolean) || [];
+          const uplinks = physicalNics.filter(nic => ports.includes(nic.iface));
+          const otherPorts = ports.filter(p => !physicalNics.find(n => n.iface === p));
+          // Find VLANs attached to this bridge (vlan-raw-device matches bridge name)
+          const bridgeVlans = vlanIfaces.filter(v => v['vlan-raw-device'] === bridge.iface);
+
+          const leftItems = bridgeVlans.length + 1; // VLANs + VM placeholder
+          const rightItems = Math.max(1, uplinks.length + otherPorts.length);
+
+          return (
+            <div key={bridge.iface} className="relative">
+              {/* Bridge label - outside, above */}
+              <div className="mb-2 flex items-center gap-3">
+                <div className={`w-3 h-3 rounded-full ${bridge.active === 1 ? 'bg-green-500' : 'bg-red-500'}`} />
+                <span className="font-bold text-gray-900 dark:text-white">{bridge.iface}</span>
+                <span className="text-sm text-gray-500 dark:text-gray-400">
+                  {bridge.type === 'OVSBridge' ? 'Open vSwitch' : 'Linux Bridge'}
+                </span>
+                {(bridge.address || bridge.cidr) && (
+                  <span className="text-sm font-mono text-gray-500 dark:text-gray-400">
+                    {bridge.cidr || bridge.address}
+                  </span>
+                )}
+              </div>
+
+              {/* Main diagram */}
+              <div className="flex items-stretch">
+                {/* Left: Port Groups / VLANs */}
+                <div className="flex flex-col gap-1 min-w-[140px]">
+                  {bridgeVlans.map((vlan) => (
+                    <div key={vlan.iface} className="flex items-center justify-end h-10">
+                      <div className={`px-3 py-1 rounded text-xs text-right ${
+                        vlan.active === 1
+                          ? 'bg-cyan-600 text-white'
+                          : 'bg-gray-400 text-white'
+                      }`}>
+                        <div className="font-mono font-semibold">{vlan.iface}</div>
+                        {(vlan.cidr || vlan.address) && (
+                          <div className="text-[10px] opacity-80">{vlan.cidr || vlan.address}</div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-end h-10">
+                    <div className="px-3 py-1 rounded bg-purple-600 text-white text-xs">
+                      <div className="font-semibold">VM Network</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* SVG connecting lines + switch */}
+                <div className="relative w-40" style={{ height: `${Math.max(leftItems, rightItems) * 44}px` }}>
+                  <svg className="absolute inset-0 w-full h-full">
+                    {/* Left horizontal lines to switch */}
+                    {Array.from({ length: leftItems }).map((_, idx) => {
+                      const y = (idx * 44) + 20;
+                      return (
+                        <line
+                          key={`l-${idx}`}
+                          x1="0" y1={y}
+                          x2="50%" y2={y}
+                          stroke="#6b7280" strokeWidth="2"
+                        />
+                      );
+                    })}
+                    {/* Vertical bus inside switch */}
+                    <line
+                      x1="50%" y1="10"
+                      x2="50%" y2={Math.max(leftItems, rightItems) * 44 - 10}
+                      stroke="#3b82f6" strokeWidth="4"
+                    />
+                    {/* Right horizontal lines from switch */}
+                    {Array.from({ length: rightItems }).map((_, idx) => {
+                      const y = (idx * 44) + 20;
+                      return (
+                        <line
+                          key={`r-${idx}`}
+                          x1="50%" y1={y}
+                          x2="100%" y2={y}
+                          stroke="#6b7280" strokeWidth="2"
+                        />
+                      );
+                    })}
+                  </svg>
+                  {/* Switch box overlay */}
+                  <div className={`absolute left-1/2 top-0 bottom-0 w-6 -ml-3 rounded ${
+                    bridge.active === 1 ? 'bg-blue-600' : 'bg-gray-500'
+                  }`} />
+                </div>
+
+                {/* Right: Physical NICs */}
+                <div className="flex flex-col gap-1 min-w-[120px]">
+                  {uplinks.length === 0 && otherPorts.length === 0 ? (
+                    <div className="flex items-center h-10">
+                      <div className="text-xs text-gray-400 italic">No uplinks</div>
+                    </div>
+                  ) : (
+                    <>
+                      {uplinks.map(nic => (
+                        <div key={nic.iface} className="flex items-center h-10">
+                          <div className={`px-3 py-1 rounded flex items-center gap-2 ${
+                            nic.active === 1 ? 'bg-green-600' : 'bg-gray-500'
+                          } text-white`}>
+                            <span className="font-mono text-sm">{nic.iface}</span>
+                            <div className={`w-2 h-2 rounded-full ${nic.active === 1 ? 'bg-green-300' : 'bg-red-400'}`} />
+                          </div>
+                        </div>
+                      ))}
+                      {otherPorts.map(port => (
+                        <div key={port} className="flex items-center h-10">
+                          <div className="px-3 py-1 rounded bg-yellow-600 text-white">
+                            <span className="font-mono text-sm">{port}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Legend */}
+      <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
+        <div className="flex flex-wrap gap-4 text-xs text-gray-500 dark:text-gray-400">
+          <div className="flex items-center gap-1">
+            <div className="w-3 h-3 bg-blue-600 rounded" /> Virtual Switch (Bridge)
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="w-3 h-3 bg-cyan-600 rounded" /> VLAN Interface (vmk)
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="w-3 h-3 bg-green-600 rounded" /> Physical NIC (Uplink)
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="w-3 h-3 bg-yellow-600 rounded" /> Bond / Other
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="w-3 h-3 bg-purple-600 rounded" /> VM / Container
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -88,6 +88,14 @@ func (c *Collector) collect(ctx context.Context) {
 		status.Storage = storage
 	}
 
+	// Collect network interfaces
+	networks, err := c.api.GetNetworkInterfaces(ctx)
+	if err != nil {
+		slog.Error("failed to get network interfaces", "error", err)
+	} else {
+		status.Networks = networks
+	}
+
 	// Collect Ceph if enabled
 	if c.cfg.Collection.IncludeCeph {
 		ceph, err := c.api.GetCephStatus(ctx)

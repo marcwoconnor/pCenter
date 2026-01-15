@@ -282,9 +282,94 @@ func (c *PVEClient) GetVMs(ctx context.Context) ([]types.VMStatus, error) {
 			Uptime:    vm.Uptime,
 			Template:  vm.Template == 1,
 		}
+
+		// Fetch config to get NIC info
+		nics, err := c.getVMNICs(ctx, vm.VMID)
+		if err == nil {
+			result[i].NICs = nics
+		}
 	}
 
 	return result, nil
+}
+
+// getVMNICs fetches VM config and extracts network interfaces
+func (c *PVEClient) getVMNICs(ctx context.Context, vmid int) ([]types.GuestNIC, error) {
+	config, err := get[map[string]interface{}](c, ctx, fmt.Sprintf("/nodes/%s/qemu/%d/config", c.nodeName, vmid))
+	if err != nil {
+		return nil, err
+	}
+
+	var nics []types.GuestNIC
+	// Look for net0, net1, net2, etc.
+	for i := 0; i < 10; i++ {
+		key := fmt.Sprintf("net%d", i)
+		if val, ok := config[key]; ok {
+			if netStr, ok := val.(string); ok {
+				nic := parseVMNetConfig(key, netStr)
+				if nic.Bridge != "" {
+					nics = append(nics, nic)
+				}
+			}
+		}
+	}
+	return nics, nil
+}
+
+// parseVMNetConfig parses VM net config: "virtio=XX:XX:XX:XX:XX:XX,bridge=vmbr0,tag=100"
+func parseVMNetConfig(name, config string) types.GuestNIC {
+	nic := types.GuestNIC{Name: name}
+	parts := splitConfig(config)
+	for _, part := range parts {
+		kv := splitKV(part)
+		if len(kv) == 2 {
+			switch kv[0] {
+			case "bridge":
+				nic.Bridge = kv[1]
+			case "tag":
+				fmt.Sscanf(kv[1], "%d", &nic.Tag)
+			case "virtio", "e1000", "rtl8139", "vmxnet3":
+				nic.Model = kv[0]
+				nic.MAC = kv[1]
+			}
+		} else if len(kv) == 1 {
+			// Model without explicit key (e.g., just "virtio=MAC")
+			if idx := indexOf(kv[0], []string{"virtio", "e1000", "rtl8139", "vmxnet3"}); idx >= 0 {
+				nic.Model = kv[0]
+			}
+		}
+	}
+	return nic
+}
+
+func splitConfig(s string) []string {
+	return splitBy(s, ',')
+}
+
+func splitKV(s string) []string {
+	return splitBy(s, '=')
+}
+
+func splitBy(s string, sep byte) []string {
+	var result []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == sep {
+			result = append(result, s[start:i])
+			start = i + 1
+		}
+	}
+	result = append(result, s[start:])
+	return result
+}
+
+func indexOf(s string, list []string) int {
+	for i, v := range list {
+		if v == s {
+			return i
+		}
+	}
+	return -1
 }
 
 // Raw container data from API
@@ -336,9 +421,58 @@ func (c *PVEClient) GetContainers(ctx context.Context) ([]types.CTStatus, error)
 			Uptime:    ct.Uptime,
 			Template:  ct.Template == 1,
 		}
+
+		// Fetch config to get NIC info
+		nics, err := c.getCTNICs(ctx, ct.VMID)
+		if err == nil {
+			result[i].NICs = nics
+		}
 	}
 
 	return result, nil
+}
+
+// getCTNICs fetches container config and extracts network interfaces
+func (c *PVEClient) getCTNICs(ctx context.Context, vmid int) ([]types.GuestNIC, error) {
+	config, err := get[map[string]interface{}](c, ctx, fmt.Sprintf("/nodes/%s/lxc/%d/config", c.nodeName, vmid))
+	if err != nil {
+		return nil, err
+	}
+
+	var nics []types.GuestNIC
+	// Look for net0, net1, net2, etc.
+	for i := 0; i < 10; i++ {
+		key := fmt.Sprintf("net%d", i)
+		if val, ok := config[key]; ok {
+			if netStr, ok := val.(string); ok {
+				nic := parseCTNetConfig(key, netStr)
+				if nic.Bridge != "" {
+					nics = append(nics, nic)
+				}
+			}
+		}
+	}
+	return nics, nil
+}
+
+// parseCTNetConfig parses CT net config: "name=eth0,bridge=vmbr0,hwaddr=XX:XX:XX:XX:XX:XX,tag=100"
+func parseCTNetConfig(name, config string) types.GuestNIC {
+	nic := types.GuestNIC{Name: name}
+	parts := splitConfig(config)
+	for _, part := range parts {
+		kv := splitKV(part)
+		if len(kv) == 2 {
+			switch kv[0] {
+			case "bridge":
+				nic.Bridge = kv[1]
+			case "hwaddr":
+				nic.MAC = kv[1]
+			case "tag":
+				fmt.Sscanf(kv[1], "%d", &nic.Tag)
+			}
+		}
+	}
+	return nic
 }
 
 // Raw storage data from API
@@ -455,4 +589,94 @@ func (c *PVEClient) GetCephStatus(ctx context.Context) (*types.CephStatus, error
 	}
 
 	return status, nil
+}
+
+// Raw network interface from PVE API
+type rawNetworkInterface struct {
+	Iface       string      `json:"iface"`
+	Type        string      `json:"type"`
+	Active      int         `json:"active"`
+	Autostart   int         `json:"autostart"`
+	Method      string      `json:"method,omitempty"`
+	Method6     string      `json:"method6,omitempty"`
+	Address     string      `json:"address,omitempty"`
+	Netmask     string      `json:"netmask,omitempty"`
+	Gateway     string      `json:"gateway,omitempty"`
+	CIDR        string      `json:"cidr,omitempty"`
+	Address6    string      `json:"address6,omitempty"`
+	Netmask6    string      `json:"netmask6,omitempty"`
+	Gateway6    string      `json:"gateway6,omitempty"`
+	BridgePorts string      `json:"bridge_ports,omitempty"`
+	BridgeSTP   string      `json:"bridge_stp,omitempty"`
+	BridgeFD    string      `json:"bridge_fd,omitempty"`
+	BondSlaves  string      `json:"bond-slaves,omitempty"`
+	BondMode    string      `json:"bond_mode,omitempty"`
+	VlanID      interface{} `json:"vlan-id,omitempty"` // can be int or string
+	VlanRawDev  string      `json:"vlan-raw-device,omitempty"`
+	MTU         interface{} `json:"mtu,omitempty"` // can be int or string
+	Comments    string      `json:"comments,omitempty"`
+}
+
+// GetNetworkInterfaces returns all network interfaces on this node
+func (c *PVEClient) GetNetworkInterfaces(ctx context.Context) ([]types.NetworkInterface, error) {
+	ifaces, err := get[[]rawNetworkInterface](c, ctx, fmt.Sprintf("/nodes/%s/network", c.nodeName))
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]types.NetworkInterface, len(ifaces))
+	for i, iface := range ifaces {
+		// Convert vlan-id to int (can be string or int from API)
+		vlanID := 0
+		if iface.VlanID != nil {
+			switch v := iface.VlanID.(type) {
+			case float64:
+				vlanID = int(v)
+			case int:
+				vlanID = v
+			case string:
+				fmt.Sscanf(v, "%d", &vlanID)
+			}
+		}
+
+		// Convert MTU to int
+		mtu := 0
+		if iface.MTU != nil {
+			switch v := iface.MTU.(type) {
+			case float64:
+				mtu = int(v)
+			case int:
+				mtu = v
+			case string:
+				fmt.Sscanf(v, "%d", &mtu)
+			}
+		}
+
+		result[i] = types.NetworkInterface{
+			Iface:       iface.Iface,
+			Type:        iface.Type,
+			Active:      iface.Active,
+			Autostart:   iface.Autostart,
+			Method:      iface.Method,
+			Method6:     iface.Method6,
+			Address:     iface.Address,
+			Netmask:     iface.Netmask,
+			Gateway:     iface.Gateway,
+			CIDR:        iface.CIDR,
+			Address6:    iface.Address6,
+			Netmask6:    iface.Netmask6,
+			Gateway6:    iface.Gateway6,
+			BridgePorts: iface.BridgePorts,
+			BridgeSTP:   iface.BridgeSTP,
+			BridgeFD:    iface.BridgeFD,
+			BondSlaves:  iface.BondSlaves,
+			BondMode:    iface.BondMode,
+			VlanID:      vlanID,
+			VlanRawDev:  iface.VlanRawDev,
+			MTU:         mtu,
+			Comments:    iface.Comments,
+		}
+	}
+
+	return result, nil
 }

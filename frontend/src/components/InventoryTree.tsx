@@ -1351,7 +1351,7 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
 
   // Network View - real interfaces
   if (view === 'network') {
-    // Group interfaces by node
+    // Group interfaces by node, then by type
     const interfacesByNode = networkInterfaces.reduce((acc, iface) => {
       const key = `${iface.cluster}-${iface.node}`;
       if (!acc[key]) acc[key] = { node: iface.node, cluster: iface.cluster, interfaces: [] };
@@ -1359,24 +1359,52 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
       return acc;
     }, {} as Record<string, { node: string; cluster: string; interfaces: NetworkInterface[] }>);
 
-    // Icon based on interface type
-    const getIfaceIcon = (type: string) => {
+    // Icon and tooltip based on interface type
+    const getIfaceIcon = (type: string): { icon: string; title: string } => {
       switch (type) {
-        case 'bridge': return '🌉';
-        case 'bond': return '🔗';
-        case 'vlan': return '🏷️';
-        case 'eth': return '🔌';
-        case 'OVSBridge': return '🌐';
-        default: return '📡';
+        case 'bridge': return { icon: '🌉', title: 'Linux Bridge' };
+        case 'bond': return { icon: '🔗', title: 'Network Bond (Link Aggregation)' };
+        case 'vlan': return { icon: '🏷️', title: 'VLAN Interface' };
+        case 'eth': return { icon: '🔌', title: 'Physical Ethernet' };
+        case 'OVSBridge': return { icon: '🌐', title: 'Open vSwitch Bridge' };
+        case 'OVSIntPort': return { icon: '🔀', title: 'OVS Internal Port' };
+        case 'OVSPort': return { icon: '🔀', title: 'OVS Port' };
+        default: return { icon: '📡', title: `Network Interface (${type})` };
       }
     };
 
-    // Format interface label
+    // Format interface label with IP if available
     const getIfaceLabel = (iface: NetworkInterface) => {
-      let label = `${iface.iface} (${iface.type})`;
+      let label = iface.iface;
       if (iface.address) label += ` - ${iface.address}`;
       else if (iface.cidr) label += ` - ${iface.cidr}`;
       return label;
+    };
+
+    // Group interfaces by type for better organization
+    const groupByType = (interfaces: NetworkInterface[]) => {
+      const bridges = interfaces.filter(i => i.type === 'bridge' || i.type === 'OVSBridge');
+      const bonds = interfaces.filter(i => i.type === 'bond');
+      const vlans = interfaces.filter(i => i.type === 'vlan');
+      const physical = interfaces.filter(i => i.type === 'eth');
+      const other = interfaces.filter(i => !['bridge', 'OVSBridge', 'bond', 'vlan', 'eth'].includes(i.type));
+      return { bridges, bonds, vlans, physical, other };
+    };
+
+    // Render a single interface node
+    const renderInterface = (iface: NetworkInterface) => {
+      const { icon, title } = getIfaceIcon(iface.type);
+      return (
+        <TreeNode
+          key={`${iface.cluster}-${iface.node}-${iface.iface}`}
+          icon={icon}
+          iconTitle={title}
+          label={getIfaceLabel(iface)}
+          status={iface.active === 1 ? 'online' : 'stopped'}
+          isSelected={isSelected({ type: 'network', id: `${iface.node}-${iface.iface}`, name: iface.iface, node: iface.node, cluster: iface.cluster })}
+          onClick={() => setSelectedObject({ type: 'network', id: `${iface.node}-${iface.iface}`, name: iface.iface, node: iface.node, cluster: iface.cluster })}
+        />
+      );
     };
 
     return (
@@ -1384,26 +1412,44 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
         <TreeNode icon="🌐" label="Networks" defaultExpanded count={networkInterfaces.length}>
           {Object.values(interfacesByNode)
             .sort((a, b) => a.node.localeCompare(b.node))
-            .map(({ node, cluster, interfaces }) => (
-              <TreeNode
-                key={`${cluster}-${node}`}
-                icon="🖥"
-                label={node}
-                count={interfaces.length}
-                defaultExpanded
-              >
-                {interfaces
-                  .sort((a, b) => a.iface.localeCompare(b.iface))
-                  .map((iface) => (
-                    <TreeNode
-                      key={`${cluster}-${node}-${iface.iface}`}
-                      icon={getIfaceIcon(iface.type)}
-                      label={getIfaceLabel(iface)}
-                      status={iface.active ? 'online' : 'stopped'}
-                    />
-                  ))}
-              </TreeNode>
-            ))}
+            .map(({ node, cluster, interfaces }) => {
+              const grouped = groupByType(interfaces);
+              return (
+                <TreeNode
+                  key={`${cluster}-${node}`}
+                  icon="🖥"
+                  label={node}
+                  count={interfaces.length}
+                  defaultExpanded
+                >
+                  {grouped.bridges.length > 0 && (
+                    <TreeNode icon="🌉" label="Bridges" count={grouped.bridges.length} defaultExpanded>
+                      {grouped.bridges.sort((a, b) => a.iface.localeCompare(b.iface)).map(renderInterface)}
+                    </TreeNode>
+                  )}
+                  {grouped.bonds.length > 0 && (
+                    <TreeNode icon="🔗" label="Bonds" count={grouped.bonds.length} defaultExpanded>
+                      {grouped.bonds.sort((a, b) => a.iface.localeCompare(b.iface)).map(renderInterface)}
+                    </TreeNode>
+                  )}
+                  {grouped.vlans.length > 0 && (
+                    <TreeNode icon="🏷️" label="VLANs" count={grouped.vlans.length} defaultExpanded>
+                      {grouped.vlans.sort((a, b) => a.iface.localeCompare(b.iface)).map(renderInterface)}
+                    </TreeNode>
+                  )}
+                  {grouped.physical.length > 0 && (
+                    <TreeNode icon="🔌" label="Physical" count={grouped.physical.length} defaultExpanded>
+                      {grouped.physical.sort((a, b) => a.iface.localeCompare(b.iface)).map(renderInterface)}
+                    </TreeNode>
+                  )}
+                  {grouped.other.length > 0 && (
+                    <TreeNode icon="📡" label="Other" count={grouped.other.length} defaultExpanded>
+                      {grouped.other.sort((a, b) => a.iface.localeCompare(b.iface)).map(renderInterface)}
+                    </TreeNode>
+                  )}
+                </TreeNode>
+              );
+            })}
         </TreeNode>
       </div>
     );

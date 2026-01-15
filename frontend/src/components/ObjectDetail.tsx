@@ -4,7 +4,8 @@ import { formatBytes, formatUptime, api } from '../api/client';
 import { useMetrics } from '../hooks/useMetrics';
 import { useConfigEditor, type UseConfigEditorReturn } from '../hooks/useConfigEditor';
 import { MetricsChart } from './MetricsChart';
-import type { MetricSeries, VMConfig, ContainerConfig } from '../types';
+import type { MetricSeries, VMConfig, ContainerConfig, NetworkInterface } from '../types';
+import { NetworkTopology } from './NetworkTopology';
 
 type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d';
 
@@ -31,6 +32,11 @@ const storageTabs: Tab[] = [
   { id: 'vms', label: 'Content' },
 ];
 
+const networkTabs: Tab[] = [
+  { id: 'summary', label: 'Summary' },
+  { id: 'topology', label: 'Virtual Switches' },
+];
+
 export function ObjectDetail() {
   const { selectedObject, nodes, guests, storage, performAction } = useCluster();
   const [activeTab, setActiveTab] = useState('summary');
@@ -53,7 +59,8 @@ export function ObjectDetail() {
   }
 
   const tabs = selectedObject.type === 'node' ? nodeTabs :
-    selectedObject.type === 'storage' ? storageTabs : guestTabs;
+    selectedObject.type === 'storage' ? storageTabs :
+    selectedObject.type === 'network' ? networkTabs : guestTabs;
 
   // Get the actual object data
   const node = selectedObject.type === 'node'
@@ -88,6 +95,7 @@ export function ObjectDetail() {
               {selectedObject.type === 'vm' && '💻'}
               {selectedObject.type === 'ct' && '📦'}
               {selectedObject.type === 'storage' && '💾'}
+              {selectedObject.type === 'network' && '🌐'}
             </span>
             <div>
               <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
@@ -98,6 +106,7 @@ export function ObjectDetail() {
                 {selectedObject.type === 'vm' && `VM ${selectedObject.id} on ${selectedObject.node}`}
                 {selectedObject.type === 'ct' && `Container ${selectedObject.id} on ${selectedObject.node}`}
                 {selectedObject.type === 'storage' && `Storage on ${selectedObject.node}`}
+                {selectedObject.type === 'network' && `Network Interface on ${selectedObject.node}`}
               </div>
             </div>
           </div>
@@ -157,6 +166,12 @@ export function ObjectDetail() {
         {activeTab === 'summary' && node && <NodeSummary node={node} />}
         {activeTab === 'summary' && guest && <GuestSummary guest={guest} />}
         {activeTab === 'summary' && storageItem && <StorageSummary storage={storageItem} />}
+        {activeTab === 'summary' && selectedObject.type === 'network' && (
+          <NetworkSummary ifaceName={selectedObject.name} node={selectedObject.node || ''} cluster={selectedObject.cluster || ''} />
+        )}
+        {activeTab === 'topology' && selectedObject.type === 'network' && (
+          <NetworkTopology node={selectedObject.node || ''} cluster={selectedObject.cluster || ''} />
+        )}
         {activeTab === 'console' && guest && (
           <ConsoleTab
             vmid={guest.vmid}
@@ -1939,6 +1954,282 @@ function ConsoleTab({
           />
         )}
       </div>
+    </div>
+  );
+}
+
+// Network interface summary
+function NetworkSummary({ ifaceName, node, cluster }: { ifaceName: string; node: string; cluster: string }) {
+  const [iface, setIface] = useState<NetworkInterface | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [connectedGuests, setConnectedGuests] = useState<{ vmid: number; name: string; type: string }[]>([]);
+  const { guests } = useCluster();
+
+  useEffect(() => {
+    async function fetchInterface() {
+      setLoading(true);
+      try {
+        const interfaces = await api.getClusterNetworkInterfaces(cluster, node);
+        const found = interfaces.find((i: NetworkInterface) => i.iface === ifaceName);
+        setIface(found || null);
+      } catch (err) {
+        console.error('Failed to fetch interface:', err);
+        setIface(null);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchInterface();
+  }, [ifaceName, node, cluster]);
+
+  // Find guests on this node that might use this interface
+  useEffect(() => {
+    if (!iface || iface.type !== 'bridge') return;
+    const nodeGuests = guests.filter(g => g.node === node);
+    setConnectedGuests(nodeGuests.map(g => ({
+      vmid: g.vmid,
+      name: g.name,
+      type: g.type === 'qemu' ? 'VM' : 'CT',
+    })));
+  }, [iface, guests, node]);
+
+  if (loading) {
+    return <div className="text-gray-500 dark:text-gray-400 text-center py-8">Loading...</div>;
+  }
+
+  if (!iface) {
+    return <div className="text-gray-500 dark:text-gray-400 text-center py-8">Interface not found</div>;
+  }
+
+  // Icon based on type
+  const getTypeIcon = (type: string) => {
+    switch (type) {
+      case 'bridge': return '🌉';
+      case 'bond': return '🔗';
+      case 'vlan': return '🏷️';
+      case 'eth': return '🔌';
+      case 'OVSBridge': return '🌐';
+      default: return '📡';
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Interface Info Card */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+          <span>{getTypeIcon(iface.type)}</span>
+          Interface Details
+        </h3>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <span className="text-gray-500 dark:text-gray-400 text-sm">Name</span>
+            <div className="text-gray-900 dark:text-white font-medium">{iface.iface}</div>
+          </div>
+          <div>
+            <span className="text-gray-500 dark:text-gray-400 text-sm">Type</span>
+            <div className="text-gray-900 dark:text-white font-medium">{iface.type}</div>
+          </div>
+          <div>
+            <span className="text-gray-500 dark:text-gray-400 text-sm">Status</span>
+            <div className={`font-medium ${iface.active === 1 ? 'text-green-600' : 'text-gray-500'}`}>
+              {iface.active === 1 ? 'Active' : 'Inactive'}
+            </div>
+          </div>
+          <div>
+            <span className="text-gray-500 dark:text-gray-400 text-sm">Autostart</span>
+            <div className="text-gray-900 dark:text-white font-medium">
+              {iface.autostart === 1 ? 'Yes' : 'No'}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* IPv4 Configuration */}
+      {(iface.address || iface.cidr || iface.gateway) && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            IPv4 Configuration
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            {iface.method && (
+              <div>
+                <span className="text-gray-500 dark:text-gray-400 text-sm">Method</span>
+                <div className="text-gray-900 dark:text-white font-medium">{iface.method}</div>
+              </div>
+            )}
+            {(iface.address || iface.cidr) && (
+              <div>
+                <span className="text-gray-500 dark:text-gray-400 text-sm">Address</span>
+                <div className="text-gray-900 dark:text-white font-medium font-mono">
+                  {iface.cidr || `${iface.address}/${iface.netmask}`}
+                </div>
+              </div>
+            )}
+            {iface.gateway && (
+              <div>
+                <span className="text-gray-500 dark:text-gray-400 text-sm">Gateway</span>
+                <div className="text-gray-900 dark:text-white font-medium font-mono">{iface.gateway}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* IPv6 Configuration */}
+      {(iface.address6 || iface.gateway6) && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            IPv6 Configuration
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            {iface.method6 && (
+              <div>
+                <span className="text-gray-500 dark:text-gray-400 text-sm">Method</span>
+                <div className="text-gray-900 dark:text-white font-medium">{iface.method6}</div>
+              </div>
+            )}
+            {iface.address6 && (
+              <div>
+                <span className="text-gray-500 dark:text-gray-400 text-sm">Address</span>
+                <div className="text-gray-900 dark:text-white font-medium font-mono">
+                  {iface.address6}/{iface.netmask6}
+                </div>
+              </div>
+            )}
+            {iface.gateway6 && (
+              <div>
+                <span className="text-gray-500 dark:text-gray-400 text-sm">Gateway</span>
+                <div className="text-gray-900 dark:text-white font-medium font-mono">{iface.gateway6}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Bridge Details */}
+      {iface.type === 'bridge' && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Bridge Configuration
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            {iface.bridge_ports && (
+              <div className="col-span-2">
+                <span className="text-gray-500 dark:text-gray-400 text-sm">Bridge Ports</span>
+                <div className="text-gray-900 dark:text-white font-medium font-mono">{iface.bridge_ports}</div>
+              </div>
+            )}
+            {iface.bridge_stp && (
+              <div>
+                <span className="text-gray-500 dark:text-gray-400 text-sm">STP</span>
+                <div className="text-gray-900 dark:text-white font-medium">{iface.bridge_stp}</div>
+              </div>
+            )}
+            {iface.bridge_fd && (
+              <div>
+                <span className="text-gray-500 dark:text-gray-400 text-sm">Forward Delay</span>
+                <div className="text-gray-900 dark:text-white font-medium">{iface.bridge_fd}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Bond Details */}
+      {iface.type === 'bond' && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Bond Configuration
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            {iface.slaves && (
+              <div className="col-span-2">
+                <span className="text-gray-500 dark:text-gray-400 text-sm">Slave Interfaces</span>
+                <div className="text-gray-900 dark:text-white font-medium font-mono">{iface.slaves}</div>
+              </div>
+            )}
+            {iface.bond_mode && (
+              <div>
+                <span className="text-gray-500 dark:text-gray-400 text-sm">Bond Mode</span>
+                <div className="text-gray-900 dark:text-white font-medium">{iface.bond_mode}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* VLAN Details */}
+      {iface.type === 'vlan' && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            VLAN Configuration
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            {iface['vlan-raw-device'] && (
+              <div>
+                <span className="text-gray-500 dark:text-gray-400 text-sm">Parent Interface</span>
+                <div className="text-gray-900 dark:text-white font-medium">{iface['vlan-raw-device']}</div>
+              </div>
+            )}
+            {iface['vlan-id'] && (
+              <div>
+                <span className="text-gray-500 dark:text-gray-400 text-sm">VLAN ID</span>
+                <div className="text-gray-900 dark:text-white font-medium">{String(iface['vlan-id'])}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Connected Guests (for bridges) */}
+      {iface.type === 'bridge' && connectedGuests.length > 0 && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Guests on this Node ({connectedGuests.length})
+          </h3>
+          <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+            Note: Shows all guests on this node. Actual bridge connections depend on VM/CT network config.
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+            {connectedGuests.slice(0, 12).map(g => (
+              <div key={g.vmid} className="flex items-center gap-2 text-sm">
+                <span>{g.type === 'VM' ? '💻' : '📦'}</span>
+                <span className="text-gray-900 dark:text-white">{g.vmid}</span>
+                <span className="text-gray-500 dark:text-gray-400 truncate">{g.name}</span>
+              </div>
+            ))}
+            {connectedGuests.length > 12 && (
+              <div className="text-gray-500 dark:text-gray-400 text-sm">
+                +{connectedGuests.length - 12} more...
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* MTU if set */}
+      {iface.mtu && iface.mtu > 0 && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+            Additional Settings
+          </h3>
+          <div>
+            <span className="text-gray-500 dark:text-gray-400 text-sm">MTU</span>
+            <div className="text-gray-900 dark:text-white font-medium">{iface.mtu}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Comments */}
+      {iface.comments && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+            Comments
+          </h3>
+          <div className="text-gray-600 dark:text-gray-400 whitespace-pre-wrap">{iface.comments}</div>
+        </div>
+      )}
     </div>
   );
 }

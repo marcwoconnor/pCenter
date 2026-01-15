@@ -72,7 +72,7 @@ interface ClusterState {
 }
 
 export interface SelectedObject {
-  type: 'node' | 'vm' | 'ct' | 'storage' | 'cluster' | 'datacenter';
+  type: 'node' | 'vm' | 'ct' | 'storage' | 'cluster' | 'datacenter' | 'network';
   id: string | number;
   name: string;
   node?: string;

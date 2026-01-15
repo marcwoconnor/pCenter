@@ -142,14 +142,41 @@ type RegisterData struct {
 
 // StatusData from agent
 type StatusData struct {
-	Node       string          `json:"node"`
-	Cluster    string          `json:"cluster"`
-	NodeStatus *NodeStatus     `json:"node_status"`
-	VMs        []VMStatus      `json:"vms"`
-	Containers []CTStatus      `json:"containers"`
-	Storage    []StorageStatus `json:"storage,omitempty"`
-	Ceph       *CephStatus     `json:"ceph,omitempty"`
-	Metrics    *SystemMetrics  `json:"metrics,omitempty"`
+	Node       string             `json:"node"`
+	Cluster    string             `json:"cluster"`
+	NodeStatus *NodeStatus        `json:"node_status"`
+	VMs        []VMStatus         `json:"vms"`
+	Containers []CTStatus         `json:"containers"`
+	Storage    []StorageStatus    `json:"storage,omitempty"`
+	Networks   []NetworkInterface `json:"networks,omitempty"`
+	Ceph       *CephStatus        `json:"ceph,omitempty"`
+	Metrics    *SystemMetrics     `json:"metrics,omitempty"`
+}
+
+// NetworkInterface from agent
+type NetworkInterface struct {
+	Iface       string `json:"iface"`
+	Type        string `json:"type"`
+	Active      int    `json:"active"`
+	Autostart   int    `json:"autostart"`
+	Method      string `json:"method,omitempty"`
+	Method6     string `json:"method6,omitempty"`
+	Address     string `json:"address,omitempty"`
+	Netmask     string `json:"netmask,omitempty"`
+	Gateway     string `json:"gateway,omitempty"`
+	CIDR        string `json:"cidr,omitempty"`
+	Address6    string `json:"address6,omitempty"`
+	Netmask6    string `json:"netmask6,omitempty"`
+	Gateway6    string `json:"gateway6,omitempty"`
+	BridgePorts string `json:"bridge_ports,omitempty"`
+	BridgeSTP   string `json:"bridge_stp,omitempty"`
+	BridgeFD    string `json:"bridge_fd,omitempty"`
+	BondSlaves  string `json:"bond-slaves,omitempty"`
+	BondMode    string `json:"bond_mode,omitempty"`
+	VlanID      int    `json:"vlan-id,omitempty"`
+	VlanRawDev  string `json:"vlan-raw-device,omitempty"`
+	MTU         int    `json:"mtu,omitempty"`
+	Comments    string `json:"comments,omitempty"`
 }
 
 type NodeStatus struct {
@@ -399,6 +426,37 @@ func (a *AgentConn) handleStatus(data json.RawMessage) {
 		}
 	}
 
+	// Convert network interfaces
+	networks := make([]pve.NetworkInterface, len(status.Networks))
+	for i, n := range status.Networks {
+		networks[i] = pve.NetworkInterface{
+			Cluster:       status.Cluster,
+			Node:          status.Node,
+			Iface:         n.Iface,
+			Type:          n.Type,
+			Active:        n.Active,
+			Autostart:     n.Autostart,
+			Method:        n.Method,
+			Method6:       n.Method6,
+			Address:       n.Address,
+			Netmask:       n.Netmask,
+			Gateway:       n.Gateway,
+			CIDR:          n.CIDR,
+			Address6:      n.Address6,
+			Netmask6:      n.Netmask6,
+			Gateway6:      n.Gateway6,
+			BridgePorts:   n.BridgePorts,
+			BridgeSTP:     n.BridgeSTP,
+			BridgeFD:      n.BridgeFD,
+			BondSlaves:    n.BondSlaves,
+			BondMode:      n.BondMode,
+			VLANID:        n.VlanID,
+			VLANRawDevice: n.VlanRawDev,
+			MTU:           n.MTU,
+			Comments:      n.Comments,
+		}
+	}
+
 	// Convert Ceph if present
 	var ceph *pve.CephStatus
 	if status.Ceph != nil {
@@ -411,6 +469,11 @@ func (a *AgentConn) handleStatus(data json.RawMessage) {
 
 	// Update the store
 	cs.UpdateNode(status.Node, node, vms, cts, storage, ceph)
+
+	// Update network interfaces separately
+	if len(networks) > 0 {
+		cs.UpdateNetworkInterfaces(status.Node, networks)
+	}
 
 	slog.Debug("agent status received",
 		"node", status.Node,

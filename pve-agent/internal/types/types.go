@@ -33,14 +33,41 @@ type HeartbeatData struct {
 
 // StatusData contains the full node state
 type StatusData struct {
-	Node       string          `json:"node"`
-	Cluster    string          `json:"cluster"`
-	NodeStatus *NodeStatus     `json:"node_status"`
-	VMs        []VMStatus      `json:"vms"`
-	Containers []CTStatus      `json:"containers"`
-	Storage    []StorageStatus `json:"storage,omitempty"`
-	Ceph       *CephStatus     `json:"ceph,omitempty"`
-	Metrics    *SystemMetrics  `json:"metrics,omitempty"`
+	Node       string             `json:"node"`
+	Cluster    string             `json:"cluster"`
+	NodeStatus *NodeStatus        `json:"node_status"`
+	VMs        []VMStatus         `json:"vms"`
+	Containers []CTStatus         `json:"containers"`
+	Storage    []StorageStatus    `json:"storage,omitempty"`
+	Networks   []NetworkInterface `json:"networks,omitempty"`
+	Ceph       *CephStatus        `json:"ceph,omitempty"`
+	Metrics    *SystemMetrics     `json:"metrics,omitempty"`
+}
+
+// NetworkInterface represents a network interface on a node
+type NetworkInterface struct {
+	Iface     string `json:"iface"`
+	Type      string `json:"type"` // bridge, bond, eth, vlan, OVSBridge
+	Active    int    `json:"active"`
+	Autostart int    `json:"autostart"`
+	Method    string `json:"method,omitempty"`
+	Method6   string `json:"method6,omitempty"`
+	Address   string `json:"address,omitempty"`
+	Netmask   string `json:"netmask,omitempty"`
+	Gateway   string `json:"gateway,omitempty"`
+	CIDR      string `json:"cidr,omitempty"`
+	Address6  string `json:"address6,omitempty"`
+	Netmask6  string `json:"netmask6,omitempty"`
+	Gateway6  string `json:"gateway6,omitempty"`
+	BridgePorts string `json:"bridge_ports,omitempty"`
+	BridgeSTP   string `json:"bridge_stp,omitempty"`
+	BridgeFD    string `json:"bridge_fd,omitempty"`
+	BondSlaves  string `json:"bond-slaves,omitempty"`
+	BondMode    string `json:"bond_mode,omitempty"`
+	VlanID      int    `json:"vlan-id,omitempty"`
+	VlanRawDev  string `json:"vlan-raw-device,omitempty"`
+	MTU         int    `json:"mtu,omitempty"`
+	Comments    string `json:"comments,omitempty"`
 }
 
 // NodeStatus contains node-level information
@@ -58,46 +85,57 @@ type NodeStatus struct {
 	LoadAvg    []string `json:"loadavg,omitempty"`
 }
 
+// GuestNIC represents a network interface on a VM/CT
+type GuestNIC struct {
+	Name   string `json:"name"`   // net0, net1, etc.
+	Bridge string `json:"bridge"` // vmbr0, vmbr1, etc.
+	MAC    string `json:"mac,omitempty"`
+	Model  string `json:"model,omitempty"` // virtio, e1000, etc. (VMs only)
+	Tag    int    `json:"tag,omitempty"`   // VLAN tag
+}
+
 // VMStatus contains VM information
 type VMStatus struct {
-	VMID      int     `json:"vmid"`
-	Name      string  `json:"name"`
-	Status    string  `json:"status"` // running, stopped, paused
-	CPU       float64 `json:"cpu"`
-	CPUs      int     `json:"cpus"`
-	Mem       int64   `json:"mem"`
-	MaxMem    int64   `json:"maxmem"`
-	Disk      int64   `json:"disk"`
-	MaxDisk   int64   `json:"maxdisk"`
-	NetIn     int64   `json:"netin"`
-	NetOut    int64   `json:"netout"`
-	DiskRead  int64   `json:"diskread"`
-	DiskWrite int64   `json:"diskwrite"`
-	Uptime    int64   `json:"uptime"`
-	Template  bool    `json:"template"`
-	HAState   string  `json:"ha_state,omitempty"`
+	VMID      int        `json:"vmid"`
+	Name      string     `json:"name"`
+	Status    string     `json:"status"` // running, stopped, paused
+	CPU       float64    `json:"cpu"`
+	CPUs      int        `json:"cpus"`
+	Mem       int64      `json:"mem"`
+	MaxMem    int64      `json:"maxmem"`
+	Disk      int64      `json:"disk"`
+	MaxDisk   int64      `json:"maxdisk"`
+	NetIn     int64      `json:"netin"`
+	NetOut    int64      `json:"netout"`
+	DiskRead  int64      `json:"diskread"`
+	DiskWrite int64      `json:"diskwrite"`
+	Uptime    int64      `json:"uptime"`
+	Template  bool       `json:"template"`
+	HAState   string     `json:"ha_state,omitempty"`
+	NICs      []GuestNIC `json:"nics,omitempty"`
 }
 
 // CTStatus contains container information
 type CTStatus struct {
-	VMID      int     `json:"vmid"`
-	Name      string  `json:"name"`
-	Status    string  `json:"status"`
-	CPU       float64 `json:"cpu"`
-	CPUs      int     `json:"cpus"`
-	Mem       int64   `json:"mem"`
-	MaxMem    int64   `json:"maxmem"`
-	Disk      int64   `json:"disk"`
-	MaxDisk   int64   `json:"maxdisk"`
-	Swap      int64   `json:"swap"`
-	MaxSwap   int64   `json:"maxswap"`
-	NetIn     int64   `json:"netin"`
-	NetOut    int64   `json:"netout"`
-	DiskRead  int64   `json:"diskread"`
-	DiskWrite int64   `json:"diskwrite"`
-	Uptime    int64   `json:"uptime"`
-	Template  bool    `json:"template"`
-	HAState   string  `json:"ha_state,omitempty"`
+	VMID      int        `json:"vmid"`
+	Name      string     `json:"name"`
+	Status    string     `json:"status"`
+	CPU       float64    `json:"cpu"`
+	CPUs      int        `json:"cpus"`
+	Mem       int64      `json:"mem"`
+	MaxMem    int64      `json:"maxmem"`
+	Disk      int64      `json:"disk"`
+	MaxDisk   int64      `json:"maxdisk"`
+	Swap      int64      `json:"swap"`
+	MaxSwap   int64      `json:"maxswap"`
+	NetIn     int64      `json:"netin"`
+	NetOut    int64      `json:"netout"`
+	DiskRead  int64      `json:"diskread"`
+	DiskWrite int64      `json:"diskwrite"`
+	Uptime    int64      `json:"uptime"`
+	Template  bool       `json:"template"`
+	HAState   string     `json:"ha_state,omitempty"`
+	NICs      []GuestNIC `json:"nics,omitempty"`
 }
 
 // StorageStatus contains storage information
