@@ -403,6 +403,24 @@ type rawCephStatus struct {
 	} `json:"monmap"`
 }
 
+// StorageVolume represents a volume on storage
+type StorageVolume struct {
+	Volid   string      `json:"volid"`
+	Format  string      `json:"format"`
+	Size    int64       `json:"size"`
+	Used    int64       `json:"used,omitempty"`
+	VMID    int         `json:"vmid,omitempty"`
+	Content string      `json:"content"`
+	Ctime   interface{} `json:"ctime,omitempty"` // can be int64 or string
+	Parent  string      `json:"parent,omitempty"`
+	Notes   string      `json:"notes,omitempty"`
+}
+
+// GetStorageContent returns volumes on a storage
+func (c *PVEClient) GetStorageContent(ctx context.Context, storageName string) ([]StorageVolume, error) {
+	return get[[]StorageVolume](c, ctx, fmt.Sprintf("/nodes/%s/storage/%s/content", c.nodeName, storageName))
+}
+
 // GetCephStatus returns Ceph cluster status
 func (c *PVEClient) GetCephStatus(ctx context.Context) (*types.CephStatus, error) {
 	raw, err := get[rawCephStatus](c, ctx, fmt.Sprintf("/nodes/%s/ceph/status", c.nodeName))

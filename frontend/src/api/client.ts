@@ -3,6 +3,7 @@ import type {
   Guest,
   Summary,
   Storage,
+  StorageVolume,
   CephStatus,
   GlobalSummary,
   ClusterInfo,
@@ -68,6 +69,8 @@ export const api = {
   getContainers: () => fetchAPI<Guest[]>('/containers'),
   getStorage: (node?: string) =>
     fetchAPI<Storage[]>(node ? `/storage?node=${node}` : '/storage'),
+  getStorageContent: (storage: string, node?: string) =>
+    fetchAPI<StorageVolume[]>(node ? `/storage/${storage}/content?node=${node}` : `/storage/${storage}/content`),
   getCeph: () => fetchAPI<CephStatus>('/ceph'),
   getMigrations: () => fetchAPI<MigrationProgress[]>('/migrations'),
   getDRSRecommendations: () => fetchAPI<DRSRecommendation[]>('/drs/recommendations'),

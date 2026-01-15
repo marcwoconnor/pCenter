@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os/exec"
@@ -569,6 +570,74 @@ func (c *Client) GetStorage(ctx context.Context) ([]Storage, error) {
 		storage[i].Node = c.nodeName
 	}
 	return storage, nil
+}
+
+// GetStorageContent returns all volumes on a storage
+func (c *Client) GetStorageContent(ctx context.Context, storageName string) ([]StorageVolume, error) {
+	return get[[]StorageVolume](c, ctx, fmt.Sprintf("/nodes/%s/storage/%s/content", c.nodeName, storageName))
+}
+
+// UploadToStorage uploads a file to storage (ISO, template, etc.)
+func (c *Client) UploadToStorage(ctx context.Context, storageName, contentType, filename string, file io.Reader, size int64) (string, error) {
+	path := fmt.Sprintf("/nodes/%s/storage/%s/upload", c.nodeName, storageName)
+
+	// Create multipart form
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	// Add content type field
+	if err := writer.WriteField("content", contentType); err != nil {
+		return "", fmt.Errorf("failed to write content field: %w", err)
+	}
+
+	// Add file
+	part, err := writer.CreateFormFile("filename", filename)
+	if err != nil {
+		return "", fmt.Errorf("failed to create form file: %w", err)
+	}
+
+	if _, err := io.Copy(part, file); err != nil {
+		return "", fmt.Errorf("failed to copy file: %w", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		return "", fmt.Errorf("failed to close writer: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+path, &buf)
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if c.tokenID != "" && c.tokenSecret != "" {
+		req.Header.Set("Authorization", "PVEAPIToken="+c.tokenID+"="+c.tokenSecret)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("upload failed: %s", string(data))
+	}
+
+	// Parse response to get UPID
+	var apiResp struct {
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(data, &apiResp); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return apiResp.Data, nil
 }
 
 // --- Cluster operations ---

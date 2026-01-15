@@ -296,6 +296,156 @@ func (h *Handler) GetStorage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, h.store.GetStorage(node))
 }
 
+// GetStorageContent returns volumes on a specific storage
+func (h *Handler) GetStorageContent(w http.ResponseWriter, r *http.Request) {
+	storageName := r.PathValue("storage")
+	node := r.URL.Query().Get("node") // optional: specific node
+
+	// Find the storage to determine which node to query
+	allStorage := h.store.GetStorage("")
+	var targetNode, cluster string
+	for _, s := range allStorage {
+		if s.Storage == storageName {
+			if node != "" && s.Node != node {
+				continue
+			}
+			targetNode = s.Node
+			cluster = s.Cluster
+			break
+		}
+	}
+
+	if targetNode == "" {
+		writeError(w, http.StatusNotFound, "storage not found")
+		return
+	}
+
+	// Try poller first (direct connection mode)
+	if h.poller != nil {
+		allClients := h.poller.GetAllClients()
+		for _, clients := range allClients {
+			for _, c := range clients {
+				if c.NodeName() == targetNode {
+					content, err := c.GetStorageContent(r.Context(), storageName)
+					if err != nil {
+						writeError(w, http.StatusInternalServerError, err.Error())
+						return
+					}
+					writeJSON(w, content)
+					return
+				}
+			}
+		}
+	}
+
+	// Fall back to agent mode
+	if h.agentHub != nil {
+		cmd := &agent.CommandData{
+			ID:     fmt.Sprintf("storage-%d", time.Now().UnixNano()),
+			Action: "storage_content",
+			Params: map[string]interface{}{
+				"storage": storageName,
+			},
+		}
+
+		resultCh, err := h.agentHub.SendCommand(cluster, targetNode, cmd)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+
+		select {
+		case result := <-resultCh:
+			if !result.Success {
+				writeError(w, http.StatusInternalServerError, result.Error)
+				return
+			}
+			// Result.Output is JSON, parse and return
+			var content []pve.StorageVolume
+			if err := json.Unmarshal([]byte(result.Output), &content); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to parse agent response")
+				return
+			}
+			writeJSON(w, content)
+			return
+
+		case <-ctx.Done():
+			writeError(w, http.StatusGatewayTimeout, "agent command timed out")
+			return
+		}
+	}
+
+	writeError(w, http.StatusServiceUnavailable, "no connection to node "+targetNode)
+}
+
+// UploadToStorage handles file uploads to storage (ISO, templates, etc.)
+func (h *Handler) UploadToStorage(w http.ResponseWriter, r *http.Request) {
+	storageName := r.PathValue("storage")
+	node := r.URL.Query().Get("node")
+	contentType := r.URL.Query().Get("content") // iso, vztmpl, etc.
+
+	if contentType == "" {
+		contentType = "iso" // default to ISO
+	}
+
+	// Parse multipart form (max 10GB)
+	if err := r.ParseMultipartForm(10 << 30); err != nil {
+		writeError(w, http.StatusBadRequest, "failed to parse form: "+err.Error())
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "no file provided: "+err.Error())
+		return
+	}
+	defer file.Close()
+
+	// Find the storage to determine which node to use
+	allStorage := h.store.GetStorage("")
+	var targetNode string
+	for _, s := range allStorage {
+		if s.Storage == storageName {
+			if node != "" && s.Node != node {
+				continue
+			}
+			targetNode = s.Node
+			break
+		}
+	}
+
+	if targetNode == "" {
+		writeError(w, http.StatusNotFound, "storage not found")
+		return
+	}
+
+	if h.poller == nil {
+		writeError(w, http.StatusServiceUnavailable, "upload requires direct cluster connection (not available in agent-only mode)")
+		return
+	}
+
+	// Find client for target node
+	allClients := h.poller.GetAllClients()
+	for _, clients := range allClients {
+		for _, c := range clients {
+			if c.NodeName() == targetNode {
+				upid, err := c.UploadToStorage(r.Context(), storageName, contentType, header.Filename, file, header.Size)
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				writeJSON(w, map[string]string{"upid": upid, "filename": header.Filename})
+				return
+			}
+		}
+	}
+
+	writeError(w, http.StatusServiceUnavailable, "no client for node "+targetNode)
+}
+
 // GetCeph returns Ceph status (from first available cluster)
 func (h *Handler) GetCeph(w http.ResponseWriter, r *http.Request) {
 	ceph := h.store.GetCeph()

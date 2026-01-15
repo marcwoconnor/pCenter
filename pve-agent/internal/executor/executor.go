@@ -34,6 +34,9 @@ var AllowedActions = map[string]bool{
 	"ceph_osd_tree":      true,
 	"ceph_status":        true,
 	"ceph_pg_query":      true,
+
+	// Storage queries
+	"storage_content": true,
 }
 
 // Executor handles command execution on the agent
@@ -67,6 +70,8 @@ func (e *Executor) Execute(ctx context.Context, cmd *types.CommandData) *types.C
 		e.executeCT(ctx, cmd, result)
 	case strings.HasPrefix(cmd.Action, "ceph_"):
 		e.executeCeph(ctx, cmd, result)
+	case strings.HasPrefix(cmd.Action, "storage_"):
+		e.executeStorage(ctx, cmd, result)
 	default:
 		result.Error = "unknown action type"
 	}

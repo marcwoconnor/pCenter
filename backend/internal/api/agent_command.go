@@ -35,6 +35,9 @@ var AllowedAgentActions = map[string]bool{
 	"ceph_osd_tree":      true,
 	"ceph_status":        true,
 	"ceph_pg_query":      true,
+
+	// Storage queries
+	"storage_content": true,
 }
 
 // AgentCommandRequest is the request body for /api/agent/command

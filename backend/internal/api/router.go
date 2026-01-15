@@ -89,6 +89,8 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 
 	// Storage & Ceph (all clusters)
 	mux.HandleFunc("GET /api/storage", h.GetStorage)
+	mux.HandleFunc("GET /api/storage/{storage}/content", h.GetStorageContent)
+	mux.HandleFunc("POST /api/storage/{storage}/upload", h.UploadToStorage)
 	mux.HandleFunc("GET /api/ceph", h.GetCeph)
 	mux.HandleFunc("POST /api/ceph/command", h.RunCephCommand)
 	mux.HandleFunc("GET /api/smart", h.GetSmart)

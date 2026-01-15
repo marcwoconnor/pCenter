@@ -96,6 +96,18 @@ export interface Storage {
   total: number;
 }
 
+export interface StorageVolume {
+  volid: string;      // e.g., "local-lvm:vm-100-disk-0"
+  format: string;     // raw, qcow2, subvol, etc
+  size: number;       // size in bytes
+  used?: number;      // used space (for thin)
+  vmid?: number;      // VM ID if this is a VM disk
+  content: string;    // images, rootdir, iso, vztmpl, backup
+  ctime?: number;     // creation time
+  parent?: string;    // parent snapshot
+  notes?: string;     // description/notes
+}
+
 export interface Summary {
   TotalNodes: number;
   OnlineNodes: number;

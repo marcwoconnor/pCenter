@@ -28,12 +28,21 @@ const guestTabs: Tab[] = [
 
 const storageTabs: Tab[] = [
   { id: 'summary', label: 'Summary' },
-  { id: 'vms', label: 'Virtual Machines' },
+  { id: 'vms', label: 'Content' },
 ];
 
 export function ObjectDetail() {
   const { selectedObject, nodes, guests, storage, performAction } = useCluster();
   const [activeTab, setActiveTab] = useState('summary');
+
+  // Handle defaultTab from context menu navigation
+  useEffect(() => {
+    if (selectedObject?.defaultTab) {
+      setActiveTab(selectedObject.defaultTab);
+    } else {
+      setActiveTab('summary');
+    }
+  }, [selectedObject?.id, selectedObject?.defaultTab]);
 
   if (!selectedObject) {
     return (
@@ -157,6 +166,7 @@ export function ObjectDetail() {
           />
         )}
         {activeTab === 'vms' && node && <NodeVMs nodeId={node.node} />}
+        {activeTab === 'vms' && storageItem && <StorageVMs storage={storageItem} />}
         {activeTab === 'monitor' && node && <NodeMonitorTab node={node.node} />}
         {activeTab === 'monitor' && guest && (
           <GuestMonitorTab
@@ -483,6 +493,205 @@ function NodeVMs({ nodeId }: { nodeId: string }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+type SortField = 'name' | 'vmid' | 'type' | 'size' | 'format';
+type SortDir = 'asc' | 'desc';
+
+function StorageVMs({ storage }: { storage: any }) {
+  const { guests, setSelectedObject } = useCluster();
+  const [volumes, setVolumes] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [sortField, setSortField] = useState<SortField>('name');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
+
+  useEffect(() => {
+    const fetchContent = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(`/api/storage/${storage.storage}/content?node=${storage.node}`);
+        if (!res.ok) throw new Error('Failed to fetch storage content');
+        const data = await res.json();
+        setVolumes(data || []);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Unknown error');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchContent();
+  }, [storage.storage, storage.node]);
+
+  // Build guest lookup map
+  const guestMap = useMemo(() => {
+    const map: Record<number, typeof guests[0]> = {};
+    for (const g of guests) {
+      map[g.vmid] = g;
+    }
+    return map;
+  }, [guests]);
+
+  // Extract disk name from volid
+  const getDiskName = (volid: string) => {
+    const parts = volid.split(':');
+    return parts.length > 1 ? parts[1] : volid;
+  };
+
+  // Sort volumes
+  const sortedVolumes = useMemo(() => {
+    const sorted = [...volumes].sort((a, b) => {
+      let cmp = 0;
+      switch (sortField) {
+        case 'name':
+          cmp = getDiskName(a.volid).localeCompare(getDiskName(b.volid));
+          break;
+        case 'vmid':
+          cmp = (a.vmid || 0) - (b.vmid || 0);
+          break;
+        case 'type':
+          cmp = (a.content || '').localeCompare(b.content || '');
+          break;
+        case 'size':
+          cmp = (a.size || 0) - (b.size || 0);
+          break;
+        case 'format':
+          cmp = (a.format || '').localeCompare(b.format || '');
+          break;
+      }
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return sorted;
+  }, [volumes, sortField, sortDir]);
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDir('asc');
+    }
+  };
+
+  const SortHeader = ({ field, label, align }: { field: SortField; label: string; align?: 'right' }) => (
+    <th
+      className={`pb-2 font-medium cursor-pointer hover:text-gray-700 dark:hover:text-gray-200 select-none ${align === 'right' ? 'text-right' : ''}`}
+      onClick={() => handleSort(field)}
+    >
+      {label}
+      {sortField === field && (
+        <span className="ml-1">{sortDir === 'asc' ? '▲' : '▼'}</span>
+      )}
+    </th>
+  );
+
+  const handleGuestClick = (vmid: number) => {
+    const g = guestMap[vmid];
+    if (g) {
+      setSelectedObject({
+        type: g.type === 'qemu' ? 'vm' : 'ct',
+        id: g.vmid,
+        name: g.name,
+        node: g.node,
+        cluster: g.cluster,
+      });
+    }
+  };
+
+  // Get content type icon
+  const getContentIcon = (content: string, format: string) => {
+    if (content === 'iso') return '💿';
+    if (content === 'backup') return '📦';
+    if (content === 'vztmpl') return '📋';
+    if (content === 'snippets') return '📝';
+    if (content === 'rootdir') return '🗂️';
+    // For images, differentiate by format
+    if (format === 'raw') return '🖴';
+    if (format === 'qcow2') return '🖴';
+    return '📄';
+  };
+
+  if (loading) {
+    return (
+      <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+        Loading...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="text-center py-8 text-red-500">
+        Error: {error}
+      </div>
+    );
+  }
+
+  if (sortedVolumes.length === 0) {
+    return (
+      <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+        Empty
+      </div>
+    );
+  }
+
+  const totalSize = sortedVolumes.reduce((sum, v) => sum + (v.size || 0), 0);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between text-sm text-gray-500 dark:text-gray-400 mb-3">
+        <span>{sortedVolumes.length} item{sortedVolumes.length !== 1 ? 's' : ''}</span>
+        <span>{formatBytes(totalSize)}</span>
+      </div>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+            <SortHeader field="name" label="Name" />
+            <SortHeader field="vmid" label="Owner" />
+            <SortHeader field="type" label="Type" />
+            <SortHeader field="size" label="Size" align="right" />
+            <th className="w-4"></th>
+            <SortHeader field="format" label="Format" />
+          </tr>
+        </thead>
+        <tbody className="text-gray-700 dark:text-gray-300">
+          {sortedVolumes.map((vol) => {
+            const guest = vol.vmid ? guestMap[vol.vmid] : null;
+            return (
+              <tr
+                key={vol.volid}
+                className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50"
+              >
+                <td className="py-1.5">
+                  <span className="mr-2">{getContentIcon(vol.content, vol.format)}</span>
+                  <span className="font-mono text-xs">{getDiskName(vol.volid)}</span>
+                </td>
+                <td className="py-1.5">
+                  {guest ? (
+                    <button
+                      onClick={() => handleGuestClick(vol.vmid)}
+                      className="hover:underline"
+                    >
+                      {guest.name}
+                    </button>
+                  ) : vol.vmid ? (
+                    <span className="text-gray-400 dark:text-gray-500">VM {vol.vmid}</span>
+                  ) : (
+                    <span className="text-gray-400 dark:text-gray-500">—</span>
+                  )}
+                </td>
+                <td className="py-1.5 text-gray-500 dark:text-gray-400">{vol.content}</td>
+                <td className="py-1.5 text-right font-mono text-xs">{formatBytes(vol.size)}</td>
+                <td></td>
+                <td className="py-1.5 text-gray-500 dark:text-gray-400">{vol.format}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -1518,6 +1727,8 @@ function ConsoleTab({
   const rfbRef = useRef<any>(null);
   const [status, setStatus] = useState<'connecting' | 'connected' | 'error' | 'closed'>('connecting');
   const [error, setError] = useState<string | null>(null);
+  const [scaleMode, setScaleMode] = useState<'fit' | '1:1'>('fit');
+  const [vncSize, setVncSize] = useState<{ width: number; height: number } | null>(null);
 
   useEffect(() => {
     if (!isRunning || !containerRef.current) return;
@@ -1548,19 +1759,38 @@ function ConsoleTab({
         });
 
         rfbRef.current = rfb;
-        rfb.scaleViewport = true;
+        rfb.scaleViewport = scaleMode === 'fit';
         rfb.clipViewport = true;
         rfb.resizeSession = false;
 
         rfb.addEventListener('connect', () => {
           if (mounted) {
             setStatus('connected');
-            // Force a resize after connection to ensure proper scaling
+            // Capture VNC native size and apply scaling
             setTimeout(() => {
               if (rfbRef.current) {
-                rfbRef.current.scaleViewport = true;
+                const screen = rfbRef.current._screen;
+                if (screen) {
+                  setVncSize({ width: screen.width, height: screen.height });
+                }
+                rfbRef.current.scaleViewport = scaleMode === 'fit';
               }
             }, 100);
+
+            // Remap Backspace to send DEL (^?) instead of ^H
+            const canvas = containerRef.current?.querySelector('canvas');
+            if (canvas) {
+              canvas.addEventListener('keydown', (e: KeyboardEvent) => {
+                if (e.key === 'Backspace') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  // Send Ctrl+? which produces DEL (ASCII 127)
+                  rfb.sendKey(0x7f, 'Backspace', true);
+                  rfb.sendKey(0x7f, 'Backspace', false);
+                }
+              }, true);
+            }
+
             rfb.focus();
           }
         });
@@ -1618,6 +1848,13 @@ function ConsoleTab({
     setError(null);
   }, [vmid]);
 
+  // Update scale mode on existing connection
+  useEffect(() => {
+    if (rfbRef.current) {
+      rfbRef.current.scaleViewport = scaleMode === 'fit';
+    }
+  }, [scaleMode]);
+
   if (!isRunning) {
     return (
       <div className="flex items-center justify-center h-full text-gray-500 dark:text-gray-400">
@@ -1647,6 +1884,30 @@ function ConsoleTab({
           }`}>
             {status}
           </span>
+          <div className="flex gap-1 ml-2">
+            <button
+              onClick={() => setScaleMode('fit')}
+              className={`px-2 py-0.5 text-xs rounded ${
+                scaleMode === 'fit'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+              title="Scale to fit container"
+            >
+              Fit
+            </button>
+            <button
+              onClick={() => setScaleMode('1:1')}
+              className={`px-2 py-0.5 text-xs rounded ${
+                scaleMode === '1:1'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+              title="Native resolution (1:1 pixels)"
+            >
+              1:1
+            </button>
+          </div>
         </div>
         <button
           onClick={handlePopout}
@@ -1659,7 +1920,9 @@ function ConsoleTab({
 
       {/* VNC container */}
       <div
-        className="flex-1 bg-black rounded-b-lg overflow-hidden"
+        className={`flex-1 bg-black rounded-b-lg ${
+          scaleMode === '1:1' ? 'overflow-auto flex items-start justify-center' : 'overflow-hidden'
+        }`}
         onClick={() => rfbRef.current?.focus()}
       >
         {error ? (
@@ -1667,7 +1930,13 @@ function ConsoleTab({
             {error}
           </div>
         ) : (
-          <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+          <div
+            ref={containerRef}
+            style={scaleMode === '1:1' && vncSize
+              ? { width: vncSize.width, height: vncSize.height }
+              : { width: '100%', height: '100%' }
+            }
+          />
         )}
       </div>
     </div>

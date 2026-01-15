@@ -107,6 +107,19 @@ type Storage struct {
 	Total   int64  `json:"total"`
 }
 
+// StorageVolume represents a volume on a storage (disk image, ISO, etc)
+type StorageVolume struct {
+	Volid   string      `json:"volid"`             // e.g., "local-lvm:vm-100-disk-0"
+	Format  string      `json:"format"`            // raw, qcow2, subvol, etc
+	Size    int64       `json:"size"`              // size in bytes
+	Used    int64       `json:"used,omitempty"`    // used space (for thin)
+	VMID    int         `json:"vmid,omitempty"`    // VM ID if this is a VM disk
+	Content string      `json:"content"`           // images, rootdir, iso, vztmpl, backup
+	Ctime   interface{} `json:"ctime,omitempty"`   // creation time (can be int64 or string)
+	Parent  string      `json:"parent,omitempty"`  // parent snapshot
+	Notes   string      `json:"notes,omitempty"`   // description/notes
+}
+
 // ClusterResource is a unified resource from /cluster/resources
 type ClusterResource struct {
 	ID       string  `json:"id"`

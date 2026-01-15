@@ -77,6 +77,7 @@ export interface SelectedObject {
   name: string;
   node?: string;
   cluster?: string;
+  defaultTab?: string;
 }
 
 const ClusterContext = createContext<ClusterState | null>(null);

@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/moconnor/pve-agent/internal/types"
@@ -122,4 +123,35 @@ func (e *Executor) migrateCT(ctx context.Context, cmd *types.CommandData, result
 
 	result.Success = true
 	result.UPID = upid
+}
+
+// executeStorage handles storage queries
+func (e *Executor) executeStorage(ctx context.Context, cmd *types.CommandData, result *types.CommandResultData) {
+	switch cmd.Action {
+	case "storage_content":
+		storageName, _ := cmd.Params["storage"].(string)
+		if storageName == "" {
+			result.Error = "storage name required"
+			return
+		}
+
+		content, err := e.api.GetStorageContent(ctx, storageName)
+		if err != nil {
+			result.Error = err.Error()
+			return
+		}
+
+		// Serialize to JSON for output
+		data, err := json.Marshal(content)
+		if err != nil {
+			result.Error = err.Error()
+			return
+		}
+
+		result.Success = true
+		result.Output = string(data)
+
+	default:
+		result.Error = "unknown storage action"
+	}
 }

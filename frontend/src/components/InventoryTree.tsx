@@ -8,6 +8,7 @@ import { MigrateDialog } from './MigrateDialog';
 import { FolderDialog } from './FolderDialog';
 import { DatacenterDialog } from './DatacenterDialog';
 import { AddHostDialog } from './AddHostDialog';
+import { UploadDialog } from './UploadDialog';
 import { api } from '../api/client';
 
 interface ContextMenuState {
@@ -27,6 +28,7 @@ interface DragData {
 
 interface TreeNodeProps {
   icon: string;
+  iconTitle?: string;
   label: string;
   status?: 'online' | 'running' | 'stopped' | 'warning';
   badge?: React.ReactNode;
@@ -45,6 +47,7 @@ interface TreeNodeProps {
 
 function TreeNode({
   icon,
+  iconTitle,
   label,
   status,
   badge,
@@ -132,7 +135,7 @@ function TreeNode({
         ) : (
           <span className="w-4" />
         )}
-        <span>{icon}</span>
+        <span title={iconTitle}>{icon}</span>
         {status && <div className={`w-2 h-2 rounded-full ${statusColors[status]}`} />}
         <span className="flex-1 truncate">{label}</span>
         {badge}
@@ -198,6 +201,7 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
   const [orphanClusters, setOrphanClusters] = useState<InventoryCluster[]>([]);
   const [datacenterDialog, setDatacenterDialog] = useState<DatacenterDialogState | null>(null);
   const [addHostCluster, setAddHostCluster] = useState<string | null>(null);
+  const [uploadDialog, setUploadDialog] = useState<{ storage: string; node: string; contentType: 'iso' | 'vztmpl' } | null>(null);
 
   const filterLower = filter.toLowerCase();
 
@@ -676,23 +680,32 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
     ];
   };
 
-  const getStorageMenuItems = (_s: Storage): MenuItem[] => {
+  const getStorageMenuItems = (s: Storage): MenuItem[] => {
     return [
+      {
+        label: 'Browse Content',
+        icon: '📂',
+        action: () => {
+          setSelectedObject({
+            type: 'storage',
+            id: `${s.node}-${s.storage}`,
+            name: s.storage,
+            node: s.node,
+            cluster: s.cluster,
+            defaultTab: 'vms',
+          });
+        },
+      },
+      { label: '', action: () => {}, divider: true },
       {
         label: 'Upload ISO',
         icon: '📀',
-        action: () => alert('ISO upload not yet implemented'),
+        action: () => setUploadDialog({ storage: s.storage, node: s.node, contentType: 'iso' }),
       },
       {
         label: 'Upload Template',
         icon: '📄',
-        action: () => alert('Template upload not yet implemented'),
-      },
-      { label: '', action: () => {}, divider: true },
-      {
-        label: 'Browse Content',
-        icon: '📂',
-        action: () => alert('Storage browser not yet implemented'),
+        action: () => setUploadDialog({ storage: s.storage, node: s.node, contentType: 'vztmpl' }),
       },
     ];
   };
@@ -1226,6 +1239,40 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
     [storage]
   );
 
+  // Get storage icon and tooltip based on type
+  const getStorageIcon = (type: string): { icon: string; title: string } => {
+    switch (type) {
+      case 'rbd':
+        return { icon: '🐙', title: 'Ceph RBD (RADOS Block Device)' };
+      case 'cephfs':
+        return { icon: '🐙', title: 'CephFS (Ceph Filesystem)' };
+      case 'zfspool':
+      case 'zfs':
+        return { icon: '🗃️', title: 'ZFS Pool' };
+      case 'nfs':
+        return { icon: '🌐', title: 'NFS (Network File System)' };
+      case 'cifs':
+        return { icon: '🌐', title: 'CIFS/SMB Share' };
+      case 'glusterfs':
+        return { icon: '🌐', title: 'GlusterFS' };
+      case 'lvm':
+        return { icon: '📊', title: 'LVM (Logical Volume Manager)' };
+      case 'lvmthin':
+        return { icon: '📊', title: 'LVM-thin (Thin Provisioned)' };
+      case 'iscsi':
+      case 'iscsidirect':
+        return { icon: '🔗', title: 'iSCSI Target' };
+      case 'pbs':
+        return { icon: '🛡️', title: 'Proxmox Backup Server' };
+      case 'dir':
+        return { icon: '📁', title: 'Directory Storage' };
+      case 'btrfs':
+        return { icon: '🌲', title: 'Btrfs Filesystem' };
+      default:
+        return { icon: '💿', title: `Storage (${type})` };
+    }
+  };
+
   // Storage View
   if (view === 'storage') {
     const sharedStorage = sortedStorage.filter(s => s.shared);
@@ -1250,17 +1297,21 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
         )}
         {sharedStorage.length > 0 && (
           <TreeNode icon="☁" label="Shared Storage" defaultExpanded count={sharedStorage.length}>
-            {sharedStorage.map((s) => (
-              <TreeNode
-                key={`${s.cluster}-${s.node}-${s.storage}`}
-                icon="💾"
-                label={s.storage}
-                status={s.status === 'available' ? 'online' : 'warning'}
-                isSelected={isSelected({ type: 'storage', id: `${s.node}-${s.storage}`, name: s.storage, cluster: s.cluster })}
-                onClick={() => setSelectedObject({ type: 'storage', id: `${s.node}-${s.storage}`, name: s.storage, node: s.node, cluster: s.cluster })}
-                onContextMenu={(e) => showContextMenu(e, getStorageMenuItems(s))}
-              />
-            ))}
+            {sharedStorage.map((s) => {
+              const { icon, title } = getStorageIcon(s.type);
+              return (
+                <TreeNode
+                  key={`${s.cluster}-${s.node}-${s.storage}`}
+                  icon={icon}
+                  iconTitle={title}
+                  label={`${s.storage} (${s.node})`}
+                  status={s.status === 'available' ? 'online' : 'warning'}
+                  isSelected={isSelected({ type: 'storage', id: `${s.node}-${s.storage}`, name: s.storage, cluster: s.cluster })}
+                  onClick={() => setSelectedObject({ type: 'storage', id: `${s.node}-${s.storage}`, name: s.storage, node: s.node, cluster: s.cluster })}
+                  onContextMenu={(e) => showContextMenu(e, getStorageMenuItems(s))}
+                />
+              );
+            })}
           </TreeNode>
         )}
         {sortedNodes.map((node) => {
@@ -1268,20 +1319,32 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
           if (nodeStorage.length === 0) return null;
           return (
             <TreeNode key={`${node.cluster}-${node.node}`} icon="🖥" label={node.node} defaultExpanded count={nodeStorage.length}>
-              {nodeStorage.map((s) => (
-                <TreeNode
-                  key={`${s.cluster}-${s.node}-${s.storage}`}
-                  icon="💾"
-                  label={s.storage}
-                  status={s.status === 'available' ? 'online' : 'warning'}
-                  isSelected={isSelected({ type: 'storage', id: `${s.node}-${s.storage}`, name: s.storage, cluster: s.cluster })}
-                  onClick={() => setSelectedObject({ type: 'storage', id: `${s.node}-${s.storage}`, name: s.storage, node: s.node, cluster: s.cluster })}
-                  onContextMenu={(e) => showContextMenu(e, getStorageMenuItems(s))}
-                />
-              ))}
+              {nodeStorage.map((s) => {
+                const { icon, title } = getStorageIcon(s.type);
+                return (
+                  <TreeNode
+                    key={`${s.cluster}-${s.node}-${s.storage}`}
+                    icon={icon}
+                    iconTitle={title}
+                    label={s.storage}
+                    status={s.status === 'available' ? 'online' : 'warning'}
+                    isSelected={isSelected({ type: 'storage', id: `${s.node}-${s.storage}`, name: s.storage, cluster: s.cluster })}
+                    onClick={() => setSelectedObject({ type: 'storage', id: `${s.node}-${s.storage}`, name: s.storage, node: s.node, cluster: s.cluster })}
+                    onContextMenu={(e) => showContextMenu(e, getStorageMenuItems(s))}
+                  />
+                );
+              })}
             </TreeNode>
           );
         })}
+        {uploadDialog && (
+          <UploadDialog
+            storage={uploadDialog.storage}
+            node={uploadDialog.node}
+            contentType={uploadDialog.contentType}
+            onClose={() => setUploadDialog(null)}
+          />
+        )}
       </div>
     );
   }
