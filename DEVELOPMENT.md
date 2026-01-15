@@ -302,3 +302,26 @@ ssh root@pve04 "journalctl -u pve-agent -f"
 ### Development Instance
 - **pcenter2**: New LXC for v2 development (separate from production v1)
 - Keep v1 running at pcenter (10.31.11.50) during development
+
+## Gotchas & Lessons Learned
+
+### Storage API
+- `GET /api/storage` returns `active: 0` and `status: ""` for all storage entries
+- Do NOT filter by `s.active === 1` or `s.status === 'available'` - it filters out everything
+- Just filter by content type: `s.content.includes('images')` for VM disks, `s.content.includes('rootdir')` for containers
+
+### Agent-Only Mode (pcenter2)
+- pcenter2 runs without poller (agent-only mode)
+- `h.poller` is nil - don't call `h.poller.GetClusterClients()`
+- Use `h.getClient(cluster, node)` helper which falls back to `createOnDemandClient()`
+- Get nodes from store: `cs.GetNodes()` where `cs, _ := h.store.GetCluster(name)`
+
+### State Store Patterns
+- `h.store.GetCluster(name)` returns `*ClusterState`
+- `cs.GetVM(vmid)` / `cs.GetContainer(vmid)` - methods on ClusterState, not Store
+- `h.store.GetVM(vmid)` searches all clusters (legacy/global endpoints)
+
+### Proxmox DELETE Operations
+- DELETE requests return UPID for task tracking (not just success/error)
+- Added `deleteWithData()` helper in client.go that returns response body
+- Use for VM/container deletion to get task UPID
