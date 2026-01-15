@@ -41,7 +41,7 @@ export function CreateContainerDialog({ cluster, node, onClose, onSuccess }: Cre
         // Get storage (filter for rootdir content - for container root filesystems)
         const allStorage = await api.getStorage(node);
         const rootStorage = allStorage.filter(s =>
-          s.content.includes('rootdir') && s.active === 1
+          s.content.includes('rootdir')
         );
         setStorageList(rootStorage);
         if (rootStorage.length > 0) {

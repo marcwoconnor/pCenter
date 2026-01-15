@@ -470,6 +470,28 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
           }
         },
       },
+      { label: '', action: () => {}, divider: true },
+      {
+        label: 'Delete',
+        icon: '🗑',
+        danger: true,
+        disabled: isRunning,
+        action: async () => {
+          if (!confirm(`Are you sure you want to delete ${guest.name} (${guest.vmid})?\n\nThis action cannot be undone.`)) {
+            return;
+          }
+          const purge = confirm('Also remove all disks and unreferenced files?');
+          try {
+            if (type === 'vm') {
+              await api.deleteVM(guest.cluster, guest.vmid, purge);
+            } else {
+              await api.deleteContainer(guest.cluster, guest.vmid, purge);
+            }
+          } catch (err) {
+            alert('Delete failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
+          }
+        },
+      },
     ];
   };
 

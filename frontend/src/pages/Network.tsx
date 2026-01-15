@@ -479,14 +479,16 @@ function NodeTopology({
           const otherPorts = ports.filter(p => !physicalNics.find(n => n.iface === p));
           // Find VLANs attached to this bridge (vlan-raw-device matches bridge name)
           const bridgeVlans = vlanIfaces.filter(v => v['vlan-raw-device'] === bridge.iface);
-          // Get guests connected to this bridge
-          const bridgeGuests = guestsByBridge[bridge.iface] || [];
+          // Get guests connected to this bridge - sorted by VMID for stable order.
+          // IMPORTANT: Even though the backend now sorts guests, we sort again here
+          // because guestsByBridge groups guests by bridge and the grouping process
+          // can change order. Sorting by VMID ensures consistent visual positioning
+          // and prevents VMs from jumping around on WebSocket updates.
+          const bridgeGuests = (guestsByBridge[bridge.iface] || [])
+            .slice()
+            .sort((a, b) => a.vmid - b.vmid);
 
-          // Show up to 5 guests, then summarize
-          const displayGuests = bridgeGuests.slice(0, 5);
-          const moreCount = bridgeGuests.length - 5;
-
-          const leftItems = bridgeVlans.length + Math.max(1, displayGuests.length + (moreCount > 0 ? 1 : 0));
+          const leftItems = bridgeVlans.length + Math.max(1, bridgeGuests.length);
           const rightItems = Math.max(1, uplinks.length + otherPorts.length);
 
           return (
@@ -528,32 +530,23 @@ function NodeTopology({
                       </div>
                     </div>
                   ))}
-                  {/* Display actual guests */}
-                  {displayGuests.length > 0 ? (
-                    <>
-                      {displayGuests.map((guest) => (
-                        <div key={guest.vmid} className="flex items-center justify-end h-10">
-                          <div className={`px-3 py-1 rounded text-xs text-right flex items-center gap-1 ${
-                            guest.status === 'running'
-                              ? 'bg-purple-600 text-white'
-                              : 'bg-gray-400 text-white'
-                          }`}>
-                            <span>{guest.type === 'qemu' ? '💻' : '📦'}</span>
-                            <div>
-                              <div className="font-semibold">{guest.vmid}</div>
-                              <div className="text-[10px] opacity-80 truncate max-w-[80px]">{guest.name}</div>
-                            </div>
+                  {/* Display all guests */}
+                  {bridgeGuests.length > 0 ? (
+                    bridgeGuests.map((guest) => (
+                      <div key={guest.vmid} className="flex items-center justify-end h-10">
+                        <div className={`px-3 py-1 rounded text-xs text-right flex items-center gap-1 ${
+                          guest.status === 'running'
+                            ? 'bg-purple-600 text-white'
+                            : 'bg-gray-400 text-white'
+                        }`}>
+                          <span>{guest.type === 'qemu' ? '💻' : '📦'}</span>
+                          <div>
+                            <div className="font-semibold">{guest.vmid}</div>
+                            <div className="text-[10px] opacity-80 truncate max-w-[80px]">{guest.name}</div>
                           </div>
                         </div>
-                      ))}
-                      {moreCount > 0 && (
-                        <div className="flex items-center justify-end h-10">
-                          <div className="px-3 py-1 rounded bg-purple-400 text-white text-xs">
-                            +{moreCount} more
-                          </div>
-                        </div>
-                      )}
-                    </>
+                      </div>
+                    ))
                   ) : (
                     <div className="flex items-center justify-end h-10">
                       <div className="px-3 py-1 rounded bg-gray-300 dark:bg-gray-600 text-gray-600 dark:text-gray-300 text-xs italic">

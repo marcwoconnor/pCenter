@@ -1291,6 +1291,33 @@ func (h *Handler) CreateClusterVM(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("created VM", "cluster", clusterName, "node", nodeName, "vmid", req.VMID, "name", req.Name)
+
+	// Log activity
+	if h.activity != nil {
+		details, _ := json.Marshal(map[string]interface{}{
+			"node":      nodeName,
+			"cores":     req.Cores,
+			"memory":    req.Memory,
+			"storage":   req.Storage,
+			"disk_size": req.DiskSize,
+			"upid":      upid,
+		})
+		h.activity.Log(activity.Entry{
+			Action:       activity.ActionVMCreate,
+			ResourceType: "vm",
+			ResourceID:   strconv.Itoa(req.VMID),
+			ResourceName: req.Name,
+			Cluster:      clusterName,
+			Details:      string(details),
+			Status:       "started",
+		})
+	}
+
+	// Broadcast state change
+	if h.onChange != nil {
+		h.onChange()
+	}
+
 	writeJSON(w, map[string]string{"upid": upid})
 }
 
@@ -1338,6 +1365,178 @@ func (h *Handler) CreateClusterContainer(w http.ResponseWriter, r *http.Request)
 	}
 
 	slog.Info("created container", "cluster", clusterName, "node", nodeName, "vmid", req.VMID, "hostname", req.Hostname)
+
+	// Log activity
+	if h.activity != nil {
+		details, _ := json.Marshal(map[string]interface{}{
+			"node":      nodeName,
+			"template":  req.Template,
+			"cores":     req.Cores,
+			"memory":    req.Memory,
+			"storage":   req.Storage,
+			"disk_size": req.DiskSize,
+			"upid":      upid,
+		})
+		h.activity.Log(activity.Entry{
+			Action:       activity.ActionCTCreate,
+			ResourceType: "ct",
+			ResourceID:   strconv.Itoa(req.VMID),
+			ResourceName: req.Hostname,
+			Cluster:      clusterName,
+			Details:      string(details),
+			Status:       "started",
+		})
+	}
+
+	// Broadcast state change
+	if h.onChange != nil {
+		h.onChange()
+	}
+
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// DeleteClusterVM deletes a VM from a specific cluster
+func (h *Handler) DeleteClusterVM(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	// Find the VM to get its node
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+	vm, ok := cs.GetVM(vmid)
+	if !ok {
+		writeError(w, http.StatusNotFound, "VM not found in cluster")
+		return
+	}
+
+	// Check if VM is stopped
+	if vm.Status == "running" {
+		writeError(w, http.StatusConflict, "VM must be stopped before deletion")
+		return
+	}
+
+	client, ok := h.getClient(clusterName, vm.Node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found in cluster")
+		return
+	}
+
+	// Parse purge option from query
+	purge := r.URL.Query().Get("purge") == "1"
+
+	upid, err := client.DeleteVM(r.Context(), vmid, purge)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	slog.Info("deleted VM", "cluster", clusterName, "node", vm.Node, "vmid", vmid, "name", vm.Name)
+
+	// Log activity
+	if h.activity != nil {
+		details, _ := json.Marshal(map[string]interface{}{
+			"node":  vm.Node,
+			"purge": purge,
+			"upid":  upid,
+		})
+		h.activity.Log(activity.Entry{
+			Action:       activity.ActionVMDelete,
+			ResourceType: "vm",
+			ResourceID:   vmidStr,
+			ResourceName: vm.Name,
+			Cluster:      clusterName,
+			Details:      string(details),
+			Status:       "started",
+		})
+	}
+
+	// Broadcast state change
+	if h.onChange != nil {
+		h.onChange()
+	}
+
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// DeleteClusterContainer deletes a container from a specific cluster
+func (h *Handler) DeleteClusterContainer(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	// Find the container to get its node
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+	ct, ok := cs.GetContainer(vmid)
+	if !ok {
+		writeError(w, http.StatusNotFound, "container not found in cluster")
+		return
+	}
+
+	// Check if container is stopped
+	if ct.Status == "running" {
+		writeError(w, http.StatusConflict, "container must be stopped before deletion")
+		return
+	}
+
+	client, ok := h.getClient(clusterName, ct.Node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found in cluster")
+		return
+	}
+
+	// Parse purge option from query
+	purge := r.URL.Query().Get("purge") == "1"
+
+	upid, err := client.DeleteContainer(r.Context(), vmid, purge)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	slog.Info("deleted container", "cluster", clusterName, "node", ct.Node, "vmid", vmid, "name", ct.Name)
+
+	// Log activity
+	if h.activity != nil {
+		details, _ := json.Marshal(map[string]interface{}{
+			"node":  ct.Node,
+			"purge": purge,
+			"upid":  upid,
+		})
+		h.activity.Log(activity.Entry{
+			Action:       activity.ActionCTDelete,
+			ResourceType: "ct",
+			ResourceID:   vmidStr,
+			ResourceName: ct.Name,
+			Cluster:      clusterName,
+			Details:      string(details),
+			Status:       "started",
+		})
+	}
+
+	// Broadcast state change
+	if h.onChange != nil {
+		h.onChange()
+	}
+
 	writeJSON(w, map[string]string{"upid": upid})
 }
 

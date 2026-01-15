@@ -18,9 +18,13 @@ type Entry struct {
 // Action constants
 const (
 	ActionConfigUpdate = "config_update"
+	ActionVMCreate     = "vm_create"
+	ActionVMDelete     = "vm_delete"
 	ActionVMStart      = "vm_start"
 	ActionVMStop       = "vm_stop"
 	ActionVMShutdown   = "vm_shutdown"
+	ActionCTCreate     = "ct_create"
+	ActionCTDelete     = "ct_delete"
 	ActionCTStart      = "ct_start"
 	ActionCTStop       = "ct_stop"
 	ActionCTShutdown   = "ct_shutdown"

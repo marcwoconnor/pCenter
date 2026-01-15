@@ -75,6 +75,14 @@ export function ObjectDetail() {
     ? storage.find((s) => `${s.node}-${s.storage}` === selectedObject.id)
     : null;
 
+  // Memoize the entire NetworkTopology element to prevent re-renders from parent
+  const networkTopologyElement = useMemo(() => {
+    if (selectedObject.type !== 'network') return null;
+    const node = selectedObject.node || '';
+    const cluster = selectedObject.cluster || '';
+    return <NetworkTopology node={node} cluster={cluster} />;
+  }, [selectedObject.type, selectedObject.node, selectedObject.cluster]);
+
   const handleAction = async (action: 'start' | 'stop' | 'shutdown') => {
     if (!guest) return;
     try {
@@ -169,8 +177,11 @@ export function ObjectDetail() {
         {activeTab === 'summary' && selectedObject.type === 'network' && (
           <NetworkSummary ifaceName={selectedObject.name} node={selectedObject.node || ''} cluster={selectedObject.cluster || ''} />
         )}
-        {activeTab === 'topology' && selectedObject.type === 'network' && (
-          <NetworkTopology node={selectedObject.node || ''} cluster={selectedObject.cluster || ''} />
+        {/* Memoized NetworkTopology to prevent re-renders from parent context updates */}
+        {networkTopologyElement && (
+          <div className={activeTab === 'topology' ? 'block' : 'hidden'}>
+            {networkTopologyElement}
+          </div>
         )}
         {activeTab === 'console' && guest && (
           <ConsoleTab

@@ -480,6 +480,21 @@ func (c *Client) CreateVM(ctx context.Context, req *CreateVMRequest) (string, er
 	return resp.Data, nil // returns UPID
 }
 
+// DeleteVM deletes a VM (must be stopped first)
+func (c *Client) DeleteVM(ctx context.Context, vmid int, purge bool) (string, error) {
+	path := fmt.Sprintf("/nodes/%s/qemu/%d", c.nodeName, vmid)
+	if purge {
+		path += "?purge=1&destroy-unreferenced-disks=1"
+	}
+	data, err := c.deleteWithData(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil // returns UPID
+}
+
 // --- Container operations ---
 
 // GetContainers returns all LXC containers on this node
@@ -666,6 +681,21 @@ func (c *Client) CreateContainer(ctx context.Context, req *CreateContainerReques
 	}
 
 	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/lxc", c.nodeName), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil // returns UPID
+}
+
+// DeleteContainer deletes a container (must be stopped first)
+func (c *Client) DeleteContainer(ctx context.Context, vmid int, purge bool) (string, error) {
+	path := fmt.Sprintf("/nodes/%s/lxc/%d", c.nodeName, vmid)
+	if purge {
+		path += "?purge=1&destroy-unreferenced-disks=1"
+	}
+	data, err := c.deleteWithData(ctx, path)
 	if err != nil {
 		return "", err
 	}
@@ -1693,6 +1723,29 @@ func (c *Client) delete(ctx context.Context, path string) error {
 	}
 
 	return nil
+}
+
+// deleteWithData sends a DELETE request and returns the response body
+func (c *Client) deleteWithData(ctx context.Context, path string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("PVEAPIToken=%s=%s", c.tokenID, c.tokenSecret))
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+	}
+
+	return body, nil
 }
 
 // --- Network operations ---

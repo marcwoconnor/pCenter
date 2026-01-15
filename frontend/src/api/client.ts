@@ -131,6 +131,16 @@ export const api = {
       body: JSON.stringify(req),
     }),
 
+  // Delete VM/Container
+  deleteVM: (cluster: string, vmid: number, purge?: boolean) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/vms/${vmid}${purge ? '?purge=1' : ''}`, {
+      method: 'DELETE',
+    }),
+  deleteContainer: (cluster: string, vmid: number, purge?: boolean) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/containers/${vmid}${purge ? '?purge=1' : ''}`, {
+      method: 'DELETE',
+    }),
+
   // Console
   getConsoleURL: (type: 'vm' | 'ct', vmid: number) =>
     fetchAPI<{ url: string }>(`/console/${type}/${vmid}`),

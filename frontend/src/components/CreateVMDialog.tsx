@@ -39,7 +39,7 @@ export function CreateVMDialog({ cluster, node, onClose, onSuccess }: CreateVMDi
         // Get storage (filter for images content)
         const allStorage = await api.getStorage(node);
         const imageStorage = allStorage.filter(s =>
-          s.content.includes('images') && s.active === 1
+          s.content.includes('images')
         );
         setStorageList(imageStorage);
         if (imageStorage.length > 0) {

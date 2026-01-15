@@ -130,6 +130,10 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	mux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/vms", h.CreateClusterVM)
 	mux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/containers", h.CreateClusterContainer)
 
+	// Delete VMs and containers
+	mux.HandleFunc("DELETE /api/clusters/{cluster}/vms/{vmid}", h.DeleteClusterVM)
+	mux.HandleFunc("DELETE /api/clusters/{cluster}/containers/{vmid}", h.DeleteClusterContainer)
+
 	// Cluster HA status
 	mux.HandleFunc("GET /api/clusters/{cluster}/ha/status", h.GetClusterHA)
 

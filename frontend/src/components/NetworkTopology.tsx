@@ -1,5 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
-import { useCluster } from '../context/ClusterContext';
+import { useState, useEffect, memo } from 'react';
 import { api } from '../api/client';
 import type { NetworkInterface } from '../types';
 
@@ -20,67 +19,91 @@ interface BridgeData {
   connectedGuests: { vmid: number; name: string; type: 'vm' | 'ct'; nic: string; vlan?: number }[];
 }
 
-export function NetworkTopology({ node, cluster }: NetworkTopologyProps) {
-  const [interfaces, setInterfaces] = useState<NetworkInterface[]>([]);
-  const [loading, setLoading] = useState(true);
-  const { guests } = useCluster();
+// Module-level cache to persist across component remounts
+const topologyCache = new Map<string, { bridges: BridgeData[]; physicalNics: NetworkInterface[] }>();
+// Track which keys have been fetched to prevent duplicate fetches
+const fetchingKeys = new Set<string>();
 
-  // Fetch network interfaces
+export const NetworkTopology = memo(function NetworkTopology({ node, cluster }: NetworkTopologyProps) {
+  const cacheKey = `${cluster}/${node}`;
+  const [, forceUpdate] = useState(0);
+
+  // Read directly from cache
+  const cached = topologyCache.get(cacheKey);
+  const bridges = cached?.bridges || [];
+  const physicalNics = cached?.physicalNics || [];
+  const loading = !cached && !fetchingKeys.has(cacheKey);
+
+  // Fetch network interfaces and guests ONCE (skip if cached or already fetching)
   useEffect(() => {
+    // Already have cached data or already fetching, skip
+    if (topologyCache.has(cacheKey) || fetchingKeys.has(cacheKey)) return;
+    fetchingKeys.add(cacheKey);
+
     async function fetchData() {
-      setLoading(true);
       try {
-        const ifaces = await api.getClusterNetworkInterfaces(cluster, node);
-        setInterfaces(ifaces);
+        // Fetch interfaces and guests snapshot (not live updates)
+        const [ifaces, allGuests] = await Promise.all([
+          api.getClusterNetworkInterfaces(cluster, node),
+          api.getGuests(),
+        ]);
+
+        // Filter guests for this node
+        const nodeGuests = allGuests.filter(g => g.node === node);
+
+        // Find all bridges
+        const bridgeIfaces = ifaces.filter(i => i.type === 'bridge' || i.type === 'OVSBridge');
+        const bridgeList: BridgeData[] = [];
+
+        for (const bridge of bridgeIfaces) {
+          const ports = bridge.bridge_ports?.split(/\s+/).filter(Boolean) || [];
+
+          // Find guests connected to this bridge via their NICs
+          const connected: BridgeData['connectedGuests'] = [];
+          for (const guest of nodeGuests) {
+            if (!guest.nics) continue;
+            for (const nic of guest.nics) {
+              if (nic.bridge === bridge.iface) {
+                connected.push({
+                  vmid: guest.vmid,
+                  name: guest.name,
+                  type: (guest.type === 'qemu' ? 'vm' : 'ct') as 'vm' | 'ct',
+                  nic: nic.name,
+                  vlan: nic.tag,
+                });
+              }
+            }
+          }
+
+          connected.sort((a, b) => a.vmid - b.vmid);
+
+          bridgeList.push({
+            name: bridge.iface,
+            type: bridge.type,
+            address: bridge.address,
+            cidr: bridge.cidr,
+            gateway: bridge.gateway,
+            bridgePorts: ports,
+            active: bridge.active === 1,
+            connectedGuests: connected,
+          });
+        }
+
+        bridgeList.sort((a, b) => a.name.localeCompare(b.name));
+        const physNics = ifaces.filter(i => i.type === 'eth');
+
+        // Cache the data
+        topologyCache.set(cacheKey, { bridges: bridgeList, physicalNics: physNics });
+
+        // Trigger re-render to show cached data
+        forceUpdate(n => n + 1);
       } catch (err) {
-        console.error('Failed to fetch interfaces:', err);
-      } finally {
-        setLoading(false);
+        console.error('Failed to fetch network topology:', err);
       }
     }
     fetchData();
-  }, [node, cluster]);
-
-  // Build bridge topology data
-  const bridges = useMemo(() => {
-    const bridgeList: BridgeData[] = [];
-    const nodeGuests = guests.filter(g => g.node === node);
-
-    // Find all bridges
-    const bridgeIfaces = interfaces.filter(i => i.type === 'bridge' || i.type === 'OVSBridge');
-
-    for (const bridge of bridgeIfaces) {
-      // Parse bridge_ports - can be space-separated list
-      const ports = bridge.bridge_ports?.split(/\s+/).filter(Boolean) || [];
-
-      // Find connected guests (simplified - we'd need VM configs for accurate info)
-      // For now, assume guests on same node may connect to any bridge
-      const connected = nodeGuests.map(g => ({
-        vmid: g.vmid,
-        name: g.name,
-        type: (g.type === 'qemu' ? 'vm' : 'ct') as 'vm' | 'ct',
-        nic: 'net0', // placeholder
-      }));
-
-      bridgeList.push({
-        name: bridge.iface,
-        type: bridge.type,
-        address: bridge.address,
-        cidr: bridge.cidr,
-        gateway: bridge.gateway,
-        bridgePorts: ports,
-        active: bridge.active === 1,
-        connectedGuests: connected,
-      });
-    }
-
-    return bridgeList;
-  }, [interfaces, guests, node]);
-
-  // Get physical NICs
-  const physicalNics = useMemo(() => {
-    return interfaces.filter(i => i.type === 'eth');
-  }, [interfaces]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheKey]);
 
   if (loading) {
     return (
@@ -131,10 +154,10 @@ export function NetworkTopology({ node, cluster }: NetworkTopologyProps) {
       </div>
     </div>
   );
-}
+});
 
-// Individual virtual switch diagram
-function VirtualSwitchDiagram({
+// Individual virtual switch diagram - memoized to prevent re-renders
+const VirtualSwitchDiagram = memo(function VirtualSwitchDiagram({
   bridge,
   physicalNics,
 }: {
@@ -146,18 +169,18 @@ function VirtualSwitchDiagram({
   // Also include non-physical ports (bonds, vlans)
   const otherPorts = bridge.bridgePorts.filter(p => !physicalNics.find(n => n.iface === p));
 
-  // Limit displayed guests
-  const displayedGuests = bridge.connectedGuests.slice(0, 6);
-  const moreGuests = bridge.connectedGuests.length - 6;
+  // Sort guests by vmid for stable display order
+  const sortedGuests = [...bridge.connectedGuests].sort((a, b) => a.vmid - b.vmid);
 
   return (
     <div className="flex flex-col items-center min-w-[280px]">
-      {/* Connected VMs/CTs (top) */}
-      <div className="flex flex-wrap justify-center gap-2 mb-2 min-h-[60px]">
-        {displayedGuests.map((guest) => (
+      {/* Connected VMs/CTs (top) - use grid with order for stable positioning */}
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(64px,max-content))] justify-center gap-2 mb-2 min-h-[60px] w-full">
+        {sortedGuests.map((guest) => (
           <div
-            key={guest.vmid}
+            key={`${guest.vmid}-${guest.nic}`}
             className="flex flex-col items-center"
+            style={{ order: guest.vmid }}
           >
             <div className="w-16 h-12 bg-purple-600 dark:bg-purple-700 rounded-t-lg flex flex-col items-center justify-center text-white text-xs shadow-md">
               <span>{guest.type === 'vm' ? '💻' : '📦'}</span>
@@ -167,14 +190,6 @@ function VirtualSwitchDiagram({
             <div className="w-0.5 h-3 bg-purple-400" />
           </div>
         ))}
-        {moreGuests > 0 && (
-          <div className="flex flex-col items-center">
-            <div className="w-16 h-12 bg-purple-400 dark:bg-purple-600 rounded-t-lg flex items-center justify-center text-white text-xs shadow-md">
-              +{moreGuests} more
-            </div>
-            <div className="w-0.5 h-3 bg-purple-400" />
-          </div>
-        )}
       </div>
 
       {/* Virtual Switch (middle) */}
@@ -249,4 +264,4 @@ function VirtualSwitchDiagram({
       </div>
     </div>
   );
-}
+});
