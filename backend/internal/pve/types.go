@@ -620,3 +620,34 @@ type FirewallOptions struct {
 	PolicyOut    string `json:"policy_out,omitempty"`   // Default outgoing policy
 	RadV         int    `json:"radv,omitempty"`         // Allow router advertisements
 }
+
+// CreateVMRequest for creating a new QEMU virtual machine
+type CreateVMRequest struct {
+	VMID     int    `json:"vmid"`
+	Name     string `json:"name"`
+	Cores    int    `json:"cores"`
+	Memory   int    `json:"memory"`              // MB
+	Storage  string `json:"storage"`             // e.g., "local-lvm"
+	DiskSize int    `json:"disk_size"`           // GB
+	ISO      string `json:"iso,omitempty"`       // e.g., "local:iso/ubuntu.iso"
+	OSType   string `json:"ostype,omitempty"`    // l26, win10, etc.
+	Network  string `json:"network,omitempty"`   // bridge name (e.g., vmbr0)
+	Start    bool   `json:"start,omitempty"`
+}
+
+// CreateContainerRequest for creating a new LXC container
+type CreateContainerRequest struct {
+	VMID         int    `json:"vmid"`
+	Hostname     string `json:"hostname"`
+	Template     string `json:"ostemplate"`           // REQUIRED: e.g., "local:vztmpl/ubuntu.tar.gz"
+	Cores        int    `json:"cores"`
+	Memory       int    `json:"memory"`               // MB
+	Swap         int    `json:"swap"`                 // MB
+	Storage      string `json:"storage"`              // root storage
+	DiskSize     int    `json:"disk_size"`            // GB
+	Network      string `json:"network,omitempty"`    // bridge name
+	Password     string `json:"password,omitempty"`
+	SSHKeys      string `json:"ssh_public_keys,omitempty"`
+	Start        bool   `json:"start,omitempty"`
+	Unprivileged bool   `json:"unprivileged"`
+}

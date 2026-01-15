@@ -9,6 +9,8 @@ import { FolderDialog } from './FolderDialog';
 import { DatacenterDialog } from './DatacenterDialog';
 import { AddHostDialog } from './AddHostDialog';
 import { UploadDialog } from './UploadDialog';
+import { CreateVMDialog } from './CreateVMDialog';
+import { CreateContainerDialog } from './CreateContainerDialog';
 import { api } from '../api/client';
 
 interface ContextMenuState {
@@ -202,6 +204,8 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
   const [datacenterDialog, setDatacenterDialog] = useState<DatacenterDialogState | null>(null);
   const [addHostCluster, setAddHostCluster] = useState<string | null>(null);
   const [uploadDialog, setUploadDialog] = useState<{ storage: string; node: string; contentType: 'iso' | 'vztmpl' } | null>(null);
+  const [createVMDialog, setCreateVMDialog] = useState<{ cluster: string; node: string } | null>(null);
+  const [createContainerDialog, setCreateContainerDialog] = useState<{ cluster: string; node: string } | null>(null);
 
   const filterLower = filter.toLowerCase();
 
@@ -252,20 +256,25 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
     return members.has(`${type}:${guest.vmid}:${guest.cluster}`);
   };
 
-  // Fetch network interfaces when in network view
+  // Derive stable cluster names for network fetch
+  const clusterNamesKey = useMemo(() => {
+    let names: string[] = [];
+    if (clusters && clusters.length > 0) {
+      names = clusters.map(c => c.name);
+    } else if (nodes && nodes.length > 0) {
+      names = [...new Set(nodes.map(n => n.cluster).filter(Boolean))];
+    }
+    return names.sort().join(',');
+  }, [clusters, nodes]);
+
+  // Fetch network interfaces ONCE when switching to network view
+  // No polling needed - config data only changes on user action
   useEffect(() => {
-    if (view !== 'network') return;
+    if (view !== 'network' || !clusterNamesKey) return;
+
+    const clusterNames = clusterNamesKey.split(',');
 
     async function fetchNetworkData() {
-      // Derive cluster names from nodes
-      let clusterNames: string[] = [];
-      if (clusters && clusters.length > 0) {
-        clusterNames = clusters.map(c => c.name);
-      } else if (nodes && nodes.length > 0) {
-        clusterNames = [...new Set(nodes.map(n => n.cluster).filter(Boolean))];
-      }
-      if (clusterNames.length === 0) return;
-
       const allInterfaces: NetworkInterface[] = [];
       for (const clusterName of clusterNames) {
         try {
@@ -279,9 +288,7 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
     }
 
     fetchNetworkData();
-    const interval = setInterval(fetchNetworkData, 30000);
-    return () => clearInterval(interval);
-  }, [view, clusters, nodes]);
+  }, [view, clusterNamesKey]);
 
   // Sort clusters by name
   const sortedClusters = useMemo(() =>
@@ -466,7 +473,7 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
     ];
   };
 
-  const getNodeMenuItems = (_nodeName: string, _cluster: string): MenuItem[] => {
+  const getNodeMenuItems = (nodeName: string, cluster: string): MenuItem[] => {
     return [
       {
         label: 'Shell',
@@ -477,12 +484,12 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
       {
         label: 'Create VM',
         icon: '💻',
-        action: () => alert('Create VM not yet implemented'),
+        action: () => setCreateVMDialog({ cluster, node: nodeName }),
       },
       {
         label: 'Create Container',
         icon: '📦',
-        action: () => alert('Create Container not yet implemented'),
+        action: () => setCreateContainerDialog({ cluster, node: nodeName }),
       },
       { label: '', action: () => {}, divider: true },
       {
@@ -494,7 +501,16 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
     ];
   };
 
-  const getClusterMenuItems = (_clusterName: string): MenuItem[] => {
+  // Get best node for a cluster (node with most free memory)
+  const getBestNode = (cluster: string): string | null => {
+    const clusterNodes = nodes.filter(n => n.cluster === cluster && n.status === 'online');
+    if (clusterNodes.length === 0) return null;
+    // Pick node with most available memory
+    return clusterNodes.sort((a, b) => (b.maxmem - b.mem) - (a.maxmem - a.mem))[0].node;
+  };
+
+  const getClusterMenuItems = (clusterName: string): MenuItem[] => {
+    const bestNode = getBestNode(clusterName);
     return [
       {
         label: 'DRS Recommendations',
@@ -510,12 +526,26 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
       {
         label: 'Create VM',
         icon: '💻',
-        action: () => alert('Create VM not yet implemented'),
+        action: () => {
+          if (bestNode) {
+            setCreateVMDialog({ cluster: clusterName, node: bestNode });
+          } else {
+            alert('No online nodes available in this cluster');
+          }
+        },
+        disabled: !bestNode,
       },
       {
         label: 'Create Container',
         icon: '📦',
-        action: () => alert('Create Container not yet implemented'),
+        action: () => {
+          if (bestNode) {
+            setCreateContainerDialog({ cluster: clusterName, node: bestNode });
+          } else {
+            alert('No online nodes available in this cluster');
+          }
+        },
+        disabled: !bestNode,
       },
     ];
   };
@@ -750,9 +780,19 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
     ];
   };
 
+  // Get best cluster/node combo across all clusters (for VMs view)
+  const getBestClusterNode = (): { cluster: string; node: string } | null => {
+    const onlineNodes = nodes.filter(n => n.status === 'online');
+    if (onlineNodes.length === 0) return null;
+    // Pick node with most available memory across all clusters
+    const best = onlineNodes.sort((a, b) => (b.maxmem - b.mem) - (a.maxmem - a.mem))[0];
+    return { cluster: best.cluster, node: best.node };
+  };
+
   // Get datacenter/root context menu items (folders only in VMs view per vCenter)
   const getRootMenuItems = (treeView: TreeView): MenuItem[] => {
     if (treeView !== 'vms') return [];
+    const bestTarget = getBestClusterNode();
     return [
       {
         label: 'New Folder',
@@ -761,6 +801,31 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
           mode: 'create',
           treeView,
         }),
+      },
+      { label: '', action: () => {}, divider: true },
+      {
+        label: 'Create VM',
+        icon: '💻',
+        action: () => {
+          if (bestTarget) {
+            setCreateVMDialog(bestTarget);
+          } else {
+            alert('No online nodes available');
+          }
+        },
+        disabled: !bestTarget,
+      },
+      {
+        label: 'Create Container',
+        icon: '📦',
+        action: () => {
+          if (bestTarget) {
+            setCreateContainerDialog(bestTarget);
+          } else {
+            alert('No online nodes available');
+          }
+        },
+        disabled: !bestTarget,
       },
     ];
   };
@@ -1090,6 +1155,26 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
             onClose={() => setAddHostCluster(null)}
           />
         )}
+        {createVMDialog && (
+          <CreateVMDialog
+            cluster={createVMDialog.cluster}
+            node={createVMDialog.node}
+            onClose={() => setCreateVMDialog(null)}
+            onSuccess={() => {
+              // VM created - state will update via WebSocket
+            }}
+          />
+        )}
+        {createContainerDialog && (
+          <CreateContainerDialog
+            cluster={createContainerDialog.cluster}
+            node={createContainerDialog.node}
+            onClose={() => setCreateContainerDialog(null)}
+            onSuccess={() => {
+              // Container created - state will update via WebSocket
+            }}
+          />
+        )}
         <TreeNode
           icon="🏢"
           label="pCenter"
@@ -1209,6 +1294,22 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
             initialName={folderDialog.initialName}
             onSubmit={handleFolderDialogSubmit}
             onClose={() => setFolderDialog(null)}
+          />
+        )}
+        {createVMDialog && (
+          <CreateVMDialog
+            cluster={createVMDialog.cluster}
+            node={createVMDialog.node}
+            onClose={() => setCreateVMDialog(null)}
+            onSuccess={() => {}}
+          />
+        )}
+        {createContainerDialog && (
+          <CreateContainerDialog
+            cluster={createContainerDialog.cluster}
+            node={createContainerDialog.node}
+            onClose={() => setCreateContainerDialog(null)}
+            onSuccess={() => {}}
           />
         )}
         <TreeNode
