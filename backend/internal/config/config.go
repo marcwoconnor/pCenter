@@ -18,6 +18,7 @@ type Config struct {
 	Metrics  MetricsConfig   `yaml:"metrics"`
 	Folders  FoldersConfig   `yaml:"folders"`
 	Activity ActivityConfig  `yaml:"activity"`
+	Auth     AuthConfig      `yaml:"auth"`
 
 	// ClusterSecrets maps cluster name to API token secret
 	// Secrets stay in config/env, cluster definitions move to inventory DB
@@ -28,6 +29,47 @@ type Config struct {
 
 	// Legacy: flat nodes array (auto-converted to single cluster)
 	Nodes []NodeConfig `yaml:"nodes,omitempty"`
+}
+
+// AuthConfig holds authentication settings
+type AuthConfig struct {
+	Enabled       bool               `yaml:"enabled"`
+	DatabasePath  string             `yaml:"database_path"`
+	EncryptionKey string             `yaml:"encryption_key"` // 32-byte hex for AES-256, from env
+
+	Session   AuthSessionConfig   `yaml:"session"`
+	Lockout   AuthLockoutConfig   `yaml:"lockout"`
+	TOTP      AuthTOTPConfig      `yaml:"totp"`
+	RateLimit AuthRateLimitConfig `yaml:"rate_limit"`
+}
+
+// AuthSessionConfig holds session settings
+type AuthSessionConfig struct {
+	DurationHours    int    `yaml:"duration_hours"`
+	IdleTimeoutHours int    `yaml:"idle_timeout_hours"`
+	CookieSecure     bool   `yaml:"cookie_secure"`
+	CookieDomain     string `yaml:"cookie_domain"`
+}
+
+// AuthLockoutConfig holds account lockout settings
+type AuthLockoutConfig struct {
+	MaxAttempts    int  `yaml:"max_attempts"`
+	LockoutMinutes int  `yaml:"lockout_minutes"`
+	Progressive    bool `yaml:"progressive"` // double lockout time on repeated lockouts
+}
+
+// AuthTOTPConfig holds 2FA settings
+type AuthTOTPConfig struct {
+	Enabled       bool   `yaml:"enabled"`
+	Required      bool   `yaml:"required"` // force all users to enable 2FA
+	Issuer        string `yaml:"issuer"`
+	RecoveryCodes int    `yaml:"recovery_codes"`
+	TrustIPHours  int    `yaml:"trust_ip_hours"` // skip 2FA for trusted IPs (0=disabled)
+}
+
+// AuthRateLimitConfig holds rate limiting settings
+type AuthRateLimitConfig struct {
+	RequestsPerMinute int `yaml:"requests_per_minute"`
 }
 
 // ActivityConfig holds activity logging settings
@@ -187,6 +229,35 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Metrics.Retention.WeeklyMonths == 0 {
 		cfg.Metrics.Retention.WeeklyMonths = 12
+	}
+
+	// Auth defaults - auth is enabled by default
+	if cfg.Auth.DatabasePath == "" {
+		cfg.Auth.DatabasePath = "data/auth.db"
+	}
+	if cfg.Auth.Session.DurationHours == 0 {
+		cfg.Auth.Session.DurationHours = 24
+	}
+	if cfg.Auth.Session.IdleTimeoutHours == 0 {
+		cfg.Auth.Session.IdleTimeoutHours = 8
+	}
+	if cfg.Auth.Lockout.MaxAttempts == 0 {
+		cfg.Auth.Lockout.MaxAttempts = 5
+	}
+	if cfg.Auth.Lockout.LockoutMinutes == 0 {
+		cfg.Auth.Lockout.LockoutMinutes = 15
+	}
+	if cfg.Auth.TOTP.Issuer == "" {
+		cfg.Auth.TOTP.Issuer = "pCenter"
+	}
+	if cfg.Auth.TOTP.RecoveryCodes == 0 {
+		cfg.Auth.TOTP.RecoveryCodes = 10
+	}
+	if cfg.Auth.TOTP.TrustIPHours == 0 {
+		cfg.Auth.TOTP.TrustIPHours = 24 // default: trust IP for 24 hours after 2FA
+	}
+	if cfg.Auth.RateLimit.RequestsPerMinute == 0 {
+		cfg.Auth.RateLimit.RequestsPerMinute = 10
 	}
 
 	// Poller defaults to enabled unless explicitly set to false

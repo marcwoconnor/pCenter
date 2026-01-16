@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useCluster } from '../context/ClusterContext';
+import { useAuth } from '../context/AuthContext';
 import { TasksBar } from './TasksBar';
 import { Console } from './Console';
 import { ActivityPanel } from './ActivityPanel';
@@ -24,6 +25,13 @@ interface LayoutProps {
 
 export function Layout({ children, sidebar }: LayoutProps) {
   const { isConnected, summary, error, consoles, closeConsole, focusConsole, updateConsole } = useCluster();
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login');
+  };
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem('pcenter-sidebar-width');
     return saved ? parseInt(saved, 10) : DEFAULT_SIDEBAR_WIDTH;
@@ -126,6 +134,26 @@ export function Layout({ children, sidebar }: LayoutProps) {
               <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-yellow-400 animate-pulse'}`} />
               {isConnected ? 'Connected' : 'Reconnecting...'}
             </div>
+
+            {/* User menu */}
+            {user && (
+              <div className="flex items-center gap-3 border-l border-gray-700 pl-4">
+                <span className="text-xs text-gray-300">{user.username}</span>
+                <NavLink
+                  to="/settings"
+                  className="text-xs text-gray-400 hover:text-white transition-colors"
+                >
+                  Settings
+                </NavLink>
+                <button
+                  onClick={handleLogout}
+                  className="text-xs text-gray-400 hover:text-white transition-colors"
+                  title="Sign out"
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </header>

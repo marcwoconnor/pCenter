@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/moconnor/pcenter/internal/agent"
+	"github.com/moconnor/pcenter/internal/auth"
 	"github.com/moconnor/pcenter/internal/poller"
 	"github.com/moconnor/pcenter/internal/state"
 )
@@ -29,7 +30,8 @@ func CORSMiddleware(origins []string) func(http.Handler) http.Handler {
 			}
 
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CSRF-Token")
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Max-Age", "86400")
 
 			if r.Method == http.MethodOptions {
@@ -44,20 +46,55 @@ func CORSMiddleware(origins []string) func(http.Handler) http.Handler {
 
 // NewRouter creates the HTTP router with all routes
 // Returns both the http.Handler and the Handler for configuration
-func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.Hub, corsOrigins []string) (http.Handler, *Handler) {
+func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.Hub, authSvc *auth.Service, corsOrigins []string) (http.Handler, *Handler) {
 	h := NewHandler(store, p)
 
 	mux := http.NewServeMux()
 
-	// Health check
+	// Health check (always public)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"status": "ok"})
 	})
 
-	// WebSocket endpoint (browser clients)
-	mux.HandleFunc("GET /ws", hub.HandleWebSocket)
+	// Auth endpoints (public)
+	if authSvc != nil {
+		authHandlers := auth.NewHandlers(authSvc)
 
-	// Agent WebSocket endpoint
+		// Public auth endpoints
+		mux.HandleFunc("POST /api/auth/login", authHandlers.HandleLogin)
+		mux.HandleFunc("POST /api/auth/register", authHandlers.HandleRegister)
+		mux.HandleFunc("GET /api/auth/user-count", authHandlers.HandleUserCount)
+		mux.HandleFunc("GET /api/auth/check", authHandlers.HandleCheckAuth)
+
+		// Protected auth endpoints (need session but not full auth)
+		mux.Handle("POST /api/auth/verify-totp", authSvc.RequireAuth(http.HandlerFunc(authHandlers.HandleVerifyTOTP)))
+		mux.Handle("POST /api/auth/logout", authSvc.RequireAuth(http.HandlerFunc(authHandlers.HandleLogout)))
+		mux.Handle("GET /api/auth/me", authSvc.RequireAuth(http.HandlerFunc(authHandlers.HandleMe)))
+		mux.Handle("PUT /api/auth/password", authSvc.RequireAuth(authSvc.CSRFProtection(http.HandlerFunc(authHandlers.HandleChangePassword))))
+
+		// TOTP management (requires full auth)
+		mux.Handle("POST /api/auth/totp/setup", authSvc.RequireAuth(authSvc.RequireFullAuth(authSvc.CSRFProtection(http.HandlerFunc(authHandlers.HandleTOTPSetup)))))
+		mux.Handle("POST /api/auth/totp/verify-setup", authSvc.RequireAuth(authSvc.RequireFullAuth(authSvc.CSRFProtection(http.HandlerFunc(authHandlers.HandleTOTPVerifySetup)))))
+		mux.Handle("DELETE /api/auth/totp", authSvc.RequireAuth(authSvc.RequireFullAuth(authSvc.CSRFProtection(http.HandlerFunc(authHandlers.HandleTOTPDisable)))))
+
+		// Session management
+		mux.Handle("GET /api/auth/sessions", authSvc.RequireAuth(authSvc.RequireFullAuth(http.HandlerFunc(authHandlers.HandleListSessions))))
+		mux.Handle("DELETE /api/auth/sessions/{id}", authSvc.RequireAuth(authSvc.RequireFullAuth(authSvc.CSRFProtection(http.HandlerFunc(authHandlers.HandleRevokeSession)))))
+
+		// Admin-only endpoints
+		mux.Handle("GET /api/users", authSvc.RequireAuth(authSvc.RequireFullAuth(authSvc.RequireAdmin(http.HandlerFunc(authHandlers.HandleListUsers)))))
+		mux.Handle("POST /api/users", authSvc.RequireAuth(authSvc.RequireFullAuth(authSvc.RequireAdmin(authSvc.CSRFProtection(http.HandlerFunc(authHandlers.HandleCreateUser))))))
+		mux.Handle("DELETE /api/users/{id}", authSvc.RequireAuth(authSvc.RequireFullAuth(authSvc.RequireAdmin(authSvc.CSRFProtection(http.HandlerFunc(authHandlers.HandleDeleteUser))))))
+		mux.Handle("GET /api/auth/events", authSvc.RequireAuth(authSvc.RequireFullAuth(authSvc.RequireAdmin(http.HandlerFunc(authHandlers.HandleListEvents)))))
+
+		// Wrap WebSocket with auth
+		mux.Handle("GET /ws", authSvc.AuthenticatedWebSocket(hub.HandleWebSocket))
+	} else {
+		// Auth disabled - WebSocket without auth
+		mux.HandleFunc("GET /ws", hub.HandleWebSocket)
+	}
+
+	// Agent WebSocket endpoint (uses its own auth via API token)
 	if agentHub != nil {
 		mux.HandleFunc("GET /api/agent/ws", agentHub.HandleWebSocket)
 		h.SetAgentHub(agentHub)
@@ -65,159 +102,171 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 		mux.HandleFunc("GET /api/agent/connected", h.GetConnectedAgents)
 	}
 
+	// === Protected API endpoints ===
+	// Build a protected mux for all API routes
+	protectedMux := http.NewServeMux()
+
 	// === Global endpoints (across all clusters) ===
 
 	// Summary & clusters
-	mux.HandleFunc("GET /api/summary", h.GetSummary)
-	mux.HandleFunc("GET /api/clusters", h.GetClusters)
+	protectedMux.HandleFunc("GET /api/summary", h.GetSummary)
+	protectedMux.HandleFunc("GET /api/clusters", h.GetClusters)
 
 	// Nodes (all clusters)
-	mux.HandleFunc("GET /api/nodes", h.GetNodes)
+	protectedMux.HandleFunc("GET /api/nodes", h.GetNodes)
 
 	// VMs (all clusters)
-	mux.HandleFunc("GET /api/vms", h.GetVMs)
-	mux.HandleFunc("GET /api/vms/{vmid}", h.GetVM)
-	mux.HandleFunc("POST /api/vms/{vmid}/{action}", h.VMAction)
+	protectedMux.HandleFunc("GET /api/vms", h.GetVMs)
+	protectedMux.HandleFunc("GET /api/vms/{vmid}", h.GetVM)
+	protectedMux.HandleFunc("POST /api/vms/{vmid}/{action}", h.VMAction)
 
 	// Containers (all clusters)
-	mux.HandleFunc("GET /api/containers", h.GetContainers)
-	mux.HandleFunc("GET /api/containers/{vmid}", h.GetContainer)
-	mux.HandleFunc("POST /api/containers/{vmid}/{action}", h.ContainerAction)
+	protectedMux.HandleFunc("GET /api/containers", h.GetContainers)
+	protectedMux.HandleFunc("GET /api/containers/{vmid}", h.GetContainer)
+	protectedMux.HandleFunc("POST /api/containers/{vmid}/{action}", h.ContainerAction)
 
 	// All guests (VMs + containers combined)
-	mux.HandleFunc("GET /api/guests", h.GetAllGuests)
+	protectedMux.HandleFunc("GET /api/guests", h.GetAllGuests)
 
 	// Storage & Ceph (all clusters)
-	mux.HandleFunc("GET /api/storage", h.GetStorage)
-	mux.HandleFunc("GET /api/storage/{storage}/content", h.GetStorageContent)
-	mux.HandleFunc("POST /api/storage/{storage}/upload", h.UploadToStorage)
-	mux.HandleFunc("GET /api/ceph", h.GetCeph)
-	mux.HandleFunc("POST /api/ceph/command", h.RunCephCommand)
-	mux.HandleFunc("GET /api/smart", h.GetSmart)
+	protectedMux.HandleFunc("GET /api/storage", h.GetStorage)
+	protectedMux.HandleFunc("GET /api/storage/{storage}/content", h.GetStorageContent)
+	protectedMux.HandleFunc("POST /api/storage/{storage}/upload", h.UploadToStorage)
+	protectedMux.HandleFunc("GET /api/ceph", h.GetCeph)
+	protectedMux.HandleFunc("POST /api/ceph/command", h.RunCephCommand)
+	protectedMux.HandleFunc("GET /api/smart", h.GetSmart)
 
 	// Migrations & DRS (global)
-	mux.HandleFunc("GET /api/migrations", h.GetMigrations)
-	mux.HandleFunc("DELETE /api/migrations/{upid}", h.ClearMigration)
-	mux.HandleFunc("GET /api/drs/recommendations", h.GetDRSRecommendations)
+	protectedMux.HandleFunc("GET /api/migrations", h.GetMigrations)
+	protectedMux.HandleFunc("DELETE /api/migrations/{upid}", h.ClearMigration)
+	protectedMux.HandleFunc("GET /api/drs/recommendations", h.GetDRSRecommendations)
 
 	// Console - ticket endpoint and websocket proxy (legacy, searches all clusters)
-	mux.HandleFunc("GET /api/console/{type}/{vmid}/ticket", h.ConsoleTicket)
-	mux.HandleFunc("GET /api/console/{type}/{vmid}/ws", h.ConsoleWebsocket)
+	protectedMux.HandleFunc("GET /api/console/{type}/{vmid}/ticket", h.ConsoleTicket)
+	protectedMux.HandleFunc("GET /api/console/{type}/{vmid}/ws", h.ConsoleWebsocket)
 
 	// === Cluster-specific endpoints ===
 
 	// Cluster summary
-	mux.HandleFunc("GET /api/clusters/{cluster}/summary", h.GetClusterSummary)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/summary", h.GetClusterSummary)
 
 	// Cluster nodes
-	mux.HandleFunc("GET /api/clusters/{cluster}/nodes", h.GetClusterNodes)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes", h.GetClusterNodes)
 
 	// Cluster guests
-	mux.HandleFunc("GET /api/clusters/{cluster}/guests", h.GetClusterGuests)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/guests", h.GetClusterGuests)
 
 	// Cluster VMs
-	mux.HandleFunc("POST /api/clusters/{cluster}/vms/{vmid}/{action}", h.ClusterVMAction)
-	mux.HandleFunc("GET /api/clusters/{cluster}/vms/{vmid}/config", h.GetClusterVMConfig)
-	mux.HandleFunc("PUT /api/clusters/{cluster}/vms/{vmid}/config", h.UpdateClusterVMConfig)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/vms/{vmid}/{action}", h.ClusterVMAction)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/vms/{vmid}/config", h.GetClusterVMConfig)
+	protectedMux.HandleFunc("PUT /api/clusters/{cluster}/vms/{vmid}/config", h.UpdateClusterVMConfig)
 
 	// Cluster containers
-	mux.HandleFunc("POST /api/clusters/{cluster}/containers/{vmid}/{action}", h.ClusterContainerAction)
-	mux.HandleFunc("GET /api/clusters/{cluster}/containers/{vmid}/config", h.GetClusterContainerConfig)
-	mux.HandleFunc("PUT /api/clusters/{cluster}/containers/{vmid}/config", h.UpdateClusterContainerConfig)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/containers/{vmid}/{action}", h.ClusterContainerAction)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/containers/{vmid}/config", h.GetClusterContainerConfig)
+	protectedMux.HandleFunc("PUT /api/clusters/{cluster}/containers/{vmid}/config", h.UpdateClusterContainerConfig)
 
 	// Create VMs and containers
-	mux.HandleFunc("GET /api/clusters/{cluster}/nextid", h.GetNextVMID)
-	mux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/vms", h.CreateClusterVM)
-	mux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/containers", h.CreateClusterContainer)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nextid", h.GetNextVMID)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/vms", h.CreateClusterVM)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/containers", h.CreateClusterContainer)
 
 	// Delete VMs and containers
-	mux.HandleFunc("DELETE /api/clusters/{cluster}/vms/{vmid}", h.DeleteClusterVM)
-	mux.HandleFunc("DELETE /api/clusters/{cluster}/containers/{vmid}", h.DeleteClusterContainer)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/vms/{vmid}", h.DeleteClusterVM)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/containers/{vmid}", h.DeleteClusterContainer)
 
 	// Cluster HA status
-	mux.HandleFunc("GET /api/clusters/{cluster}/ha/status", h.GetClusterHA)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/ha/status", h.GetClusterHA)
 
 	// Cluster DRS
-	mux.HandleFunc("GET /api/clusters/{cluster}/drs/recommendations", h.GetClusterDRS)
-	mux.HandleFunc("POST /api/clusters/{cluster}/drs/apply/{id}", h.ApplyDRSRecommendation)
-	mux.HandleFunc("DELETE /api/clusters/{cluster}/drs/recommendations/{id}", h.DismissDRSRecommendation)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/drs/recommendations", h.GetClusterDRS)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/drs/apply/{id}", h.ApplyDRSRecommendation)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/drs/recommendations/{id}", h.DismissDRSRecommendation)
 
 	// Cluster HA management
-	mux.HandleFunc("GET /api/clusters/{cluster}/ha/groups", h.GetHAGroups)
-	mux.HandleFunc("POST /api/clusters/{cluster}/ha/{type}/{vmid}/enable", h.EnableHA)
-	mux.HandleFunc("DELETE /api/clusters/{cluster}/ha/{type}/{vmid}", h.DisableHA)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/ha/groups", h.GetHAGroups)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/ha/{type}/{vmid}/enable", h.EnableHA)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/ha/{type}/{vmid}", h.DisableHA)
 
 	// Cluster Network/SDN
-	mux.HandleFunc("GET /api/clusters/{cluster}/network", h.GetClusterNetwork)
-	mux.HandleFunc("GET /api/clusters/{cluster}/network/interfaces", h.GetClusterNetworkInterfaces)
-	mux.HandleFunc("GET /api/clusters/{cluster}/sdn/zones", h.GetClusterSDNZones)
-	mux.HandleFunc("GET /api/clusters/{cluster}/sdn/vnets", h.GetClusterSDNVNets)
-	mux.HandleFunc("GET /api/clusters/{cluster}/sdn/subnets", h.GetClusterSDNSubnets)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/network", h.GetClusterNetwork)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/network/interfaces", h.GetClusterNetworkInterfaces)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/sdn/zones", h.GetClusterSDNZones)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/sdn/vnets", h.GetClusterSDNVNets)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/sdn/subnets", h.GetClusterSDNSubnets)
 
 	// Cluster Maintenance Mode
-	mux.HandleFunc("GET /api/clusters/{cluster}/qdevice", h.GetQDeviceStatus)
-	mux.HandleFunc("GET /api/clusters/{cluster}/maintenance/{node}/preflight", h.GetMaintenancePreflight)
-	mux.HandleFunc("GET /api/clusters/{cluster}/maintenance/{node}/state", h.GetMaintenanceState)
-	mux.HandleFunc("POST /api/clusters/{cluster}/maintenance/{node}/enter", h.EnterMaintenanceMode)
-	mux.HandleFunc("POST /api/clusters/{cluster}/maintenance/{node}/exit", h.ExitMaintenanceMode)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/qdevice", h.GetQDeviceStatus)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/maintenance/{node}/preflight", h.GetMaintenancePreflight)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/maintenance/{node}/state", h.GetMaintenanceState)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/maintenance/{node}/enter", h.EnterMaintenanceMode)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/maintenance/{node}/exit", h.ExitMaintenanceMode)
 
 	// --- Migration endpoints ---
 
 	// Global (searches all clusters by VMID)
-	mux.HandleFunc("POST /api/vms/{vmid}/migrate", h.MigrateVM)
-	mux.HandleFunc("POST /api/containers/{vmid}/migrate", h.MigrateContainer)
+	protectedMux.HandleFunc("POST /api/vms/{vmid}/migrate", h.MigrateVM)
+	protectedMux.HandleFunc("POST /api/containers/{vmid}/migrate", h.MigrateContainer)
 
 	// Cluster-specific migrations
-	mux.HandleFunc("POST /api/clusters/{cluster}/vms/{vmid}/migrate", h.ClusterMigrateVM)
-	mux.HandleFunc("POST /api/clusters/{cluster}/containers/{vmid}/migrate", h.ClusterMigrateContainer)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/vms/{vmid}/migrate", h.ClusterMigrateVM)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/containers/{vmid}/migrate", h.ClusterMigrateContainer)
 
 	// Get nodes for migration target selection
-	mux.HandleFunc("GET /api/clusters/{cluster}/nodes/migration-targets", h.GetClusterNodesForMigration)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes/migration-targets", h.GetClusterNodesForMigration)
 
 	// --- Metrics endpoints ---
-	mux.HandleFunc("GET /api/metrics", h.GetMetrics)
-	mux.HandleFunc("GET /api/metrics/node/{node}", h.GetNodeMetrics)
-	mux.HandleFunc("GET /api/metrics/vm/{vmid}", h.GetVMMetrics)
-	mux.HandleFunc("GET /api/metrics/ct/{vmid}", h.GetContainerMetrics)
-	mux.HandleFunc("GET /api/clusters/{cluster}/metrics", h.GetClusterMetrics)
+	protectedMux.HandleFunc("GET /api/metrics", h.GetMetrics)
+	protectedMux.HandleFunc("GET /api/metrics/node/{node}", h.GetNodeMetrics)
+	protectedMux.HandleFunc("GET /api/metrics/vm/{vmid}", h.GetVMMetrics)
+	protectedMux.HandleFunc("GET /api/metrics/ct/{vmid}", h.GetContainerMetrics)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/metrics", h.GetClusterMetrics)
 
 	// --- Activity endpoints ---
-	mux.HandleFunc("GET /api/activity", h.GetActivity)
+	protectedMux.HandleFunc("GET /api/activity", h.GetActivity)
 
 	// --- Folders endpoints ---
-	mux.HandleFunc("GET /api/folders/{tree}", h.GetFolderTree)
-	mux.HandleFunc("POST /api/folders", h.CreateFolder)
-	mux.HandleFunc("PUT /api/folders/{id}", h.RenameFolder)
-	mux.HandleFunc("DELETE /api/folders/{id}", h.DeleteFolder)
-	mux.HandleFunc("POST /api/folders/{id}/move", h.MoveFolder)
-	mux.HandleFunc("POST /api/folders/{id}/members", h.AddFolderMember)
-	mux.HandleFunc("DELETE /api/folders/{id}/members", h.RemoveFolderMember)
-	mux.HandleFunc("POST /api/resources/move", h.MoveResource)
+	protectedMux.HandleFunc("GET /api/folders/{tree}", h.GetFolderTree)
+	protectedMux.HandleFunc("POST /api/folders", h.CreateFolder)
+	protectedMux.HandleFunc("PUT /api/folders/{id}", h.RenameFolder)
+	protectedMux.HandleFunc("DELETE /api/folders/{id}", h.DeleteFolder)
+	protectedMux.HandleFunc("POST /api/folders/{id}/move", h.MoveFolder)
+	protectedMux.HandleFunc("POST /api/folders/{id}/members", h.AddFolderMember)
+	protectedMux.HandleFunc("DELETE /api/folders/{id}/members", h.RemoveFolderMember)
+	protectedMux.HandleFunc("POST /api/resources/move", h.MoveResource)
 
 	// --- Inventory endpoints (datacenter/cluster management) ---
 
 	// Datacenters
-	mux.HandleFunc("GET /api/datacenters", h.ListDatacenters)
-	mux.HandleFunc("POST /api/datacenters", h.CreateDatacenter)
-	mux.HandleFunc("GET /api/datacenters/{id}", h.GetDatacenter)
-	mux.HandleFunc("PUT /api/datacenters/{id}", h.UpdateDatacenter)
-	mux.HandleFunc("DELETE /api/datacenters/{id}", h.DeleteDatacenter)
-	mux.HandleFunc("GET /api/datacenters/tree", h.GetDatacenterTree)
+	protectedMux.HandleFunc("GET /api/datacenters", h.ListDatacenters)
+	protectedMux.HandleFunc("POST /api/datacenters", h.CreateDatacenter)
+	protectedMux.HandleFunc("GET /api/datacenters/{id}", h.GetDatacenter)
+	protectedMux.HandleFunc("PUT /api/datacenters/{id}", h.UpdateDatacenter)
+	protectedMux.HandleFunc("DELETE /api/datacenters/{id}", h.DeleteDatacenter)
+	protectedMux.HandleFunc("GET /api/datacenters/tree", h.GetDatacenterTree)
 
 	// Inventory Clusters (configuration, separate from runtime /api/clusters)
-	mux.HandleFunc("GET /api/inventory/clusters", h.ListInventoryClusters)
-	mux.HandleFunc("POST /api/inventory/clusters", h.CreateInventoryCluster)
-	mux.HandleFunc("GET /api/inventory/clusters/{name}", h.GetInventoryCluster)
-	mux.HandleFunc("PUT /api/inventory/clusters/{name}", h.UpdateInventoryCluster)
-	mux.HandleFunc("DELETE /api/inventory/clusters/{name}", h.DeleteInventoryCluster)
-	mux.HandleFunc("POST /api/inventory/clusters/{name}/move", h.MoveClusterToDatacenter)
+	protectedMux.HandleFunc("GET /api/inventory/clusters", h.ListInventoryClusters)
+	protectedMux.HandleFunc("POST /api/inventory/clusters", h.CreateInventoryCluster)
+	protectedMux.HandleFunc("GET /api/inventory/clusters/{name}", h.GetInventoryCluster)
+	protectedMux.HandleFunc("PUT /api/inventory/clusters/{name}", h.UpdateInventoryCluster)
+	protectedMux.HandleFunc("DELETE /api/inventory/clusters/{name}", h.DeleteInventoryCluster)
+	protectedMux.HandleFunc("POST /api/inventory/clusters/{name}/move", h.MoveClusterToDatacenter)
 
 	// Inventory Hosts (per-cluster)
-	mux.HandleFunc("GET /api/inventory/clusters/{name}/hosts", h.ListClusterHosts)
-	mux.HandleFunc("POST /api/inventory/clusters/{name}/hosts", h.AddClusterHost)
-	mux.HandleFunc("GET /api/inventory/hosts/{id}", h.GetHost)
-	mux.HandleFunc("PUT /api/inventory/hosts/{id}", h.UpdateHost)
-	mux.HandleFunc("DELETE /api/inventory/hosts/{id}", h.DeleteHost)
+	protectedMux.HandleFunc("GET /api/inventory/clusters/{name}/hosts", h.ListClusterHosts)
+	protectedMux.HandleFunc("POST /api/inventory/clusters/{name}/hosts", h.AddClusterHost)
+	protectedMux.HandleFunc("GET /api/inventory/hosts/{id}", h.GetHost)
+	protectedMux.HandleFunc("PUT /api/inventory/hosts/{id}", h.UpdateHost)
+	protectedMux.HandleFunc("DELETE /api/inventory/hosts/{id}", h.DeleteHost)
+
+	// Wrap protected routes with auth middleware (if auth is enabled)
+	if authSvc != nil {
+		mux.Handle("/api/", authSvc.RequireAuth(authSvc.RequireFullAuth(protectedMux)))
+	} else {
+		// No auth - register routes directly
+		mux.Handle("/api/", protectedMux)
+	}
 
 	// Serve static files and SPA fallback
 	staticDir := "./frontend"

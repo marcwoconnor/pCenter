@@ -14,6 +14,7 @@ import (
 	"github.com/moconnor/pcenter/internal/activity"
 	"github.com/moconnor/pcenter/internal/agent"
 	"github.com/moconnor/pcenter/internal/api"
+	"github.com/moconnor/pcenter/internal/auth"
 	"github.com/moconnor/pcenter/internal/config"
 	"github.com/moconnor/pcenter/internal/folders"
 	"github.com/moconnor/pcenter/internal/inventory"
@@ -78,8 +79,84 @@ func main() {
 		slog.Info("poller disabled - running in agent-only mode")
 	}
 
+	// Initialize auth service
+	var authSvc *auth.Service
+	if cfg.Auth.Enabled {
+		authDB, err := auth.Open(cfg.Auth.DatabasePath)
+		if err != nil {
+			slog.Error("failed to open auth database", "error", err)
+			os.Exit(1)
+		}
+		defer authDB.Close()
+
+		// Initialize crypto (optional - for TOTP secret encryption)
+		crypto, err := auth.NewCrypto(cfg.Auth.EncryptionKey)
+		if err != nil {
+			slog.Error("failed to initialize auth crypto", "error", err)
+			os.Exit(1)
+		}
+
+		// Build auth config from app config
+		authCfg := auth.Config{
+			Enabled:       cfg.Auth.Enabled,
+			DatabasePath:  cfg.Auth.DatabasePath,
+			EncryptionKey: cfg.Auth.EncryptionKey,
+			Session: auth.SessionConfig{
+				DurationHours:    cfg.Auth.Session.DurationHours,
+				IdleTimeoutHours: cfg.Auth.Session.IdleTimeoutHours,
+				CookieSecure:     cfg.Auth.Session.CookieSecure,
+				CookieDomain:     cfg.Auth.Session.CookieDomain,
+			},
+			Lockout: auth.LockoutConfig{
+				MaxAttempts:    cfg.Auth.Lockout.MaxAttempts,
+				LockoutMinutes: cfg.Auth.Lockout.LockoutMinutes,
+				Progressive:    cfg.Auth.Lockout.Progressive,
+			},
+			TOTP: auth.TOTPConfig{
+				Enabled:       cfg.Auth.TOTP.Enabled,
+				Required:      cfg.Auth.TOTP.Required,
+				Issuer:        cfg.Auth.TOTP.Issuer,
+				RecoveryCodes: cfg.Auth.TOTP.RecoveryCodes,
+				TrustIPHours:  cfg.Auth.TOTP.TrustIPHours,
+			},
+			RateLimit: auth.RateLimitConfig{
+				RequestsPerMinute: cfg.Auth.RateLimit.RequestsPerMinute,
+			},
+		}
+
+		authSvc = auth.NewService(authDB, crypto, authCfg)
+
+		// Check if we need first-user setup
+		userCount, err := authSvc.UserCount(ctx)
+		if err != nil {
+			slog.Error("failed to check user count", "error", err)
+			os.Exit(1)
+		}
+		if userCount == 0 {
+			slog.Info("auth enabled - no users found, first registration will create admin")
+		} else {
+			slog.Info("auth enabled", "users", userCount, "database", cfg.Auth.DatabasePath)
+		}
+
+		// Start session cleanup goroutine
+		go func() {
+			ticker := time.NewTicker(1 * time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					authSvc.CleanupExpiredSessions(ctx)
+				}
+			}
+		}()
+	} else {
+		slog.Info("auth disabled - all endpoints are public")
+	}
+
 	// Create HTTP server
-	router, handler := api.NewRouter(store, p, hub, agentHub, cfg.Server.CORSOrigins)
+	router, handler := api.NewRouter(store, p, hub, agentHub, authSvc, cfg.Server.CORSOrigins)
 
 	// Set clusters config for on-demand client creation (agent-only mode)
 	handler.SetClusters(cfg.Clusters)

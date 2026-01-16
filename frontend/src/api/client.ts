@@ -36,16 +36,40 @@ import type {
   CreateContainerRequest,
 } from '../types';
 
+import { getCSRFToken } from './auth';
+
 const BASE_URL = '/api';
 
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options?.headers as Record<string, string>),
+  };
+
+  // Add CSRF token for state-changing requests
+  const csrfToken = getCSRFToken();
+  if (
+    csrfToken &&
+    options?.method &&
+    ['POST', 'PUT', 'DELETE'].includes(options.method)
+  ) {
+    headers['X-CSRF-Token'] = csrfToken;
+  }
+
   const res = await fetch(`${BASE_URL}${path}`, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
+    headers,
+    credentials: 'include', // Include cookies for session
   });
+
+  // Handle 401 - redirect to login
+  if (res.status === 401) {
+    // Only redirect if we're not already on login page
+    if (!window.location.pathname.includes('/login')) {
+      window.location.href = '/login';
+    }
+    throw new Error('Session expired');
+  }
 
   if (!res.ok) {
     const error = await res.json().catch(() => ({ error: res.statusText }));
