@@ -10,6 +10,7 @@ Proxmox datacenter manager - vCenter alternative
 ### Key Planning Documents
 - `docs/pve-agent-spec.md` - Complete Proxmox API surface (200+ endpoints)
 - `docs/pve-agent-project-plan.md` - Full implementation plan and architecture
+- `docs/auth-system.md` - Authentication system: sessions, TOTP 2FA, trusted IPs
 
 ## Stack
 - **Backend**: Go 1.22+ (Chi router, SQLite)
