@@ -6,6 +6,7 @@ import { useConfigEditor, type UseConfigEditorReturn } from '../hooks/useConfigE
 import { MetricsChart } from './MetricsChart';
 import type { MetricSeries, VMConfig, ContainerConfig, NetworkInterface } from '../types';
 import { NetworkTopology } from './NetworkTopology';
+import { SnapshotsTab } from './SnapshotsTab';
 
 type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d';
 
@@ -23,6 +24,7 @@ const nodeTabs: Tab[] = [
 const guestTabs: Tab[] = [
   { id: 'summary', label: 'Summary' },
   { id: 'console', label: 'Console' },
+  { id: 'snapshots', label: 'Snapshots' },
   { id: 'monitor', label: 'Monitor' },
   { id: 'configure', label: 'Configure' },
 ];
@@ -64,11 +66,11 @@ export function ObjectDetail() {
 
   // Get the actual object data
   const node = selectedObject.type === 'node'
-    ? nodes.find((n) => n.node === selectedObject.id)
+    ? nodes.find((n) => n.node === selectedObject.id && n.cluster === selectedObject.cluster)
     : null;
 
   const guest = (selectedObject.type === 'vm' || selectedObject.type === 'ct')
-    ? guests.find((g) => g.vmid === selectedObject.id)
+    ? guests.find((g) => g.vmid === selectedObject.id && g.cluster === selectedObject.cluster)
     : null;
 
   const storageItem = selectedObject.type === 'storage'
@@ -200,6 +202,9 @@ export function ObjectDetail() {
             type={guest.type === 'qemu' ? 'vm' : 'ct'}
             isRunning={guest.status === 'running'}
           />
+        )}
+        {activeTab === 'snapshots' && guest && (
+          <SnapshotsTab guest={guest} />
         )}
         {activeTab === 'configure' && guest && (
           <ConfigureTab

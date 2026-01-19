@@ -218,6 +218,8 @@ func main() {
 
 	inventoryService := inventory.NewService(inventoryDB)
 	handler.SetInventoryService(inventoryService)
+	handler.SetSecrets(cfg.ClusterSecrets)
+	handler.SetConfig(cfg)
 
 	// Migrate clusters from config.yaml to inventory DB (one-time)
 	if err := migrateConfigClusters(ctx, inventoryService, cfg); err != nil {

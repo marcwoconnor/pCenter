@@ -60,6 +60,7 @@ interface ClusterState {
   addTask: (task: Task) => void;
   updateTask: (id: string, updates: Partial<Task>) => void;
   performAction: (type: 'vm' | 'ct', vmid: number, action: 'start' | 'stop' | 'shutdown', cluster?: string) => Promise<void>;
+  startClone: (guest: Guest, newId: number, name: string, opts?: { targetNode?: string; full?: boolean; storage?: string }) => void;
   consoles: ConsoleWindow[];
   openConsole: (type: 'vm' | 'ct', vmid: number, name: string, cluster: string) => void;
   closeConsole: (id: string) => void;
@@ -225,6 +226,76 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
     }
   }, [guests, addTask, updateTask]);
 
+  // Start a clone operation and track it in the tasks bar
+  const startClone = useCallback((
+    guest: Guest,
+    newId: number,
+    name: string,
+    opts?: { targetNode?: string; full?: boolean; storage?: string }
+  ) => {
+    const taskId = `clone-${Date.now()}-${guest.vmid}`;
+    const isVM = guest.type === 'qemu';
+
+    addTask({
+      id: taskId,
+      type: `Clone ${isVM ? 'VM' : 'Container'}`,
+      status: 'running',
+      target: `${guest.name} → ${name}`,
+      startTime: Date.now(),
+    });
+
+    // Start the clone
+    const clonePromise = isVM
+      ? api.cloneVM(guest.cluster, guest.vmid, {
+          new_id: newId,
+          name,
+          target_node: opts?.targetNode,
+          full: opts?.full,
+          storage: opts?.storage,
+        })
+      : api.cloneContainer(guest.cluster, guest.vmid, {
+          new_id: newId,
+          name,
+          target_node: opts?.targetNode,
+          full: opts?.full,
+          storage: opts?.storage,
+        });
+
+    clonePromise
+      .then((result) => {
+        // Poll for task completion
+        const pollInterval = setInterval(async () => {
+          try {
+            const task = await api.getTaskStatus(guest.cluster, result.upid);
+            if (task.status === 'stopped') {
+              clearInterval(pollInterval);
+              if (task.exitstatus === 'OK') {
+                updateTask(taskId, { status: 'completed', message: 'Clone completed' });
+              } else {
+                let errorMsg = task.exitstatus || 'Unknown error';
+                if (errorMsg.includes('cannot clone TPM state while VM is running')) {
+                  errorMsg = 'VM has TPM and must be stopped first';
+                }
+                updateTask(taskId, { status: 'failed', message: errorMsg });
+              }
+            }
+          } catch (err) {
+            console.error('Clone poll error:', err);
+          }
+        }, 1000);
+
+        // Safety timeout - stop polling after 10 minutes
+        setTimeout(() => clearInterval(pollInterval), 600000);
+      })
+      .catch((err) => {
+        let errorMsg = err instanceof Error ? err.message : 'Clone failed';
+        if (errorMsg.includes('cannot clone TPM state while VM is running')) {
+          errorMsg = 'VM has TPM and must be stopped first';
+        }
+        updateTask(taskId, { status: 'failed', message: errorMsg });
+      });
+  }, [addTask, updateTask]);
+
   const openConsole = useCallback((type: 'vm' | 'ct', vmid: number, name: string, cluster: string) => {
     // Check if console for this vmid is already open
     setConsoles(prev => {
@@ -300,6 +371,7 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
       addTask,
       updateTask,
       performAction,
+      startClone,
       consoles,
       openConsole,
       closeConsole,

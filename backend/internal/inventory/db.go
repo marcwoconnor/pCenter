@@ -208,6 +208,20 @@ func (db *DB) migrate() error {
 		slog.Info("old schema migration complete")
 	}
 
+	// Migration: add datacenter_id column to hosts for standalone hosts
+	var hasDatacenterID bool
+	row = db.conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('inventory_hosts') WHERE name='datacenter_id'")
+	var dcCount int
+	if err := row.Scan(&dcCount); err == nil && dcCount > 0 {
+		hasDatacenterID = true
+	}
+	if !hasDatacenterID {
+		slog.Info("adding datacenter_id column to inventory_hosts for standalone hosts")
+		// Add datacenter_id column (nullable for hosts that belong to clusters)
+		db.conn.Exec("ALTER TABLE inventory_hosts ADD COLUMN datacenter_id TEXT REFERENCES datacenters(id) ON DELETE CASCADE")
+		db.conn.Exec("CREATE INDEX IF NOT EXISTS idx_hosts_datacenter ON inventory_hosts(datacenter_id)")
+	}
+
 	return nil
 }
 
@@ -749,6 +763,82 @@ func (db *DB) AddHost(ctx context.Context, clusterID string, req AddHostRequest)
 	}
 
 	return host, nil
+}
+
+// AddDatacenterHost adds a standalone host directly to a datacenter (not in a cluster)
+func (db *DB) AddDatacenterHost(ctx context.Context, datacenterID string, req AddHostRequest) (*InventoryHost, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	now := time.Now()
+	host := &InventoryHost{
+		ID:           uuid.New().String(),
+		DatacenterID: datacenterID,
+		Address:      req.Address,
+		TokenID:      req.TokenID,
+		Insecure:     req.Insecure,
+		Status:       HostStatusStaged,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	_, err := db.conn.ExecContext(ctx, `
+		INSERT INTO inventory_hosts (id, cluster_id, datacenter_id, address, token_id, insecure, status, error, node_name, created_at, updated_at)
+		VALUES (?, NULL, ?, ?, ?, ?, ?, '', '', ?, ?)
+	`, host.ID, host.DatacenterID, host.Address, host.TokenID,
+		boolToInt(host.Insecure), string(host.Status),
+		host.CreatedAt.Unix(), host.UpdatedAt.Unix(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("insert datacenter host: %w", err)
+	}
+
+	return host, nil
+}
+
+// ListHostsByDatacenter retrieves standalone hosts for a datacenter
+func (db *DB) ListHostsByDatacenter(ctx context.Context, datacenterID string) ([]InventoryHost, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	rows, err := db.conn.QueryContext(ctx, `
+		SELECT id, COALESCE(cluster_id, ''), COALESCE(datacenter_id, ''), address, token_id, insecure, status, error, node_name, created_at, updated_at
+		FROM inventory_hosts
+		WHERE datacenter_id = ? AND (cluster_id IS NULL OR cluster_id = '')
+		ORDER BY created_at
+	`, datacenterID)
+	if err != nil {
+		return nil, fmt.Errorf("list datacenter hosts: %w", err)
+	}
+	defer rows.Close()
+
+	var hosts []InventoryHost
+	for rows.Next() {
+		var h InventoryHost
+		var insecure int
+		var status string
+		var errMsg, nodeName sql.NullString
+		var createdAt, updatedAt int64
+
+		if err := rows.Scan(&h.ID, &h.ClusterID, &h.DatacenterID, &h.Address, &h.TokenID, &insecure,
+			&status, &errMsg, &nodeName, &createdAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan host: %w", err)
+		}
+
+		h.Insecure = insecure != 0
+		h.Status = HostStatus(status)
+		if errMsg.Valid {
+			h.Error = errMsg.String
+		}
+		if nodeName.Valid {
+			h.NodeName = nodeName.String
+		}
+		h.CreatedAt = time.Unix(createdAt, 0)
+		h.UpdatedAt = time.Unix(updatedAt, 0)
+		hosts = append(hosts, h)
+	}
+
+	return hosts, nil
 }
 
 // GetHost retrieves a host by ID

@@ -34,6 +34,8 @@ import type {
   DatacenterTreeResponse,
   CreateVMRequest,
   CreateContainerRequest,
+  Snapshot,
+  CreateSnapshotRequest,
 } from '../types';
 
 import { getCSRFToken } from './auth';
@@ -141,6 +143,40 @@ export const api = {
       body: JSON.stringify({ digest, changes, delete: deleteKeys }),
     }),
 
+  // VM Snapshots
+  getVMSnapshots: (cluster: string, vmid: number) =>
+    fetchAPI<Snapshot[]>(`/clusters/${cluster}/vms/${vmid}/snapshots`),
+  createVMSnapshot: (cluster: string, vmid: number, req: CreateSnapshotRequest) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/vms/${vmid}/snapshots`, {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+  rollbackVMSnapshot: (cluster: string, vmid: number, snapname: string) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/vms/${vmid}/snapshots/${encodeURIComponent(snapname)}/rollback`, {
+      method: 'POST',
+    }),
+  deleteVMSnapshot: (cluster: string, vmid: number, snapname: string) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/vms/${vmid}/snapshots/${encodeURIComponent(snapname)}`, {
+      method: 'DELETE',
+    }),
+
+  // Container Snapshots
+  getContainerSnapshots: (cluster: string, vmid: number) =>
+    fetchAPI<Snapshot[]>(`/clusters/${cluster}/containers/${vmid}/snapshots`),
+  createContainerSnapshot: (cluster: string, vmid: number, req: CreateSnapshotRequest) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/containers/${vmid}/snapshots`, {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+  rollbackContainerSnapshot: (cluster: string, vmid: number, snapname: string) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/containers/${vmid}/snapshots/${encodeURIComponent(snapname)}/rollback`, {
+      method: 'POST',
+    }),
+  deleteContainerSnapshot: (cluster: string, vmid: number, snapname: string) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/containers/${vmid}/snapshots/${encodeURIComponent(snapname)}`, {
+      method: 'DELETE',
+    }),
+
   // Create VM/Container
   getNextVMID: (cluster: string) =>
     fetchAPI<{ vmid: number }>(`/clusters/${cluster}/nextid`),
@@ -163,6 +199,43 @@ export const api = {
   deleteContainer: (cluster: string, vmid: number, purge?: boolean) =>
     fetchAPI<{ upid: string }>(`/clusters/${cluster}/containers/${vmid}${purge ? '?purge=1' : ''}`, {
       method: 'DELETE',
+    }),
+
+  // Task status
+  getTaskStatus: (cluster: string, upid: string) =>
+    fetchAPI<{
+      upid: string;
+      node: string;
+      status: string;  // "running" | "stopped"
+      exitstatus?: string;  // "OK" | error message
+      type: string;
+      id: string;
+    }>(`/clusters/${cluster}/tasks/${encodeURIComponent(upid)}`),
+
+  // Clone VM/Container
+  cloneVM: (cluster: string, vmid: number, opts: {
+    new_id: number;
+    name?: string;
+    target_node?: string;
+    full?: boolean;
+    storage?: string;
+    description?: string;
+  }) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/vms/${vmid}/clone`, {
+      method: 'POST',
+      body: JSON.stringify(opts),
+    }),
+  cloneContainer: (cluster: string, vmid: number, opts: {
+    new_id: number;
+    name?: string;
+    target_node?: string;
+    full?: boolean;
+    storage?: string;
+    description?: string;
+  }) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/containers/${vmid}/clone`, {
+      method: 'POST',
+      body: JSON.stringify(opts),
     }),
 
   // Console
@@ -275,6 +348,11 @@ export const api = {
   deleteDatacenter: (id: string) =>
     fetchAPI<void>(`/datacenters/${id}`, { method: 'DELETE' }),
   getDatacenterTree: () => fetchAPI<DatacenterTreeResponse>('/datacenters/tree'),
+  addDatacenterHost: (datacenterID: string, req: AddHostRequest) =>
+    fetchAPI<InventoryHost>(`/datacenters/${datacenterID}/hosts`, {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
 
   // Inventory Clusters (configuration)
   getInventoryClusters: () => fetchAPI<InventoryCluster[]>('/inventory/clusters'),
@@ -304,6 +382,17 @@ export const api = {
     fetchAPI<void>(`/inventory/hosts/${id}`, { method: 'PUT', body: JSON.stringify(req) }),
   deleteHost: (id: string) =>
     fetchAPI<void>(`/inventory/hosts/${id}`, { method: 'DELETE' }),
+
+  // Host setup actions
+  setupHostSSH: (id: string, sshPassword: string) =>
+    fetchAPI<{ success: boolean; message: string }>(`/inventory/hosts/${id}/setup-ssh`, {
+      method: 'POST',
+      body: JSON.stringify({ ssh_password: sshPassword }),
+    }),
+  deployAgent: (id: string) =>
+    fetchAPI<{ success: boolean; message: string; token_secret?: string }>(`/inventory/hosts/${id}/deploy-agent`, {
+      method: 'POST',
+    }),
 };
 
 // Helper functions

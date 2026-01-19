@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,7 +35,9 @@ type Handler struct {
 	inventory *inventory.Service
 	agentHub  *agent.Hub
 	clusters  []config.ClusterConfig // For on-demand client creation
+	secrets   map[string]string      // Token secrets keyed by cluster/agent name
 	onChange  func()                 // Callback to broadcast state changes
+	cfg       *config.Config         // Full config for agent deployment
 }
 
 // NewHandler creates a new API handler
@@ -76,6 +81,16 @@ func (h *Handler) SetAgentHub(hub *agent.Hub) {
 // SetClusters sets the cluster configs for on-demand client creation
 func (h *Handler) SetClusters(clusters []config.ClusterConfig) {
 	h.clusters = clusters
+}
+
+// SetSecrets sets the token secrets map for dynamic cluster activation
+func (h *Handler) SetSecrets(secrets map[string]string) {
+	h.secrets = secrets
+}
+
+// SetConfig sets the full config for agent deployment
+func (h *Handler) SetConfig(cfg *config.Config) {
+	h.cfg = cfg
 }
 
 // getClient returns the PVE client for a cluster/node combination
@@ -529,18 +544,23 @@ func (h *Handler) RunCephCommand(w http.ResponseWriter, r *http.Request) {
 // GetSmart returns SMART data for all disks across all nodes
 func (h *Handler) GetSmart(w http.ResponseWriter, r *http.Request) {
 	if h.poller == nil {
+		slog.Warn("SMART: poller is nil")
 		writeJSON(w, []pve.SmartDisk{})
 		return
 	}
 	allClients := h.poller.GetAllClients()
+	slog.Info("SMART: fetching data", "clusters", len(allClients))
 
 	var allDisks []pve.SmartDisk
-	for _, clients := range allClients {
-		for _, client := range clients {
+	for clusterName, clients := range allClients {
+		slog.Info("SMART: processing cluster", "cluster", clusterName, "nodes", len(clients))
+		for nodeName, client := range clients {
 			disks, err := client.GetSmartData(r.Context())
 			if err != nil {
-				continue // Log and skip failed nodes
+				slog.Error("SMART: failed to get data", "cluster", clusterName, "node", nodeName, "error", err)
+				continue
 			}
+			slog.Info("SMART: got disks", "cluster", clusterName, "node", nodeName, "disks", len(disks))
 			allDisks = append(allDisks, disks...)
 		}
 	}
@@ -2012,6 +2032,204 @@ func (h *Handler) GetClusterNodesForMigration(w http.ResponseWriter, r *http.Req
 	writeJSON(w, options)
 }
 
+// --- Clone Handlers ---
+
+// CloneRequest contains parameters for cloning a VM or container
+type CloneRequest struct {
+	NewID       int    `json:"new_id"`                 // Required: VMID for clone
+	Name        string `json:"name"`                   // Name for clone
+	TargetNode  string `json:"target_node,omitempty"`  // Target node (empty = same)
+	Full        bool   `json:"full"`                   // Full vs linked clone
+	Storage     string `json:"storage,omitempty"`      // Target storage
+	Description string `json:"description,omitempty"`  // Description
+}
+
+// CloneVM clones a VM in a specific cluster
+func (h *Handler) CloneVM(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	var req CloneRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.NewID == 0 {
+		writeError(w, http.StatusBadRequest, "new_id is required")
+		return
+	}
+
+	// Find the VM
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	vm, found := cs.GetVM(vmid)
+	if !found {
+		writeError(w, http.StatusNotFound, "VM not found")
+		return
+	}
+
+	// Get client for source node
+	client, ok := h.getClient(clusterName, vm.Node)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "source node client not found")
+		return
+	}
+
+	opts := pve.CloneOptions{
+		NewID:       req.NewID,
+		Name:        req.Name,
+		TargetNode:  req.TargetNode,
+		Full:        req.Full,
+		Storage:     req.Storage,
+		Description: req.Description,
+	}
+
+	upid, err := client.CloneVM(r.Context(), vmid, opts)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "clone failed: "+err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		details, _ := json.Marshal(map[string]any{
+			"source_vmid": vmid,
+			"new_vmid":    req.NewID,
+			"name":        req.Name,
+			"target_node": req.TargetNode,
+			"full":        req.Full,
+		})
+		h.activity.Log(activity.Entry{
+			Action:       "clone",
+			ResourceType: "vm",
+			ResourceID:   vmidStr,
+			ResourceName: vm.Name,
+			Cluster:      clusterName,
+			Details:      string(details),
+			Status:       "started",
+		})
+	}
+
+	writeJSON(w, map[string]any{"upid": upid, "new_vmid": req.NewID})
+}
+
+// CloneContainer clones a container in a specific cluster
+func (h *Handler) CloneContainer(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	var req CloneRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.NewID == 0 {
+		writeError(w, http.StatusBadRequest, "new_id is required")
+		return
+	}
+
+	// Find the container
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	ct, found := cs.GetContainer(vmid)
+	if !found {
+		writeError(w, http.StatusNotFound, "container not found")
+		return
+	}
+
+	// Get client for source node
+	client, ok := h.getClient(clusterName, ct.Node)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "source node client not found")
+		return
+	}
+
+	opts := pve.CloneOptions{
+		NewID:       req.NewID,
+		Name:        req.Name,
+		TargetNode:  req.TargetNode,
+		Full:        req.Full,
+		Storage:     req.Storage,
+		Description: req.Description,
+	}
+
+	upid, err := client.CloneContainer(r.Context(), vmid, opts)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "clone failed: "+err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		details, _ := json.Marshal(map[string]any{
+			"source_vmid": vmid,
+			"new_vmid":    req.NewID,
+			"name":        req.Name,
+			"target_node": req.TargetNode,
+			"full":        req.Full,
+		})
+		h.activity.Log(activity.Entry{
+			Action:       "clone",
+			ResourceType: "ct",
+			ResourceID:   vmidStr,
+			ResourceName: ct.Name,
+			Cluster:      clusterName,
+			Details:      string(details),
+			Status:       "started",
+		})
+	}
+
+	writeJSON(w, map[string]any{"upid": upid, "new_vmid": req.NewID})
+}
+
+// GetTaskStatus returns the status of a Proxmox task
+func (h *Handler) GetTaskStatus(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	upid := r.PathValue("upid")
+
+	// Parse node from UPID (format: UPID:node:pid:pstart:starttime:type:id:user:)
+	parts := strings.Split(upid, ":")
+	if len(parts) < 3 {
+		writeError(w, http.StatusBadRequest, "invalid UPID format")
+		return
+	}
+	nodeName := parts[1]
+
+	client, ok := h.getClient(clusterName, nodeName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node client not found")
+		return
+	}
+
+	task, err := client.GetTaskStatus(r.Context(), upid)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get task status: "+err.Error())
+		return
+	}
+
+	writeJSON(w, task)
+}
+
 // --- DRS Handlers ---
 
 // ApplyDRSRecommendation executes a DRS recommendation (initiates migration)
@@ -3216,10 +3434,66 @@ func (h *Handler) GetDatacenterTree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sync inventory host status with runtime node status
+	h.syncHostStatusWithRuntime(datacenters, orphanClusters)
+
 	writeJSON(w, map[string]interface{}{
 		"datacenters":     datacenters,
 		"orphan_clusters": orphanClusters,
 	})
+}
+
+// syncHostStatusWithRuntime updates inventory host status based on runtime node status
+func (h *Handler) syncHostStatusWithRuntime(datacenters []inventory.Datacenter, orphanClusters []inventory.Cluster) {
+	if h.store == nil {
+		return
+	}
+
+	// Build a map of runtime node status by node name
+	runtimeNodes := make(map[string]bool) // nodeName -> isOnline
+	for _, clusterName := range h.store.GetClusterNames() {
+		cs, ok := h.store.GetCluster(clusterName)
+		if !ok {
+			continue
+		}
+		for _, node := range cs.GetNodes() {
+			runtimeNodes[node.Node] = node.Status == "online"
+		}
+	}
+
+	// Helper to update hosts based on runtime status
+	syncHosts := func(hosts []inventory.InventoryHost) {
+		for i := range hosts {
+			host := &hosts[i]
+			// Only sync if host was previously online - don't override staged/error status
+			if host.Status == inventory.HostStatusOnline || host.Status == inventory.HostStatusOffline {
+				if host.NodeName != "" {
+					if isOnline, found := runtimeNodes[host.NodeName]; found {
+						if isOnline {
+							host.Status = inventory.HostStatusOnline
+						} else {
+							host.Status = inventory.HostStatusOffline
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Sync hosts in datacenter clusters
+	for i := range datacenters {
+		// Sync cluster hosts
+		for j := range datacenters[i].Clusters {
+			syncHosts(datacenters[i].Clusters[j].Hosts)
+		}
+		// Sync standalone hosts
+		syncHosts(datacenters[i].Hosts)
+	}
+
+	// Sync hosts in orphan clusters
+	for i := range orphanClusters {
+		syncHosts(orphanClusters[i].Hosts)
+	}
 }
 
 // === Cluster Inventory Handlers ===
@@ -3519,6 +3793,49 @@ func (h *Handler) AddClusterHost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, host)
 }
 
+// AddDatacenterHost adds a standalone host directly to a datacenter
+func (h *Handler) AddDatacenterHost(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	datacenterID := r.PathValue("id")
+	if datacenterID == "" {
+		writeError(w, http.StatusBadRequest, "datacenter ID is required")
+		return
+	}
+
+	var req inventory.AddHostRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	host, err := h.inventory.AddDatacenterHost(ctx, datacenterID, req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "host_add",
+			ResourceType: "host",
+			ResourceID:   host.ID,
+			ResourceName: req.Address,
+			Details:      "standalone host",
+		})
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, host)
+}
+
 // GetHost returns a host by ID
 func (h *Handler) GetHost(w http.ResponseWriter, r *http.Request) {
 	if h.inventory == nil {
@@ -3630,4 +3947,1083 @@ func (h *Handler) DeleteHost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// TestHostConnection tests connectivity to a Proxmox host
+func (h *Handler) TestHostConnection(w http.ResponseWriter, r *http.Request) {
+	var req inventory.TestConnectionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate required fields
+	if req.Address == "" {
+		writeError(w, http.StatusBadRequest, "address is required")
+		return
+	}
+	if req.TokenID == "" {
+		writeError(w, http.StatusBadRequest, "token_id is required")
+		return
+	}
+	if req.TokenSecret == "" {
+		writeError(w, http.StatusBadRequest, "token_secret is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	result := h.testPVEConnection(ctx, req.Address, req.TokenID, req.TokenSecret, req.Insecure)
+	writeJSON(w, result)
+}
+
+// testPVEConnection tests connectivity to a Proxmox host and returns result
+func (h *Handler) testPVEConnection(ctx context.Context, address, tokenID, tokenSecret string, insecure bool) inventory.TestConnectionResult {
+	// Create a temporary client to test the connection
+	cfg := config.ClusterConfig{
+		DiscoveryNode: address,
+		TokenID:       tokenID,
+		TokenSecret:   tokenSecret,
+		Insecure:      insecure,
+	}
+	client := pve.NewClientFromClusterConfig(cfg)
+
+	// Try to get nodes - this validates auth and connectivity
+	nodes, err := client.GetNodes(ctx)
+	if err != nil {
+		return inventory.TestConnectionResult{
+			Success: false,
+			Message: fmt.Sprintf("connection failed: %v", err),
+		}
+	}
+
+	if len(nodes) == 0 {
+		return inventory.TestConnectionResult{
+			Success: false,
+			Message: "connected but no nodes found",
+		}
+	}
+
+	// Get node names
+	nodeNames := make([]string, len(nodes))
+	for i, n := range nodes {
+		nodeNames[i] = n.Node
+	}
+
+	return inventory.TestConnectionResult{
+		Success:   true,
+		Message:   "connection successful",
+		NodeName:  nodes[0].Node,
+		NodeCount: len(nodes),
+		Nodes:     nodeNames,
+	}
+}
+
+// ActivateHost tests and activates a staged host
+func (h *Handler) ActivateHost(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	hostID := r.PathValue("id")
+	if hostID == "" {
+		writeError(w, http.StatusBadRequest, "host ID is required")
+		return
+	}
+
+	// Get token secret from request body
+	var req struct {
+		TokenSecret string `json:"token_secret"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.TokenSecret == "" {
+		writeError(w, http.StatusBadRequest, "token_secret is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	// Get host details
+	host, err := h.inventory.GetHost(ctx, hostID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if host == nil {
+		writeError(w, http.StatusNotFound, "host not found")
+		return
+	}
+
+	// Test connection
+	result := h.testPVEConnection(ctx, host.Address, host.TokenID, req.TokenSecret, host.Insecure)
+
+	if !result.Success {
+		// Update host status to error
+		h.inventory.SetHostStatus(ctx, hostID, inventory.HostStatusError, result.Message, "")
+		writeError(w, http.StatusBadGateway, result.Message)
+		return
+	}
+
+	// Update host status to online
+	if err := h.inventory.SetHostStatus(ctx, hostID, inventory.HostStatusOnline, "", result.NodeName); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Store the token secret for polling
+	if h.secrets != nil {
+		// Get cluster to find the agent name
+		cluster, err := h.inventory.GetCluster(ctx, host.ClusterID)
+		if err == nil && cluster != nil {
+			agentName := cluster.AgentName
+			if agentName == "" {
+				agentName = cluster.Name
+			}
+			h.secrets[agentName] = req.TokenSecret
+		}
+	}
+
+	// Activate the cluster
+	if err := h.inventory.SetClusterStatus(ctx, host.ClusterID, inventory.ClusterStatusActive); err != nil {
+		slog.Error("failed to activate cluster", "cluster_id", host.ClusterID, "error", err)
+	}
+
+	// Log activity
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "host_activate",
+			ResourceType: "host",
+			ResourceID:   hostID,
+			ResourceName: host.Address,
+		})
+	}
+
+	// Return updated host
+	host.Status = inventory.HostStatusOnline
+	host.NodeName = result.NodeName
+	host.Error = ""
+	writeJSON(w, host)
+}
+
+// SetupHostSSHRequest is the request body for SSH key setup
+type SetupHostSSHRequest struct {
+	SSHPassword string `json:"ssh_password"`
+}
+
+// SetupHostSSHResponse is the response from SSH key setup
+type SetupHostSSHResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+// SetupHostSSH copies pCenter's SSH public key to a host for vmstats collection
+func (h *Handler) SetupHostSSH(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	hostID := r.PathValue("id")
+	if hostID == "" {
+		writeError(w, http.StatusBadRequest, "host ID is required")
+		return
+	}
+
+	var req SetupHostSSHRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.SSHPassword == "" {
+		writeError(w, http.StatusBadRequest, "ssh_password is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	// Get host details
+	host, err := h.inventory.GetHost(ctx, hostID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if host == nil {
+		writeError(w, http.StatusNotFound, "host not found")
+		return
+	}
+
+	// Extract hostname/IP from address (remove port if present)
+	hostAddr := host.Address
+	if idx := strings.LastIndex(hostAddr, ":"); idx != -1 {
+		// Check if it's not an IPv6 address
+		if !strings.Contains(hostAddr[idx:], "]") {
+			hostAddr = hostAddr[:idx]
+		}
+	}
+
+	// Ensure SSH keypair exists on this server
+	if err := ensureSSHKeypair(); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to ensure SSH keypair: %v", err))
+		return
+	}
+
+	// Copy SSH key to the host using sshpass
+	result := copySSHKey(ctx, hostAddr, req.SSHPassword)
+
+	// Log activity
+	if h.activity != nil {
+		action := "host_ssh_setup"
+		if !result.Success {
+			action = "host_ssh_setup_failed"
+		}
+		h.activity.Log(activity.Entry{
+			Action:       action,
+			ResourceType: "host",
+			ResourceID:   hostID,
+			ResourceName: host.Address,
+			Details:      result.Message,
+		})
+	}
+
+	if !result.Success {
+		writeError(w, http.StatusBadGateway, result.Message)
+		return
+	}
+
+	writeJSON(w, result)
+}
+
+// ensureSSHKeypair ensures an SSH keypair exists for the pcenter user
+func ensureSSHKeypair() error {
+	homeDir := os.Getenv("HOME")
+	if homeDir == "" {
+		// Fallback to /root for systemd services
+		homeDir = "/root"
+	}
+
+	sshDir := filepath.Join(homeDir, ".ssh")
+	keyPath := filepath.Join(sshDir, "id_ed25519")
+
+	// Check if key already exists
+	if _, err := os.Stat(keyPath); err == nil {
+		return nil // Key exists
+	}
+
+	// Create .ssh directory if needed
+	if err := os.MkdirAll(sshDir, 0700); err != nil {
+		return fmt.Errorf("create .ssh dir: %w", err)
+	}
+
+	// Generate new keypair
+	cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyPath, "-N", "", "-q")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("ssh-keygen: %w: %s", err, output)
+	}
+
+	slog.Info("generated SSH keypair", "path", keyPath)
+	return nil
+}
+
+// copySSHKey copies the SSH public key to a remote host using sshpass
+func copySSHKey(ctx context.Context, host, password string) SetupHostSSHResponse {
+	// Get the key path
+	homeDir := os.Getenv("HOME")
+	if homeDir == "" {
+		homeDir = "/root"
+	}
+	keyPath := filepath.Join(homeDir, ".ssh", "id_ed25519.pub")
+
+	// First, try ssh-copy-id with sshpass
+	cmd := exec.CommandContext(ctx, "sshpass", "-p", password,
+		"ssh-copy-id",
+		"-i", keyPath,
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "ConnectTimeout=10",
+		fmt.Sprintf("root@%s", host),
+	)
+	// Set HOME env so ssh-copy-id can create temp files
+	cmd.Env = append(os.Environ(), "HOME="+homeDir)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return SetupHostSSHResponse{
+			Success: false,
+			Message: fmt.Sprintf("ssh-copy-id failed: %v: %s", err, strings.TrimSpace(string(output))),
+		}
+	}
+
+	// Verify SSH works without password
+	testCmd := exec.CommandContext(ctx, "ssh",
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=10",
+		fmt.Sprintf("root@%s", host),
+		"echo", "ssh_ok",
+	)
+	testCmd.Env = append(os.Environ(), "HOME="+homeDir)
+
+	testOutput, err := testCmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(testOutput), "ssh_ok") {
+		return SetupHostSSHResponse{
+			Success: false,
+			Message: fmt.Sprintf("SSH key copied but verification failed: %v: %s", err, strings.TrimSpace(string(testOutput))),
+		}
+	}
+
+	return SetupHostSSHResponse{
+		Success: true,
+		Message: fmt.Sprintf("SSH key successfully deployed to %s", host),
+	}
+}
+
+// --- Agent Deployment ---
+
+// DeployAgentResponse is the response from agent deployment
+type DeployAgentResponse struct {
+	Success     bool   `json:"success"`
+	Message     string `json:"message"`
+	TokenSecret string `json:"token_secret,omitempty"` // The generated PVE API token secret
+}
+
+// DeployAgent deploys the pve-agent to a host via SSH
+func (h *Handler) DeployAgent(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	hostID := r.PathValue("id")
+	if hostID == "" {
+		writeError(w, http.StatusBadRequest, "host ID is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second) // Longer timeout for deployment
+	defer cancel()
+
+	// Get host details
+	host, err := h.inventory.GetHost(ctx, hostID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if host == nil {
+		writeError(w, http.StatusNotFound, "host not found")
+		return
+	}
+
+	// Get cluster for agent_name
+	cluster, err := h.inventory.GetCluster(ctx, host.ClusterID)
+	if err != nil || cluster == nil {
+		writeError(w, http.StatusInternalServerError, "failed to get cluster")
+		return
+	}
+	clusterName := cluster.AgentName
+	if clusterName == "" {
+		clusterName = cluster.Name
+	}
+
+	// Extract hostname/IP from address (remove port if present)
+	hostAddr := host.Address
+	if idx := strings.LastIndex(hostAddr, ":"); idx != -1 {
+		if !strings.Contains(hostAddr[idx:], "]") {
+			hostAddr = hostAddr[:idx]
+		}
+	}
+
+	// Deploy the agent
+	result := deployAgentToHost(ctx, hostAddr, clusterName, h.cfg)
+
+	// Log activity
+	if h.activity != nil {
+		action := "agent_deploy"
+		if !result.Success {
+			action = "agent_deploy_failed"
+		}
+		h.activity.Log(activity.Entry{
+			Action:       action,
+			ResourceType: "host",
+			ResourceID:   hostID,
+			ResourceName: host.Address,
+			Details:      result.Message,
+		})
+	}
+
+	if !result.Success {
+		writeError(w, http.StatusBadGateway, result.Message)
+		return
+	}
+
+	writeJSON(w, result)
+}
+
+// deployAgentToHost deploys the pve-agent binary and config to a remote host
+func deployAgentToHost(ctx context.Context, host, clusterName string, cfg *config.Config) DeployAgentResponse {
+	homeDir := os.Getenv("HOME")
+	if homeDir == "" {
+		homeDir = "/root"
+	}
+
+	// Check if agent binary exists locally
+	if _, err := os.Stat(cfg.Agent.BinaryPath); os.IsNotExist(err) {
+		return DeployAgentResponse{
+			Success: false,
+			Message: fmt.Sprintf("agent binary not found at %s - build and copy it first", cfg.Agent.BinaryPath),
+		}
+	}
+
+	// Determine pCenter URL for agent config
+	pcenterURL := cfg.Agent.PCenterURL
+	if pcenterURL == "" {
+		// Auto-detect: use this server's hostname
+		hostname, _ := os.Hostname()
+		pcenterURL = fmt.Sprintf("ws://%s:%d/api/agent/ws", hostname, cfg.Server.Port)
+	}
+
+	tokenName := cfg.Agent.TokenName
+
+	slog.Info("deploying agent", "host", host, "cluster", clusterName, "pcenter_url", pcenterURL)
+
+	// Step 1: Create directories on remote host
+	if err := runSSHCmd(ctx, host, homeDir, "mkdir -p /etc/pve-agent"); err != nil {
+		return DeployAgentResponse{Success: false, Message: fmt.Sprintf("failed to create config dir: %v", err)}
+	}
+
+	// Step 2: Copy agent binary
+	if err := scpFile(ctx, cfg.Agent.BinaryPath, host, "/usr/local/bin/pve-agent", homeDir); err != nil {
+		return DeployAgentResponse{Success: false, Message: fmt.Sprintf("failed to copy agent binary: %v", err)}
+	}
+
+	// Make binary executable
+	if err := runSSHCmd(ctx, host, homeDir, "chmod +x /usr/local/bin/pve-agent"); err != nil {
+		return DeployAgentResponse{Success: false, Message: fmt.Sprintf("failed to chmod binary: %v", err)}
+	}
+
+	// Step 3: Create PVE API token (or get existing)
+	tokenSecret, err := createOrGetPVEToken(ctx, host, homeDir, tokenName)
+	if err != nil {
+		return DeployAgentResponse{Success: false, Message: fmt.Sprintf("failed to create PVE token: %v", err)}
+	}
+
+	// Step 4: Generate and write agent config
+	agentConfig := fmt.Sprintf(`pcenter:
+  url: "%s"
+  token: ""
+
+pve:
+  token_id: "root@pam!%s"
+  token_secret: "%s"
+
+node:
+  name: ""
+  cluster: "%s"
+
+collection:
+  interval: 5
+  include_smart: false
+  include_ceph: true
+`, pcenterURL, tokenName, tokenSecret, clusterName)
+
+	if err := writeRemoteFile(ctx, host, "/etc/pve-agent/config.yaml", agentConfig, homeDir); err != nil {
+		return DeployAgentResponse{Success: false, Message: fmt.Sprintf("failed to write config: %v", err)}
+	}
+
+	// Step 5: Create systemd service
+	serviceFile := `[Unit]
+Description=pCenter PVE Agent
+After=network.target pvedaemon.service
+Wants=pvedaemon.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/pve-agent -config /etc/pve-agent/config.yaml
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+`
+	if err := writeRemoteFile(ctx, host, "/etc/systemd/system/pve-agent.service", serviceFile, homeDir); err != nil {
+		return DeployAgentResponse{Success: false, Message: fmt.Sprintf("failed to write service file: %v", err)}
+	}
+
+	// Step 6: Enable and start service
+	if err := runSSHCmd(ctx, host, homeDir, "systemctl daemon-reload && systemctl enable pve-agent && systemctl restart pve-agent"); err != nil {
+		return DeployAgentResponse{Success: false, Message: fmt.Sprintf("failed to start service: %v", err)}
+	}
+
+	// Step 7: Verify agent is running
+	time.Sleep(2 * time.Second) // Give it a moment to start
+	if err := runSSHCmd(ctx, host, homeDir, "systemctl is-active pve-agent"); err != nil {
+		return DeployAgentResponse{Success: false, Message: fmt.Sprintf("agent service not running: %v", err)}
+	}
+
+	return DeployAgentResponse{
+		Success:     true,
+		Message:     fmt.Sprintf("Agent deployed to %s and connected to %s", host, pcenterURL),
+		TokenSecret: tokenSecret,
+	}
+}
+
+// runSSHCmd runs a command on a remote host via SSH
+func runSSHCmd(ctx context.Context, host, homeDir, command string) error {
+	cmd := exec.CommandContext(ctx, "ssh",
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "ConnectTimeout=10",
+		fmt.Sprintf("root@%s", host),
+		command,
+	)
+	cmd.Env = append(os.Environ(), "HOME="+homeDir)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// scpFile copies a local file to a remote host
+func scpFile(ctx context.Context, localPath, host, remotePath, homeDir string) error {
+	cmd := exec.CommandContext(ctx, "scp",
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "ConnectTimeout=10",
+		localPath,
+		fmt.Sprintf("root@%s:%s", host, remotePath),
+	)
+	cmd.Env = append(os.Environ(), "HOME="+homeDir)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// writeRemoteFile writes content to a file on a remote host via SSH
+func writeRemoteFile(ctx context.Context, host, remotePath, content, homeDir string) error {
+	// Use ssh with heredoc to write the file
+	cmd := exec.CommandContext(ctx, "ssh",
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "ConnectTimeout=10",
+		fmt.Sprintf("root@%s", host),
+		fmt.Sprintf("cat > %s", remotePath),
+	)
+	cmd.Env = append(os.Environ(), "HOME="+homeDir)
+	cmd.Stdin = strings.NewReader(content)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// createOrGetPVEToken creates a PVE API token or returns existing secret
+func createOrGetPVEToken(ctx context.Context, host, homeDir, tokenName string) (string, error) {
+	// Try to create the token - if it exists, this will fail
+	// pvesh create /access/users/root@pam/token/<name> --privsep 0
+	cmd := exec.CommandContext(ctx, "ssh",
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "ConnectTimeout=10",
+		fmt.Sprintf("root@%s", host),
+		fmt.Sprintf("pvesh create /access/users/root@pam/token/%s --privsep 0 --output-format json 2>/dev/null || pvesh get /access/users/root@pam/token/%s --output-format json 2>/dev/null", tokenName, tokenName),
+	)
+	cmd.Env = append(os.Environ(), "HOME="+homeDir)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("pvesh failed: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	// Parse JSON to get token value
+	// Create response: {"full-tokenid":"root@pam!pve-agent","info":{"privsep":"0"},"value":"xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"}
+	// Get response: {"comment":"...","expire":0,"privsep":0,"tokenid":"pve-agent"}
+	outputStr := strings.TrimSpace(string(output))
+
+	// Try to extract "value" field (from create)
+	if strings.Contains(outputStr, `"value"`) {
+		// Simple extraction - find "value":"..." pattern
+		start := strings.Index(outputStr, `"value":"`)
+		if start != -1 {
+			start += 9
+			end := strings.Index(outputStr[start:], `"`)
+			if end != -1 {
+				return outputStr[start : start+end], nil
+			}
+		}
+	}
+
+	// If we got here, token already exists - we need to recreate it to get the secret
+	// Delete and recreate
+	deleteCmd := exec.CommandContext(ctx, "ssh",
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=accept-new",
+		fmt.Sprintf("root@%s", host),
+		fmt.Sprintf("pvesh delete /access/users/root@pam/token/%s 2>/dev/null; pvesh create /access/users/root@pam/token/%s --privsep 0 --output-format json", tokenName, tokenName),
+	)
+	deleteCmd.Env = append(os.Environ(), "HOME="+homeDir)
+	output2, err := deleteCmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to recreate token: %v: %s", err, strings.TrimSpace(string(output2)))
+	}
+
+	// Extract value again
+	outputStr = strings.TrimSpace(string(output2))
+	start := strings.Index(outputStr, `"value":"`)
+	if start != -1 {
+		start += 9
+		end := strings.Index(outputStr[start:], `"`)
+		if end != -1 {
+			return outputStr[start : start+end], nil
+		}
+	}
+
+	return "", fmt.Errorf("could not parse token from response: %s", outputStr)
+}
+
+// --- Snapshot Handlers ---
+
+// CreateSnapshotRequest is the request body for creating a snapshot
+type CreateSnapshotRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	VMState     bool   `json:"vmstate,omitempty"` // Include RAM state (VM only)
+}
+
+// GetVMSnapshots returns all snapshots for a VM
+func (h *Handler) GetVMSnapshots(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	// Find VM to get node
+	cs, ok := h.store.GetCluster(cluster)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	vm, ok := cs.GetVM(vmid)
+	if !ok {
+		writeError(w, http.StatusNotFound, "VM not found")
+		return
+	}
+
+	client, ok := h.getClient(cluster, vm.Node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not available")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	snapshots, err := client.ListVMSnapshots(ctx, vmid)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, snapshots)
+}
+
+// CreateVMSnapshot creates a new snapshot for a VM
+func (h *Handler) CreateVMSnapshot(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	var req CreateSnapshotRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "snapshot name is required")
+		return
+	}
+
+	// Find VM to get node
+	cs, ok := h.store.GetCluster(cluster)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	vm, ok := cs.GetVM(vmid)
+	if !ok {
+		writeError(w, http.StatusNotFound, "VM not found")
+		return
+	}
+
+	client, ok := h.getClient(cluster, vm.Node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not available")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	upid, err := client.CreateVMSnapshot(ctx, vmid, req.Name, req.Description, req.VMState)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "snapshot_create",
+			ResourceType: "vm",
+			ResourceID:   fmt.Sprintf("%d", vmid),
+			ResourceName: vm.Name,
+			Cluster:      cluster,
+			Details:      fmt.Sprintf(`{"snapshot":"%s"}`, req.Name),
+		})
+	}
+
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// RollbackVMSnapshot rolls back a VM to a snapshot
+func (h *Handler) RollbackVMSnapshot(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+	snapname := r.PathValue("snapname")
+
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	// Find VM to get node
+	cs, ok := h.store.GetCluster(cluster)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	vm, ok := cs.GetVM(vmid)
+	if !ok {
+		writeError(w, http.StatusNotFound, "VM not found")
+		return
+	}
+
+	client, ok := h.getClient(cluster, vm.Node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not available")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+
+	upid, err := client.RollbackVMSnapshot(ctx, vmid, snapname)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "snapshot_rollback",
+			ResourceType: "vm",
+			ResourceID:   fmt.Sprintf("%d", vmid),
+			ResourceName: vm.Name,
+			Cluster:      cluster,
+			Details:      fmt.Sprintf(`{"snapshot":"%s"}`, snapname),
+		})
+	}
+
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// DeleteVMSnapshot deletes a VM snapshot
+func (h *Handler) DeleteVMSnapshot(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+	snapname := r.PathValue("snapname")
+
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	// Find VM to get node
+	cs, ok := h.store.GetCluster(cluster)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	vm, ok := cs.GetVM(vmid)
+	if !ok {
+		writeError(w, http.StatusNotFound, "VM not found")
+		return
+	}
+
+	client, ok := h.getClient(cluster, vm.Node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not available")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	upid, err := client.DeleteVMSnapshot(ctx, vmid, snapname)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "snapshot_delete",
+			ResourceType: "vm",
+			ResourceID:   fmt.Sprintf("%d", vmid),
+			ResourceName: vm.Name,
+			Cluster:      cluster,
+			Details:      fmt.Sprintf(`{"snapshot":"%s"}`, snapname),
+		})
+	}
+
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// GetContainerSnapshots returns all snapshots for a container
+func (h *Handler) GetContainerSnapshots(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	// Find container to get node
+	cs, ok := h.store.GetCluster(cluster)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	ct, ok := cs.GetContainer(vmid)
+	if !ok {
+		writeError(w, http.StatusNotFound, "container not found")
+		return
+	}
+
+	client, ok := h.getClient(cluster, ct.Node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not available")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	snapshots, err := client.ListContainerSnapshots(ctx, vmid)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, snapshots)
+}
+
+// CreateContainerSnapshot creates a new snapshot for a container
+func (h *Handler) CreateContainerSnapshot(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	var req CreateSnapshotRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "snapshot name is required")
+		return
+	}
+
+	// Find container to get node
+	cs, ok := h.store.GetCluster(cluster)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	ct, ok := cs.GetContainer(vmid)
+	if !ok {
+		writeError(w, http.StatusNotFound, "container not found")
+		return
+	}
+
+	client, ok := h.getClient(cluster, ct.Node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not available")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	upid, err := client.CreateContainerSnapshot(ctx, vmid, req.Name, req.Description)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "snapshot_create",
+			ResourceType: "ct",
+			ResourceID:   fmt.Sprintf("%d", vmid),
+			ResourceName: ct.Name,
+			Cluster:      cluster,
+			Details:      fmt.Sprintf(`{"snapshot":"%s"}`, req.Name),
+		})
+	}
+
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// RollbackContainerSnapshot rolls back a container to a snapshot
+func (h *Handler) RollbackContainerSnapshot(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+	snapname := r.PathValue("snapname")
+
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	// Find container to get node
+	cs, ok := h.store.GetCluster(cluster)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	ct, ok := cs.GetContainer(vmid)
+	if !ok {
+		writeError(w, http.StatusNotFound, "container not found")
+		return
+	}
+
+	client, ok := h.getClient(cluster, ct.Node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not available")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+
+	upid, err := client.RollbackContainerSnapshot(ctx, vmid, snapname)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "snapshot_rollback",
+			ResourceType: "ct",
+			ResourceID:   fmt.Sprintf("%d", vmid),
+			ResourceName: ct.Name,
+			Cluster:      cluster,
+			Details:      fmt.Sprintf(`{"snapshot":"%s"}`, snapname),
+		})
+	}
+
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// DeleteContainerSnapshot deletes a container snapshot
+func (h *Handler) DeleteContainerSnapshot(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+	snapname := r.PathValue("snapname")
+
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	// Find container to get node
+	cs, ok := h.store.GetCluster(cluster)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	ct, ok := cs.GetContainer(vmid)
+	if !ok {
+		writeError(w, http.StatusNotFound, "container not found")
+		return
+	}
+
+	client, ok := h.getClient(cluster, ct.Node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not available")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	upid, err := client.DeleteContainerSnapshot(ctx, vmid, snapname)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Log activity
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "snapshot_delete",
+			ResourceType: "ct",
+			ResourceID:   fmt.Sprintf("%d", vmid),
+			ResourceName: ct.Name,
+			Cluster:      cluster,
+			Details:      fmt.Sprintf(`{"snapshot":"%s"}`, snapname),
+		})
+	}
+
+	writeJSON(w, map[string]string{"upid": upid})
 }

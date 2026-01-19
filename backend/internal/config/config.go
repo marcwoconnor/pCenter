@@ -19,6 +19,7 @@ type Config struct {
 	Folders  FoldersConfig   `yaml:"folders"`
 	Activity ActivityConfig  `yaml:"activity"`
 	Auth     AuthConfig      `yaml:"auth"`
+	Agent    AgentConfig     `yaml:"agent"`
 
 	// ClusterSecrets maps cluster name to API token secret
 	// Secrets stay in config/env, cluster definitions move to inventory DB
@@ -29,6 +30,13 @@ type Config struct {
 
 	// Legacy: flat nodes array (auto-converted to single cluster)
 	Nodes []NodeConfig `yaml:"nodes,omitempty"`
+}
+
+// AgentConfig holds pve-agent deployment settings
+type AgentConfig struct {
+	BinaryPath   string `yaml:"binary_path"`   // Path to pve-agent binary on pCenter server
+	PCenterURL   string `yaml:"pcenter_url"`   // WebSocket URL agents connect to (ws://host:port/api/agent/ws)
+	TokenName    string `yaml:"token_name"`    // PVE API token name to create (default: pve-agent)
 }
 
 // AuthConfig holds authentication settings
@@ -258,6 +266,14 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Auth.RateLimit.RequestsPerMinute == 0 {
 		cfg.Auth.RateLimit.RequestsPerMinute = 10
+	}
+
+	// Agent defaults
+	if cfg.Agent.BinaryPath == "" {
+		cfg.Agent.BinaryPath = "/opt/pcenter/pve-agent"
+	}
+	if cfg.Agent.TokenName == "" {
+		cfg.Agent.TokenName = "pve-agent"
 	}
 
 	// Poller defaults to enabled unless explicitly set to false

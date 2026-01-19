@@ -33,7 +33,8 @@ type Datacenter struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 
 	// Computed fields for tree response
-	Clusters []Cluster `json:"clusters,omitempty"`
+	Clusters []Cluster       `json:"clusters,omitempty"`
+	Hosts    []InventoryHost `json:"hosts,omitempty"` // Standalone hosts (not in a cluster)
 }
 
 // Cluster represents a Proxmox cluster (container for hosts)
@@ -52,18 +53,19 @@ type Cluster struct {
 	Hosts          []InventoryHost `json:"hosts,omitempty"`
 }
 
-// InventoryHost represents a Proxmox host staged/connected to a cluster
+// InventoryHost represents a Proxmox host staged/connected to a cluster or datacenter
 type InventoryHost struct {
-	ID        string     `json:"id"`
-	ClusterID string     `json:"cluster_id"`
-	Address   string     `json:"address"`   // host:port
-	TokenID   string     `json:"token_id"`  // API token ID
-	Insecure  bool       `json:"insecure"`  // skip TLS verification
-	Status    HostStatus `json:"status"`    // staged, online, error, etc.
-	Error     string     `json:"error,omitempty"` // last error message
-	NodeName  string     `json:"node_name,omitempty"` // discovered PVE node name
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	ID           string     `json:"id"`
+	ClusterID    string     `json:"cluster_id,omitempty"`    // empty for standalone hosts
+	DatacenterID string     `json:"datacenter_id,omitempty"` // set for standalone hosts
+	Address      string     `json:"address"`                 // host:port
+	TokenID      string     `json:"token_id"`                // API token ID
+	Insecure     bool       `json:"insecure"`                // skip TLS verification
+	Status       HostStatus `json:"status"`                  // staged, online, error, etc.
+	Error        string     `json:"error,omitempty"`         // last error message
+	NodeName     string     `json:"node_name,omitempty"`     // discovered PVE node name
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 // CreateDatacenterRequest is the request body for creating a datacenter
@@ -92,11 +94,20 @@ type UpdateClusterRequest struct {
 }
 
 // AddHostRequest is the request body for adding a host to a cluster
+// Supports two auth methods:
+// 1. Username + Password: We authenticate and auto-create an API token
+// 2. TokenID + TokenSecret: Use existing token (backward compat)
 type AddHostRequest struct {
-	Address     string `json:"address"`      // host:port
-	TokenID     string `json:"token_id"`     // API token ID
-	TokenSecret string `json:"token_secret"` // for initial connection test
-	Insecure    bool   `json:"insecure"`     // skip TLS verification
+	Address  string `json:"address"`  // host:port
+	Insecure bool   `json:"insecure"` // skip TLS verification
+
+	// Method 1: Username/password auth (preferred - we create a token)
+	Username string `json:"username,omitempty"` // e.g., "root@pam"
+	Password string `json:"password,omitempty"`
+
+	// Method 2: Existing token (backward compat)
+	TokenID     string `json:"token_id,omitempty"`
+	TokenSecret string `json:"token_secret,omitempty"`
 }
 
 // UpdateHostRequest is the request body for updating a host

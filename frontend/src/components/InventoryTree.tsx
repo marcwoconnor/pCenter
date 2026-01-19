@@ -5,6 +5,7 @@ import type { SelectedObject } from '../context/ClusterContext';
 import type { Guest, Storage, ClusterInfo, NetworkInterface, Folder, TreeView, Datacenter, InventoryCluster, InventoryHost } from '../types';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { MigrateDialog } from './MigrateDialog';
+import { CloneDialog } from './CloneDialog';
 import { FolderDialog } from './FolderDialog';
 import { DatacenterDialog } from './DatacenterDialog';
 import { AddHostDialog } from './AddHostDialog';
@@ -190,11 +191,73 @@ interface DatacenterDialogState {
   parentDatacenterId?: string;
 }
 
+// SSH Setup Dialog - prompts for root password to deploy SSH key
+function SSHSetupDialog({ hostAddress, onSubmit, onClose }: {
+  hostAddress: string;
+  onSubmit: (password: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!password.trim()) return;
+    setLoading(true);
+    try {
+      await onSubmit(password);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-gray-800 rounded-lg p-6 w-96 shadow-xl" onClick={e => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold mb-4">Setup SSH Key</h2>
+        <p className="text-sm text-gray-400 mb-4">
+          Deploy pCenter's SSH key to <span className="text-blue-400">{hostAddress}</span>
+        </p>
+        <form onSubmit={handleSubmit}>
+          <label className="block text-sm text-gray-400 mb-1">Root Password</label>
+          <input
+            type="password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white mb-4"
+            placeholder="Enter root password"
+            autoFocus
+            disabled={loading}
+          />
+          <div className="flex gap-2 justify-end">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded"
+              disabled={loading}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded disabled:opacity-50"
+              disabled={!password.trim() || loading}
+            >
+              {loading ? 'Setting up...' : 'Setup SSH'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
   const { clusters, nodes, guests, storage, selectedObject, setSelectedObject, performAction, openConsole } = useCluster();
   const { hostsTree, vmsTree, createFolder, renameFolder, deleteFolder, moveFolder, moveResource } = useFolders();
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [migrateGuest, setMigrateGuest] = useState<Guest | null>(null);
+  const [cloneGuest, setCloneGuest] = useState<Guest | null>(null);
   const [networkInterfaces, setNetworkInterfaces] = useState<NetworkInterface[]>([]);
   const [folderDialog, setFolderDialog] = useState<FolderDialogState | null>(null);
 
@@ -202,10 +265,17 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
   const [datacenters, setDatacenters] = useState<Datacenter[]>([]);
   const [orphanClusters, setOrphanClusters] = useState<InventoryCluster[]>([]);
   const [datacenterDialog, setDatacenterDialog] = useState<DatacenterDialogState | null>(null);
-  const [addHostCluster, setAddHostCluster] = useState<string | null>(null);
+  const [addHostDialog, setAddHostDialog] = useState<{
+    mode: 'cluster' | 'datacenter';
+    clusterName?: string;
+    datacenterId?: string;
+    datacenterName?: string;
+  } | null>(null);
   const [uploadDialog, setUploadDialog] = useState<{ storage: string; node: string; contentType: 'iso' | 'vztmpl' } | null>(null);
   const [createVMDialog, setCreateVMDialog] = useState<{ cluster: string; node: string } | null>(null);
   const [createContainerDialog, setCreateContainerDialog] = useState<{ cluster: string; node: string } | null>(null);
+  const [sshSetupDialog, setSshSetupDialog] = useState<{ hostId: string; hostAddress: string } | null>(null);
+  const [deployingAgent, setDeployingAgent] = useState<string | null>(null); // hostId being deployed
 
   const filterLower = filter.toLowerCase();
 
@@ -435,14 +505,21 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
       }] : []),
       { label: '', action: () => {}, divider: true },
       {
-        label: 'Snapshot',
+        label: 'Snapshots',
         icon: '📷',
-        action: () => alert('Snapshots not yet implemented'),
+        action: () => setSelectedObject({
+          type,
+          id: guest.vmid,
+          name: guest.name,
+          node: guest.node,
+          cluster: guest.cluster,
+          defaultTab: 'snapshots',
+        }),
       },
       {
         label: 'Clone',
         icon: '📋',
-        action: () => alert('Clone not yet implemented'),
+        action: () => setCloneGuest(guest),
       },
       { label: '', action: () => {}, divider: true },
       guest.ha_state ? {
@@ -495,13 +572,72 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
     ];
   };
 
+  // Find inventory host by cluster and node name
+  const findInventoryHost = (clusterName: string, nodeName: string): InventoryHost | undefined => {
+    // Search in datacenters
+    for (const dc of datacenters) {
+      for (const cluster of dc.clusters || []) {
+        if (cluster.name === clusterName || cluster.agent_name === clusterName) {
+          return cluster.hosts?.find(h => h.node_name === nodeName || h.address.startsWith(nodeName));
+        }
+      }
+    }
+    // Search in orphan clusters
+    for (const cluster of orphanClusters) {
+      if (cluster.name === clusterName || cluster.agent_name === clusterName) {
+        return cluster.hosts?.find(h => h.node_name === nodeName || h.address.startsWith(nodeName));
+      }
+    }
+    return undefined;
+  };
+
   const getNodeMenuItems = (nodeName: string, cluster: string): MenuItem[] => {
-    return [
+    const inventoryHost = findInventoryHost(cluster, nodeName);
+
+    const items: MenuItem[] = [
       {
         label: 'Shell',
         icon: '🖥',
         action: () => alert('Node shell not yet implemented'),
       },
+    ];
+
+    // Add SSH/Deploy options if we have an inventory host
+    if (inventoryHost) {
+      items.push(
+        { label: '', action: () => {}, divider: true },
+        {
+          label: 'Setup SSH Key',
+          icon: '🔑',
+          action: () => setSshSetupDialog({ hostId: inventoryHost.id, hostAddress: inventoryHost.address }),
+        },
+        {
+          label: 'Deploy Agent',
+          icon: '📦',
+          action: async () => {
+            if (deployingAgent) {
+              alert('Already deploying an agent. Please wait.');
+              return;
+            }
+            if (!confirm(`Deploy pve-agent to "${inventoryHost.address}"?\n\nThis requires SSH key access (run Setup SSH first).`)) {
+              return;
+            }
+            setDeployingAgent(inventoryHost.id);
+            try {
+              const result = await api.deployAgent(inventoryHost.id);
+              alert(result.message);
+              fetchDatacenterTree();
+            } catch (err) {
+              alert('Deploy failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
+            } finally {
+              setDeployingAgent(null);
+            }
+          },
+        }
+      );
+    }
+
+    items.push(
       { label: '', action: () => {}, divider: true },
       {
         label: 'Create VM',
@@ -519,8 +655,10 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
         icon: '🔄',
         action: () => alert('Node reboot not yet implemented'),
         danger: true,
-      },
-    ];
+      }
+    );
+
+    return items;
   };
 
   // Get best node for a cluster (node with most free memory)
@@ -581,6 +719,15 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
         action: () => setDatacenterDialog({
           mode: 'create-cluster',
           parentDatacenterId: dc.id,
+        }),
+      },
+      {
+        label: 'Add Host',
+        icon: '🖥️',
+        action: () => setAddHostDialog({
+          mode: 'datacenter',
+          datacenterId: dc.id,
+          datacenterName: dc.name,
         }),
       },
       {
@@ -645,7 +792,7 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
       {
         label: 'Add Host',
         icon: '➕',
-        action: () => setAddHostCluster(cluster.name),
+        action: () => setAddHostDialog({ mode: 'cluster', clusterName: cluster.name }),
       },
       {
         label: 'Edit Cluster',
@@ -696,13 +843,41 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
   };
 
   // Get inventory host context menu items
-  const getInventoryHostMenuItems = (host: InventoryHost, clusterName: string): MenuItem[] => {
+  const getInventoryHostMenuItems = (host: InventoryHost, clusterOrDcName: string): MenuItem[] => {
     return [
+      {
+        label: 'Setup SSH Key',
+        icon: '🔑',
+        action: () => setSshSetupDialog({ hostId: host.id, hostAddress: host.address }),
+      },
+      {
+        label: 'Deploy Agent',
+        icon: '📦',
+        action: async () => {
+          if (deployingAgent) {
+            alert('Already deploying an agent. Please wait.');
+            return;
+          }
+          if (!confirm(`Deploy pve-agent to "${host.address}"?\n\nThis requires SSH key access (run Setup SSH first).`)) {
+            return;
+          }
+          setDeployingAgent(host.id);
+          try {
+            const result = await api.deployAgent(host.id);
+            alert(result.message);
+            fetchDatacenterTree();
+          } catch (err) {
+            alert('Deploy failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
+          } finally {
+            setDeployingAgent(null);
+          }
+        },
+      },
       {
         label: 'Delete Host',
         icon: '🗑️',
         action: async () => {
-          if (confirm(`Remove host "${host.address}" from cluster "${clusterName}"?`)) {
+          if (confirm(`Remove host "${host.address}" from "${clusterOrDcName}"?`)) {
             try {
               await api.deleteHost(host.id);
               fetchDatacenterTree();
@@ -1110,7 +1285,8 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
           inventoryHosts.map((host) => (
             <TreeNode
               key={host.id}
-              icon="🖥"
+              icon={host.status === 'online' ? '🟢' : (host.status === 'error' || host.status === 'offline') ? '🔴' : '⚪'}
+              iconTitle={host.status === 'error' ? host.error : host.status}
               label={host.node_name || host.address}
               status={getHostStatusColor(host.status) as 'online' | 'stopped' | 'warning'}
               badge={host.error ? (
@@ -1153,6 +1329,15 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
             }}
           />
         )}
+        {cloneGuest && (
+          <CloneDialog
+            guest={cloneGuest}
+            onClose={() => setCloneGuest(null)}
+            onSuccess={() => {
+              // Clone started - state will update via WebSocket
+            }}
+          />
+        )}
         {datacenterDialog && (
           <DatacenterDialog
             mode={datacenterDialog.mode}
@@ -1167,14 +1352,17 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
             onClose={() => setDatacenterDialog(null)}
           />
         )}
-        {addHostCluster && (
+        {addHostDialog && (
           <AddHostDialog
-            clusterName={addHostCluster}
+            mode={addHostDialog.mode}
+            clusterName={addHostDialog.clusterName}
+            datacenterId={addHostDialog.datacenterId}
+            datacenterName={addHostDialog.datacenterName}
             onSubmit={async () => {
-              setAddHostCluster(null);
+              setAddHostDialog(null);
               await fetchDatacenterTree();
             }}
-            onClose={() => setAddHostCluster(null)}
+            onClose={() => setAddHostDialog(null)}
           />
         )}
         {createVMDialog && (
@@ -1197,6 +1385,21 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
             }}
           />
         )}
+        {sshSetupDialog && (
+          <SSHSetupDialog
+            hostAddress={sshSetupDialog.hostAddress}
+            onSubmit={async (password) => {
+              try {
+                const result = await api.setupHostSSH(sshSetupDialog.hostId, password);
+                alert(result.message);
+                setSshSetupDialog(null);
+              } catch (err) {
+                alert('SSH setup failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
+              }
+            }}
+            onClose={() => setSshSetupDialog(null)}
+          />
+        )}
         <TreeNode
           icon="🏢"
           label="pCenter"
@@ -1215,14 +1418,28 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
                   icon="🏢"
                   label={dc.name}
                   defaultExpanded
-                  count={dc.clusters?.length || 0}
+                  count={(dc.clusters?.length || 0) + (dc.hosts?.length || 0)}
                   isSelected={isSelected({ type: 'datacenter', id: dc.id, name: dc.name })}
                   onClick={() => setSelectedObject({ type: 'datacenter', id: dc.id, name: dc.name })}
                   onContextMenu={(e) => showContextMenu(e, getDatacenterMenuItems(dc))}
                 >
+                  {/* Render clusters */}
                   {dc.clusters?.map((invCluster) =>
                     renderClusterWithNodes(invCluster.name, invCluster)
                   )}
+                  {/* Render standalone hosts (not in a cluster) */}
+                  {dc.hosts?.map((host) => (
+                    <TreeNode
+                      key={host.id}
+                      icon={host.status === 'online' ? '🟢' : (host.status === 'error' || host.status === 'offline') ? '🔴' : '⚪'}
+                      iconTitle={host.status === 'error' ? host.error : host.status}
+                      label={host.node_name || host.address}
+                      status={host.status === 'online' ? 'online' : (host.status === 'error' || host.status === 'offline') ? 'stopped' : 'stopped'}
+                      isSelected={isSelected({ type: 'node', id: host.node_name || host.address, name: host.node_name || host.address })}
+                      onClick={() => setSelectedObject({ type: 'node', id: host.node_name || host.address, name: host.node_name || host.address })}
+                      onContextMenu={(e) => showContextMenu(e, getInventoryHostMenuItems(host, dc.name))}
+                    />
+                  ))}
                 </TreeNode>
               ))}
 
@@ -1307,6 +1524,13 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
           <MigrateDialog
             guest={migrateGuest}
             onClose={() => setMigrateGuest(null)}
+            onSuccess={() => {}}
+          />
+        )}
+        {cloneGuest && (
+          <CloneDialog
+            guest={cloneGuest}
+            onClose={() => setCloneGuest(null)}
             onSuccess={() => {}}
           />
         )}

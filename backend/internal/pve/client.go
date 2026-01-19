@@ -113,6 +113,130 @@ func NewClientForNode(cfg config.ClusterConfig, nodeName string, nodeIP string) 
 	}
 }
 
+// AuthResult contains the result of password authentication
+type AuthResult struct {
+	Ticket    string
+	CSRFToken string
+	Username  string
+}
+
+// TokenResult contains the newly created API token
+type TokenResult struct {
+	TokenID string
+	Secret  string
+}
+
+// AuthenticateWithPassword authenticates to a PVE host using username/password
+// Returns a ticket and CSRF token for subsequent requests
+func AuthenticateWithPassword(ctx context.Context, address, username, password string, insecure bool) (*AuthResult, error) {
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: insecure,
+		},
+	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Second,
+	}
+
+	reqURL := fmt.Sprintf("https://%s/api2/json/access/ticket", address)
+	data := url.Values{}
+	data.Set("username", username)
+	data.Set("password", password)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("auth request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("authentication failed: %s", string(body))
+	}
+
+	var result struct {
+		Data struct {
+			Ticket              string `json:"ticket"`
+			CSRFPreventionToken string `json:"CSRFPreventionToken"`
+			Username            string `json:"username"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parse auth response: %w", err)
+	}
+
+	return &AuthResult{
+		Ticket:    result.Data.Ticket,
+		CSRFToken: result.Data.CSRFPreventionToken,
+		Username:  result.Data.Username,
+	}, nil
+}
+
+// CreateAPIToken creates a new API token using a ticket from password auth
+// tokenName is just the suffix (e.g., "pcenter"), full token ID will be "user@realm!tokenName"
+func CreateAPIToken(ctx context.Context, address string, auth *AuthResult, tokenName string, insecure bool) (*TokenResult, error) {
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: insecure,
+		},
+	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Second,
+	}
+
+	// Token endpoint: /access/users/{userid}/token/{tokenid}
+	reqURL := fmt.Sprintf("https://%s/api2/json/access/users/%s/token/%s",
+		address, url.PathEscape(auth.Username), tokenName)
+
+	// Set privsep=0 so token has same permissions as user
+	data := url.Values{}
+	data.Set("privsep", "0")
+
+	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	// Use ticket cookie and CSRF token for auth
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("CSRFPreventionToken", auth.CSRFToken)
+	req.AddCookie(&http.Cookie{Name: "PVEAuthCookie", Value: auth.Ticket})
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("create token request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("create token failed: %s", string(body))
+	}
+
+	var result struct {
+		Data struct {
+			FullTokenID string `json:"full-tokenid"`
+			Value       string `json:"value"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parse token response: %w", err)
+	}
+
+	return &TokenResult{
+		TokenID: result.Data.FullTokenID,
+		Secret:  result.Data.Value,
+	}, nil
+}
+
 // SetNodeName sets the node name (used after cluster discovery)
 func (c *Client) SetNodeName(name string) {
 	c.nodeName = name
@@ -1378,6 +1502,78 @@ func (c *Client) MigrateContainer(ctx context.Context, vmid int, targetNode stri
 	return resp.Data, nil
 }
 
+// --- Clone operations ---
+
+// CloneOptions contains options for cloning a VM or container
+type CloneOptions struct {
+	NewID       int    // Required: VMID for the clone
+	Name        string // Name for the clone
+	TargetNode  string // Target node (empty = same node)
+	Full        bool   // Full clone (true) vs linked clone (false)
+	Storage     string // Target storage (empty = same as source)
+	Description string // Description for the clone
+}
+
+// CloneVM clones a VM
+func (c *Client) CloneVM(ctx context.Context, vmid int, opts CloneOptions) (string, error) {
+	params := map[string]string{
+		"newid": fmt.Sprintf("%d", opts.NewID),
+	}
+	if opts.Name != "" {
+		params["name"] = opts.Name
+	}
+	if opts.TargetNode != "" {
+		params["target"] = opts.TargetNode
+	}
+	if opts.Full {
+		params["full"] = "1"
+	}
+	if opts.Storage != "" {
+		params["storage"] = opts.Storage
+	}
+	if opts.Description != "" {
+		params["description"] = opts.Description
+	}
+
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/clone", c.nodeName, vmid), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil // returns UPID
+}
+
+// CloneContainer clones a container
+func (c *Client) CloneContainer(ctx context.Context, vmid int, opts CloneOptions) (string, error) {
+	params := map[string]string{
+		"newid": fmt.Sprintf("%d", opts.NewID),
+	}
+	if opts.Name != "" {
+		params["hostname"] = opts.Name // LXC uses hostname instead of name
+	}
+	if opts.TargetNode != "" {
+		params["target"] = opts.TargetNode
+	}
+	if opts.Full {
+		params["full"] = "1"
+	}
+	if opts.Storage != "" {
+		params["storage"] = opts.Storage
+	}
+	if opts.Description != "" {
+		params["description"] = opts.Description
+	}
+
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/clone", c.nodeName, vmid), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
 // --- Console/VNC operations ---
 
 // VNCProxyResponse contains the VNC proxy ticket info
@@ -1803,6 +1999,99 @@ func (c *Client) GetSDNControllers(ctx context.Context) ([]SDNController, error)
 		return []SDNController{}, nil
 	}
 	return controllers, nil
+}
+
+// --- Snapshot operations ---
+
+// ListVMSnapshots returns all snapshots for a VM
+func (c *Client) ListVMSnapshots(ctx context.Context, vmid int) ([]Snapshot, error) {
+	return get[[]Snapshot](c, ctx, fmt.Sprintf("/nodes/%s/qemu/%d/snapshot", c.nodeName, vmid))
+}
+
+// CreateVMSnapshot creates a new snapshot for a VM
+func (c *Client) CreateVMSnapshot(ctx context.Context, vmid int, snapname, description string, vmstate bool) (string, error) {
+	params := map[string]string{
+		"snapname": snapname,
+	}
+	if description != "" {
+		params["description"] = description
+	}
+	if vmstate {
+		params["vmstate"] = "1"
+	}
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/snapshot", c.nodeName, vmid), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// RollbackVMSnapshot rolls back a VM to a snapshot
+func (c *Client) RollbackVMSnapshot(ctx context.Context, vmid int, snapname string) (string, error) {
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/snapshot/%s/rollback", c.nodeName, vmid, snapname), nil)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// DeleteVMSnapshot deletes a VM snapshot
+func (c *Client) DeleteVMSnapshot(ctx context.Context, vmid int, snapname string) (string, error) {
+	data, err := c.deleteWithData(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/snapshot/%s", c.nodeName, vmid, snapname))
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// ListContainerSnapshots returns all snapshots for a container
+func (c *Client) ListContainerSnapshots(ctx context.Context, vmid int) ([]Snapshot, error) {
+	return get[[]Snapshot](c, ctx, fmt.Sprintf("/nodes/%s/lxc/%d/snapshot", c.nodeName, vmid))
+}
+
+// CreateContainerSnapshot creates a new snapshot for a container
+func (c *Client) CreateContainerSnapshot(ctx context.Context, vmid int, snapname, description string) (string, error) {
+	params := map[string]string{
+		"snapname": snapname,
+	}
+	if description != "" {
+		params["description"] = description
+	}
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/snapshot", c.nodeName, vmid), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// RollbackContainerSnapshot rolls back a container to a snapshot
+func (c *Client) RollbackContainerSnapshot(ctx context.Context, vmid int, snapname string) (string, error) {
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/snapshot/%s/rollback", c.nodeName, vmid, snapname), nil)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// DeleteContainerSnapshot deletes a container snapshot
+func (c *Client) DeleteContainerSnapshot(ctx context.Context, vmid int, snapname string) (string, error) {
+	data, err := c.deleteWithData(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/snapshot/%s", c.nodeName, vmid, snapname))
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil
 }
 
 // --- Memory stats from /proc/vmstat ---

@@ -532,6 +532,12 @@ export interface Snapshot {
   parent?: string;
 }
 
+export interface CreateSnapshotRequest {
+  name: string;
+  description?: string;
+  vmstate?: boolean; // Include RAM state (VM only)
+}
+
 export interface FirewallRule {
   pos?: number;
   type: string;
@@ -587,6 +593,7 @@ export interface Datacenter {
   created_at: string;
   updated_at: string;
   clusters?: InventoryCluster[];
+  hosts?: InventoryHost[];  // Standalone hosts (not in a cluster)
 }
 
 export interface InventoryCluster {
@@ -604,7 +611,8 @@ export interface InventoryCluster {
 
 export interface InventoryHost {
   id: string;
-  cluster_id: string;
+  cluster_id?: string;      // Empty for standalone hosts
+  datacenter_id?: string;   // Set for standalone hosts
   address: string;
   token_id: string;
   insecure: boolean;
@@ -638,9 +646,13 @@ export interface UpdateClusterRequest {
 
 export interface AddHostRequest {
   address: string;
-  token_id: string;
-  token_secret: string;
   insecure: boolean;
+  // Method 1: Username/password (preferred - auto-creates token)
+  username?: string;
+  password?: string;
+  // Method 2: Existing token (backward compat)
+  token_id?: string;
+  token_secret?: string;
 }
 
 export interface UpdateHostRequest {

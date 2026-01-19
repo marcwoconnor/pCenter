@@ -166,6 +166,18 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/containers/{vmid}/config", h.GetClusterContainerConfig)
 	protectedMux.HandleFunc("PUT /api/clusters/{cluster}/containers/{vmid}/config", h.UpdateClusterContainerConfig)
 
+	// VM Snapshots
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/vms/{vmid}/snapshots", h.GetVMSnapshots)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/vms/{vmid}/snapshots", h.CreateVMSnapshot)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/vms/{vmid}/snapshots/{snapname}/rollback", h.RollbackVMSnapshot)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/vms/{vmid}/snapshots/{snapname}", h.DeleteVMSnapshot)
+
+	// Container Snapshots
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/containers/{vmid}/snapshots", h.GetContainerSnapshots)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/containers/{vmid}/snapshots", h.CreateContainerSnapshot)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/containers/{vmid}/snapshots/{snapname}/rollback", h.RollbackContainerSnapshot)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/containers/{vmid}/snapshots/{snapname}", h.DeleteContainerSnapshot)
+
 	// Create VMs and containers
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nextid", h.GetNextVMID)
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/vms", h.CreateClusterVM)
@@ -212,6 +224,10 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/vms/{vmid}/migrate", h.ClusterMigrateVM)
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/containers/{vmid}/migrate", h.ClusterMigrateContainer)
 
+	// Clone operations
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/vms/{vmid}/clone", h.CloneVM)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/containers/{vmid}/clone", h.CloneContainer)
+
 	// Get nodes for migration target selection
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes/migration-targets", h.GetClusterNodesForMigration)
 
@@ -221,6 +237,9 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("GET /api/metrics/vm/{vmid}", h.GetVMMetrics)
 	protectedMux.HandleFunc("GET /api/metrics/ct/{vmid}", h.GetContainerMetrics)
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/metrics", h.GetClusterMetrics)
+
+	// --- Task status endpoint ---
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/tasks/{upid}", h.GetTaskStatus)
 
 	// --- Activity endpoints ---
 	protectedMux.HandleFunc("GET /api/activity", h.GetActivity)
@@ -244,6 +263,7 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("PUT /api/datacenters/{id}", h.UpdateDatacenter)
 	protectedMux.HandleFunc("DELETE /api/datacenters/{id}", h.DeleteDatacenter)
 	protectedMux.HandleFunc("GET /api/datacenters/tree", h.GetDatacenterTree)
+	protectedMux.HandleFunc("POST /api/datacenters/{id}/hosts", h.AddDatacenterHost)
 
 	// Inventory Clusters (configuration, separate from runtime /api/clusters)
 	protectedMux.HandleFunc("GET /api/inventory/clusters", h.ListInventoryClusters)
@@ -259,6 +279,12 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("GET /api/inventory/hosts/{id}", h.GetHost)
 	protectedMux.HandleFunc("PUT /api/inventory/hosts/{id}", h.UpdateHost)
 	protectedMux.HandleFunc("DELETE /api/inventory/hosts/{id}", h.DeleteHost)
+	protectedMux.HandleFunc("POST /api/inventory/hosts/{id}/activate", h.ActivateHost)
+	protectedMux.HandleFunc("POST /api/inventory/hosts/{id}/setup-ssh", h.SetupHostSSH)
+	protectedMux.HandleFunc("POST /api/inventory/hosts/{id}/deploy-agent", h.DeployAgent)
+
+	// Host connection testing
+	protectedMux.HandleFunc("POST /api/inventory/test-connection", h.TestHostConnection)
 
 	// Wrap protected routes with auth middleware (if auth is enabled)
 	if authSvc != nil {

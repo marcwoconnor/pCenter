@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/moconnor/pcenter/internal/config"
+	"github.com/moconnor/pcenter/internal/pve"
 )
 
 // Service provides inventory operations with business logic
@@ -133,9 +134,16 @@ func (s *Service) GetDatacenterTree(ctx context.Context) ([]Datacenter, []Cluste
 		}
 	}
 
-	// Populate clusters on datacenters
+	// Populate clusters and standalone hosts on datacenters
 	for i := range datacenters {
 		datacenters[i].Clusters = clustersByDC[datacenters[i].ID]
+
+		// Get standalone hosts for this datacenter
+		standaloneHosts, err := s.db.ListHostsByDatacenter(ctx, datacenters[i].ID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("list standalone hosts: %w", err)
+		}
+		datacenters[i].Hosts = standaloneHosts
 	}
 
 	return datacenters, orphanClusters, nil
@@ -358,6 +366,46 @@ func (s *Service) MoveClusterToDatacenter(ctx context.Context, clusterName strin
 
 // === Host Operations ===
 
+// resolveHostAuth handles authentication for adding a host.
+// If username/password provided, authenticates and creates an API token.
+// Otherwise uses provided token_id/token_secret.
+// Returns the final token ID and secret to store, or error.
+func (s *Service) resolveHostAuth(ctx context.Context, req *AddHostRequest) (string, string, error) {
+	req.Address = strings.TrimSpace(req.Address)
+	if req.Address == "" {
+		return "", "", fmt.Errorf("address is required")
+	}
+
+	// Method 1: Username/password - authenticate and create token
+	if req.Username != "" && req.Password != "" {
+		// Authenticate with username/password
+		auth, err := pve.AuthenticateWithPassword(ctx, req.Address, req.Username, req.Password, req.Insecure)
+		if err != nil {
+			return "", "", fmt.Errorf("authentication failed: %w", err)
+		}
+
+		// Create an API token named "pcenter"
+		token, err := pve.CreateAPIToken(ctx, req.Address, auth, "pcenter", req.Insecure)
+		if err != nil {
+			return "", "", fmt.Errorf("create API token failed: %w", err)
+		}
+
+		return token.TokenID, token.Secret, nil
+	}
+
+	// Method 2: Existing token
+	req.TokenID = strings.TrimSpace(req.TokenID)
+	req.TokenSecret = strings.TrimSpace(req.TokenSecret)
+	if req.TokenID == "" {
+		return "", "", fmt.Errorf("either username/password or token_id/token_secret is required")
+	}
+	if req.TokenSecret == "" {
+		return "", "", fmt.Errorf("token_secret is required when using token_id")
+	}
+
+	return req.TokenID, req.TokenSecret, nil
+}
+
 // AddHost adds a host to a cluster
 func (s *Service) AddHost(ctx context.Context, clusterID string, req AddHostRequest) (*InventoryHost, error) {
 	// Validate cluster exists
@@ -369,17 +417,13 @@ func (s *Service) AddHost(ctx context.Context, clusterID string, req AddHostRequ
 		return nil, fmt.Errorf("cluster not found")
 	}
 
-	// Validate address
-	req.Address = strings.TrimSpace(req.Address)
-	if req.Address == "" {
-		return nil, fmt.Errorf("address is required")
+	// Resolve authentication (create token if using password)
+	tokenID, tokenSecret, err := s.resolveHostAuth(ctx, &req)
+	if err != nil {
+		return nil, err
 	}
-
-	// Validate token ID
-	req.TokenID = strings.TrimSpace(req.TokenID)
-	if req.TokenID == "" {
-		return nil, fmt.Errorf("token_id is required")
-	}
+	req.TokenID = tokenID
+	req.TokenSecret = tokenSecret
 
 	host, err := s.db.AddHost(ctx, clusterID, req)
 	if err != nil {
@@ -405,6 +449,34 @@ func (s *Service) AddHostByClusterName(ctx context.Context, clusterName string, 
 	}
 
 	return s.AddHost(ctx, cluster.ID, req)
+}
+
+// AddDatacenterHost adds a standalone host directly to a datacenter (not in a cluster)
+func (s *Service) AddDatacenterHost(ctx context.Context, datacenterID string, req AddHostRequest) (*InventoryHost, error) {
+	// Validate datacenter exists
+	dc, err := s.db.GetDatacenter(ctx, datacenterID)
+	if err != nil {
+		return nil, fmt.Errorf("get datacenter: %w", err)
+	}
+	if dc == nil {
+		return nil, fmt.Errorf("datacenter not found")
+	}
+
+	// Resolve authentication (create token if using password)
+	tokenID, tokenSecret, err := s.resolveHostAuth(ctx, &req)
+	if err != nil {
+		return nil, err
+	}
+	req.TokenID = tokenID
+	req.TokenSecret = tokenSecret
+
+	// Add to database
+	host, err := s.db.AddDatacenterHost(ctx, datacenterID, req)
+	if err != nil {
+		return nil, fmt.Errorf("add host: %w", err)
+	}
+
+	return host, nil
 }
 
 // GetHost retrieves a host by ID

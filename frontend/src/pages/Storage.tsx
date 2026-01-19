@@ -162,7 +162,7 @@ function CephDetailPanel() {
                       {check.summary}
                     </div>
                     {check.detail && (
-                      <div className="text-sm text-gray-500 dark:text-gray-400 mt-1 font-mono bg-gray-100 dark:bg-gray-900 p-2 rounded">
+                      <div className="text-sm text-gray-500 dark:text-gray-400 mt-1 font-mono bg-gray-100 dark:bg-gray-900 p-2 rounded max-h-60 overflow-y-auto whitespace-pre-wrap">
                         {check.detail}
                       </div>
                     )}

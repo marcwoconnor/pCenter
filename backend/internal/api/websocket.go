@@ -2,9 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -396,14 +398,20 @@ func (h *Hub) buildStateMessage() []byte {
 		if len(ceph.Health.Checks) > 0 {
 			cephInfo.Checks = make(map[string]CephHealthCheck)
 			for name, check := range ceph.Health.Checks {
-				detail := ""
-				if len(check.Detail) > 0 {
-					detail = check.Detail[0].Message
+				// Join all detail messages (limit to 50 to avoid huge payloads)
+				var details []string
+				maxDetails := 50
+				for i, d := range check.Detail {
+					if i >= maxDetails {
+						details = append(details, fmt.Sprintf("... and %d more", len(check.Detail)-maxDetails))
+						break
+					}
+					details = append(details, d.Message)
 				}
 				cephInfo.Checks[name] = CephHealthCheck{
 					Severity: check.Severity,
 					Summary:  check.Summary.Message,
-					Detail:   detail,
+					Detail:   strings.Join(details, "\n"),
 				}
 			}
 		}
