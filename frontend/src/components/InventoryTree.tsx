@@ -1261,8 +1261,8 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
                 icon="🖥"
                 label={node.node}
                 status={node.status === 'online' ? 'online' : 'stopped'}
-                isSelected={isSelected({ type: 'node', id: node.node, name: node.node, cluster: clusterName })}
-                onClick={() => setSelectedObject({ type: 'node', id: node.node, name: node.node, cluster: clusterName })}
+                isSelected={isSelected({ type: 'node', id: node.node, name: node.node, cluster: node.cluster })}
+                onClick={() => setSelectedObject({ type: 'node', id: node.node, name: node.node, cluster: node.cluster })}
                 onContextMenu={(e) => showContextMenu(e, getNodeMenuItems(node.node, clusterName))}
                 defaultExpanded
                 count={nodeGuests.length}

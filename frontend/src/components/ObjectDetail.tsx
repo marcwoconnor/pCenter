@@ -65,12 +65,13 @@ export function ObjectDetail() {
     selectedObject.type === 'network' ? networkTabs : guestTabs;
 
   // Get the actual object data
+  // Cluster comparison optional - inventory hosts/orphan nodes don't have cluster set
   const node = selectedObject.type === 'node'
-    ? nodes.find((n) => n.node === selectedObject.id && n.cluster === selectedObject.cluster)
+    ? nodes.find((n) => n.node === selectedObject.id && (!selectedObject.cluster || n.cluster === selectedObject.cluster))
     : null;
 
   const guest = (selectedObject.type === 'vm' || selectedObject.type === 'ct')
-    ? guests.find((g) => g.vmid === selectedObject.id && g.cluster === selectedObject.cluster)
+    ? guests.find((g) => g.vmid === selectedObject.id && (!selectedObject.cluster || g.cluster === selectedObject.cluster))
     : null;
 
   const storageItem = selectedObject.type === 'storage'

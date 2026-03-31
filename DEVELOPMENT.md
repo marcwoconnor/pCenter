@@ -326,3 +326,9 @@ ssh root@pve04 "journalctl -u pve-agent -f"
 - DELETE requests return UPID for task tracking (not just success/error)
 - Added `deleteWithData()` helper in client.go that returns response body
 - Use for VM/container deletion to get task UPID
+
+### Node Selection & Cluster Matching
+- `ObjectDetail.tsx` finds nodes via `nodes.find()` with cluster matching
+- Standalone hosts and orphan nodes don't have `cluster` in their selection - use optional matching: `(!selectedObject.cluster || n.cluster === selectedObject.cluster)`
+- In `InventoryTree.tsx` `renderClusterWithNodes()`: use `node.cluster` (actual value from data), NOT `clusterName` (display name) - these differ when `agent_name` is set
+- Same applies to `isSelected()` checks - must use consistent cluster values
