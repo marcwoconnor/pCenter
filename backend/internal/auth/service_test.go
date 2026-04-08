@@ -7,8 +7,13 @@ import (
 
 // testService creates a fresh auth service with an in-memory SQLite database
 // for testing. Each call returns a completely isolated instance.
+// Uses bcrypt.MinCost to avoid timeouts under the race detector.
 func testService(t *testing.T) *Service {
 	t.Helper()
+
+	// Use minimum bcrypt cost for fast tests (especially under -race)
+	bcryptCost = 4
+	t.Cleanup(func() { bcryptCost = 12 })
 
 	db, err := Open(":memory:")
 	if err != nil {

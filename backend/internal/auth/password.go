@@ -8,12 +8,13 @@ import (
 )
 
 const (
-	// BcryptCost is the bcrypt work factor (12 = ~300ms on modern hardware)
-	BcryptCost = 12
-
 	// MinPasswordLength is minimum password length
 	MinPasswordLength = 8
 )
+
+// bcryptCost is the bcrypt work factor. Default is 12 (~300ms on modern hardware).
+// Tests override this to bcrypt.MinCost (4) to avoid timeouts under the race detector.
+var bcryptCost = 12
 
 var (
 	ErrPasswordTooShort   = errors.New("password must be at least 8 characters")
@@ -25,7 +26,7 @@ var (
 
 // HashPassword creates a bcrypt hash of the password
 func HashPassword(password string) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), BcryptCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
 	if err != nil {
 		return "", err
 	}
