@@ -4,11 +4,24 @@ import { formatBytes, formatUptime, api } from '../api/client';
 import { useMetrics } from '../hooks/useMetrics';
 import { useConfigEditor, type UseConfigEditorReturn } from '../hooks/useConfigEditor';
 import { MetricsChart } from './MetricsChart';
-import type { MetricSeries, VMConfig, ContainerConfig, NetworkInterface } from '../types';
+import type { MetricSeries, VMConfig, ContainerConfig, NetworkInterface, Node, Guest, Storage, StorageVolume } from '../types';
 import { NetworkTopology } from './NetworkTopology';
 import { SnapshotsTab } from './SnapshotsTab';
 
 type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d';
+
+// Minimal type for noVNC RFB instance. The @novnc/novnc package doesn't
+// ship TypeScript declarations, so we define the subset we actually use.
+interface RFBInstance {
+  scaleViewport: boolean;
+  clipViewport: boolean;
+  resizeSession: boolean;
+  _screen?: { width: number; height: number };
+  addEventListener(type: string, listener: (e: CustomEvent) => void): void;
+  disconnect(): void;
+  sendKey(keysym: number, code: string, down: boolean): void;
+  focus(): void;
+}
 
 interface Tab {
   id: string;
@@ -219,7 +232,7 @@ export function ObjectDetail() {
   );
 }
 
-function NodeSummary({ node }: { node: any }) {
+function NodeSummary({ node }: { node: Node }) {
   const cpuPercent = (node.cpu * 100).toFixed(1);
   const memPercent = ((node.mem / node.maxmem) * 100).toFixed(1);
 
@@ -274,7 +287,7 @@ function NodeSummary({ node }: { node: any }) {
   );
 }
 
-function GuestSummary({ guest }: { guest: any }) {
+function GuestSummary({ guest }: { guest: Guest }) {
   const cpuPercent = (guest.cpu * 100).toFixed(1);
   const memPercent = guest.maxmem > 0 ? ((guest.mem / guest.maxmem) * 100).toFixed(1) : '0';
 
@@ -339,7 +352,7 @@ function GuestSummary({ guest }: { guest: any }) {
   );
 }
 
-function StorageSummary({ storage }: { storage: any }) {
+function StorageSummary({ storage }: { storage: Storage }) {
   const usedPercent = storage.total > 0 ? ((storage.used / storage.total) * 100).toFixed(1) : '0';
 
   return (
@@ -532,9 +545,9 @@ function NodeVMs({ nodeId }: { nodeId: string }) {
 type SortField = 'name' | 'vmid' | 'type' | 'size' | 'format';
 type SortDir = 'asc' | 'desc';
 
-function StorageVMs({ storage }: { storage: any }) {
+function StorageVMs({ storage }: { storage: Storage }) {
   const { guests, setSelectedObject } = useCluster();
-  const [volumes, setVolumes] = useState<any[]>([]);
+  const [volumes, setVolumes] = useState<StorageVolume[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sortField, setSortField] = useState<SortField>('name');
@@ -704,7 +717,7 @@ function StorageVMs({ storage }: { storage: any }) {
                 <td className="py-1.5">
                   {guest ? (
                     <button
-                      onClick={() => handleGuestClick(vol.vmid)}
+                      onClick={() => handleGuestClick(vol.vmid!)}
                       className="hover:underline"
                     >
                       {guest.name}
@@ -1756,7 +1769,7 @@ function ConsoleTab({
   isRunning: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const rfbRef = useRef<any>(null);
+  const rfbRef = useRef<RFBInstance | null>(null);
   const [status, setStatus] = useState<'connecting' | 'connected' | 'error' | 'closed'>('connecting');
   const [error, setError] = useState<string | null>(null);
   const [scaleMode, setScaleMode] = useState<'fit' | '1:1'>('fit');
@@ -1765,7 +1778,7 @@ function ConsoleTab({
   useEffect(() => {
     if (!isRunning || !containerRef.current) return;
 
-    let rfb: any = null;
+    let rfb: RFBInstance | null = null;
     let mounted = true;
 
     const connect = async () => {
@@ -1817,13 +1830,13 @@ function ConsoleTab({
                   e.preventDefault();
                   e.stopPropagation();
                   // Send Ctrl+? which produces DEL (ASCII 127)
-                  rfb.sendKey(0x7f, 'Backspace', true);
-                  rfb.sendKey(0x7f, 'Backspace', false);
+                  rfb?.sendKey(0x7f, 'Backspace', true);
+                  rfb?.sendKey(0x7f, 'Backspace', false);
                 }
               }, true);
             }
 
-            rfb.focus();
+            rfb?.focus();
           }
         });
 
