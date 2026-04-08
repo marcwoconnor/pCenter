@@ -28,10 +28,12 @@ function QDeviceBanner({ cluster }: { cluster: string }) {
   const [qdevice, setQdevice] = useState<QDeviceStatus | null>(null);
 
   useEffect(() => {
-    fetch(`/api/clusters/${cluster}/qdevice`)
+    const controller = new AbortController();
+    fetch(`/api/clusters/${cluster}/qdevice`, { signal: controller.signal })
       .then(r => r.json())
       .then(setQdevice)
-      .catch(() => setQdevice(null));
+      .catch((e) => { if (e.name !== 'AbortError') setQdevice(null); });
+    return () => controller.abort();
   }, [cluster]);
 
   if (!qdevice || !qdevice.configured) return null;
@@ -75,27 +77,34 @@ function MaintenanceModal({
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const controller = new AbortController();
     // Fetch preflight checks
-    fetch(`/api/clusters/${cluster}/maintenance/${node}/preflight`)
+    fetch(`/api/clusters/${cluster}/maintenance/${node}/preflight`, { signal: controller.signal })
       .then(r => r.json())
       .then(setPreflight)
+      .catch((e) => { if (e.name !== 'AbortError') console.error('preflight fetch failed:', e); })
       .finally(() => setLoading(false));
 
     // Fetch current state
-    fetch(`/api/clusters/${cluster}/maintenance/${node}/state`)
+    fetch(`/api/clusters/${cluster}/maintenance/${node}/state`, { signal: controller.signal })
       .then(r => r.json())
-      .then(setState);
+      .then(setState)
+      .catch((e) => { if (e.name !== 'AbortError') console.error('state fetch failed:', e); });
+
+    return () => controller.abort();
   }, [cluster, node]);
 
   // Poll for state updates when in maintenance
   useEffect(() => {
     if (!state?.in_maintenance) return;
+    const controller = new AbortController();
     const interval = setInterval(() => {
-      fetch(`/api/clusters/${cluster}/maintenance/${node}/state`)
+      fetch(`/api/clusters/${cluster}/maintenance/${node}/state`, { signal: controller.signal })
         .then(r => r.json())
-        .then(setState);
+        .then(setState)
+        .catch((e) => { if (e.name !== 'AbortError') console.error('maintenance poll failed:', e); });
     }, 2000);
-    return () => clearInterval(interval);
+    return () => { clearInterval(interval); controller.abort(); };
   }, [cluster, node, state?.in_maintenance]);
 
   const enterMaintenance = async () => {

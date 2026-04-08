@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { api } from '../api/client';
 import type { Summary, Node, Guest, Storage, ClusterInfo, MigrationProgress, DRSRecommendation, ActivityEntry } from '../types';
@@ -116,6 +116,19 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
   const [selectedObject, setSelectedObject] = useState<SelectedObject | null>(null);
   const [consoles, setConsoles] = useState<ConsoleWindow[]>([]);
   const [nextZIndex, setNextZIndex] = useState(100);
+
+  // Track active clone poll intervals so we can clean them up on unmount.
+  // Without this, intervals leak if the provider unmounts mid-clone.
+  const clonePollIntervals = useRef<Set<ReturnType<typeof setInterval>>>(new Set());
+  const clonePollTimeouts = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+
+  // Cleanup all active clone polling on unmount
+  useEffect(() => {
+    return () => {
+      clonePollIntervals.current.forEach(clearInterval);
+      clonePollTimeouts.current.forEach(clearTimeout);
+    };
+  }, []);
 
   const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
 
@@ -263,12 +276,13 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
 
     clonePromise
       .then((result) => {
-        // Poll for task completion
+        // Poll for task completion, tracked in refs for cleanup on unmount
         const pollInterval = setInterval(async () => {
           try {
             const task = await api.getTaskStatus(guest.cluster, result.upid);
             if (task.status === 'stopped') {
               clearInterval(pollInterval);
+              clonePollIntervals.current.delete(pollInterval);
               if (task.exitstatus === 'OK') {
                 updateTask(taskId, { status: 'completed', message: 'Clone completed' });
               } else {
@@ -283,9 +297,15 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
             console.error('Clone poll error:', err);
           }
         }, 1000);
+        clonePollIntervals.current.add(pollInterval);
 
         // Safety timeout - stop polling after 10 minutes
-        setTimeout(() => clearInterval(pollInterval), 600000);
+        const safetyTimeout = setTimeout(() => {
+          clearInterval(pollInterval);
+          clonePollIntervals.current.delete(pollInterval);
+          clonePollTimeouts.current.delete(safetyTimeout);
+        }, 600000);
+        clonePollTimeouts.current.add(safetyTimeout);
       })
       .catch((err) => {
         let errorMsg = err instanceof Error ? err.message : 'Clone failed';
