@@ -372,6 +372,13 @@ func (a *AgentConn) handleRegister(data json.RawMessage) {
 		return
 	}
 
+	// Validate required fields to prevent empty keys in the agents map
+	if reg.Node == "" || reg.Cluster == "" {
+		slog.Warn("agent registration rejected: node and cluster are required",
+			"node", reg.Node, "cluster", reg.Cluster)
+		return
+	}
+
 	a.node = reg.Node
 	a.cluster = reg.Cluster
 	a.version = reg.Version

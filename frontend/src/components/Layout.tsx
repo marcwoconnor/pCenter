@@ -33,18 +33,20 @@ export function Layout({ children, sidebar }: LayoutProps) {
     navigate('/login');
   };
   const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const saved = localStorage.getItem('pcenter-sidebar-width');
-    return saved ? parseInt(saved, 10) : DEFAULT_SIDEBAR_WIDTH;
+    try {
+      const saved = localStorage.getItem('pcenter-sidebar-width');
+      return saved ? parseInt(saved, 10) : DEFAULT_SIDEBAR_WIDTH;
+    } catch { return DEFAULT_SIDEBAR_WIDTH; }
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const location = useLocation();
   const sidebarRef = useRef<HTMLDivElement>(null);
 
-  // Save width to localStorage
+  // Save width to localStorage (try-catch for disabled/full storage)
   useEffect(() => {
     if (!sidebarCollapsed) {
-      localStorage.setItem('pcenter-sidebar-width', sidebarWidth.toString());
+      try { localStorage.setItem('pcenter-sidebar-width', sidebarWidth.toString()); } catch {}
     }
   }, [sidebarWidth, sidebarCollapsed]);
 

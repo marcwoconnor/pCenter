@@ -48,23 +48,25 @@ const MAX_HEIGHT = 400;
 export function ActivityPanel() {
   const { activityEntries } = useCluster();
   const [isOpen, setIsOpen] = useState(() => {
-    const saved = localStorage.getItem('pcenter-activity-open');
-    return saved !== 'false';
+    try { return localStorage.getItem('pcenter-activity-open') !== 'false'; }
+    catch { return true; }
   });
   const [height, setHeight] = useState(() => {
-    const saved = localStorage.getItem('pcenter-activity-height');
-    return saved ? parseInt(saved, 10) : DEFAULT_HEIGHT;
+    try {
+      const saved = localStorage.getItem('pcenter-activity-height');
+      return saved ? parseInt(saved, 10) : DEFAULT_HEIGHT;
+    } catch { return DEFAULT_HEIGHT; }
   });
   const [isResizing, setIsResizing] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  // Save state to localStorage
+  // Save state to localStorage (try-catch for disabled/full storage)
   useEffect(() => {
-    localStorage.setItem('pcenter-activity-open', isOpen.toString());
+    try { localStorage.setItem('pcenter-activity-open', isOpen.toString()); } catch {}
   }, [isOpen]);
 
   useEffect(() => {
-    localStorage.setItem('pcenter-activity-height', height.toString());
+    try { localStorage.setItem('pcenter-activity-height', height.toString()); } catch {}
   }, [height]);
 
   // Resize handling

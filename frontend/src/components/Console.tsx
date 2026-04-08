@@ -153,6 +153,7 @@ export function Console({ console: win, onClose, onFocus, onUpdate }: ConsolePro
               }}
               className="text-gray-400 hover:text-white hover:bg-blue-600 px-2 py-1 rounded"
               title="Pop out to new window"
+              aria-label="Pop out console to new window"
             >
               ⧉
             </button>
@@ -160,6 +161,7 @@ export function Console({ console: win, onClose, onFocus, onUpdate }: ConsolePro
               onClick={onClose}
               className="text-gray-400 hover:text-white hover:bg-red-600 px-2 py-1 rounded"
               title="Close"
+              aria-label="Close console"
             >
               ✕
             </button>

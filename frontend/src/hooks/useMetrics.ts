@@ -119,7 +119,7 @@ export function useMetrics(options: UseMetricsOptions) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cluster, resourceType, resourceId, timeRange, enabled, refreshInterval, metrics.join(',')]);
 
-  return { data, loading, error, refetch: () => {} };
+  return { data, loading, error };
 }
 
 export function useNodeMetrics(node: string, timeRange: TimeRange) {

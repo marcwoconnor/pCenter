@@ -313,12 +313,3 @@ func Load(path string) (*Config, error) {
 
 	return &cfg, nil
 }
-
-// MustLoad loads config or panics
-func MustLoad(path string) *Config {
-	cfg, err := Load(path)
-	if err != nil {
-		panic(fmt.Sprintf("failed to load config: %v", err))
-	}
-	return cfg
-}
