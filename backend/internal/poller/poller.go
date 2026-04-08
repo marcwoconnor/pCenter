@@ -498,22 +498,38 @@ func (cp *ClusterPoller) fetchSDN(ctx context.Context) {
 
 	go func() {
 		defer wg.Done()
-		zones, _ = client.GetSDNZones(fetchCtx)
+		var err error
+		zones, err = client.GetSDNZones(fetchCtx)
+		if err != nil {
+			slog.Debug("SDN zones fetch failed (may not be configured)", "error", err)
+		}
 	}()
 
 	go func() {
 		defer wg.Done()
-		vnets, _ = client.GetSDNVNets(fetchCtx)
+		var err error
+		vnets, err = client.GetSDNVNets(fetchCtx)
+		if err != nil {
+			slog.Debug("SDN vnets fetch failed (may not be configured)", "error", err)
+		}
 	}()
 
 	go func() {
 		defer wg.Done()
-		subnets, _ = client.GetSDNSubnets(fetchCtx)
+		var err error
+		subnets, err = client.GetSDNSubnets(fetchCtx)
+		if err != nil {
+			slog.Debug("SDN subnets fetch failed (may not be configured)", "error", err)
+		}
 	}()
 
 	go func() {
 		defer wg.Done()
-		controllers, _ = client.GetSDNControllers(fetchCtx)
+		var err error
+		controllers, err = client.GetSDNControllers(fetchCtx)
+		if err != nil {
+			slog.Debug("SDN controllers fetch failed (may not be configured)", "error", err)
+		}
 	}()
 
 	wg.Wait()

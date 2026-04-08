@@ -22,8 +22,10 @@ import (
 func runSSHCommand(ctx context.Context, host string, command string) (string, error) {
 	slog.Info("running SSH command", "host", host, "command", command)
 
+	// accept-new: accept on first connection (TOFU), reject if key changes (MITM).
+	// Previously used StrictHostKeyChecking=no which silently accepts changed keys.
 	cmd := exec.CommandContext(ctx, "ssh",
-		"-o", "StrictHostKeyChecking=no",
+		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "ConnectTimeout=10",
 		fmt.Sprintf("root@%s", host),
 		command,

@@ -659,12 +659,16 @@ func (s *Service) ListAuthEvents(ctx context.Context, limit int) ([]*AuthEvent, 
 // SessionCookieName is the name of the session cookie
 const SessionCookieName = "pcenter_session"
 
-// SetSessionCookie sets the session cookie on the response
+// SetSessionCookie sets the session cookie on the response.
+// Includes the Domain field from config so the cookie works across subdomains
+// if cookie_domain is configured (e.g., ".example.com"). If empty, the browser
+// defaults to the exact host that set the cookie.
 func (s *Service) SetSessionCookie(w http.ResponseWriter, rawToken string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    rawToken,
 		Path:     "/",
+		Domain:   s.cfg.Session.CookieDomain,
 		HttpOnly: true,
 		Secure:   s.cfg.Session.CookieSecure,
 		SameSite: http.SameSiteStrictMode,
@@ -678,6 +682,7 @@ func (s *Service) ClearSessionCookie(w http.ResponseWriter) {
 		Name:     SessionCookieName,
 		Value:    "",
 		Path:     "/",
+		Domain:   s.cfg.Session.CookieDomain,
 		HttpOnly: true,
 		Secure:   s.cfg.Session.CookieSecure,
 		SameSite: http.SameSiteStrictMode,

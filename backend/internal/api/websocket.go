@@ -25,6 +25,7 @@ type Hub struct {
 	broadcast  chan []byte
 	register   chan *Client
 	unregister chan *Client
+	done       chan struct{} // closed to signal Run() to stop
 }
 
 // Client represents a WebSocket connection
@@ -68,13 +69,30 @@ func NewHub(store *state.Store, allowedOrigins []string) *Hub {
 		broadcast:  make(chan []byte, 256),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
+		done:       make(chan struct{}),
 	}
 }
 
-// Run starts the hub's main loop
+// Stop gracefully shuts down the hub, closing all client connections.
+func (h *Hub) Stop() {
+	close(h.done)
+}
+
+// Run starts the hub's main loop. Stops when Stop() is called.
 func (h *Hub) Run() {
 	for {
 		select {
+		case <-h.done:
+			// Graceful shutdown: close all client connections
+			h.mu.Lock()
+			for client := range h.clients {
+				close(client.send)
+				delete(h.clients, client)
+			}
+			h.mu.Unlock()
+			slog.Info("websocket hub stopped")
+			return
+
 		case client := <-h.register:
 			h.mu.Lock()
 			h.clients[client] = true
