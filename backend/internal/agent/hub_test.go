@@ -145,6 +145,7 @@ func TestAgentHub_RegisterAndUnregister(t *testing.T) {
 		node:    "pve01",
 		cluster: "test-cluster",
 		send:    make(chan []byte, 64),
+		done:    make(chan struct{}),
 	}
 
 	hub.register(agent)
@@ -167,7 +168,7 @@ func TestAgentHub_RegisterAndUnregister(t *testing.T) {
 }
 
 // TestAgentHub_ReplaceExistingAgent verifies that when a new agent connects
-// with the same cluster/node key, the old one is disconnected.
+// with the same cluster/node key, the old one is signaled to stop.
 func TestAgentHub_ReplaceExistingAgent(t *testing.T) {
 	store := state.New()
 	hub := NewHub(store, "test-token")
@@ -177,6 +178,7 @@ func TestAgentHub_ReplaceExistingAgent(t *testing.T) {
 		node:    "pve01",
 		cluster: "test-cluster",
 		send:    make(chan []byte, 64),
+		done:    make(chan struct{}),
 	}
 	hub.register(oldAgent)
 
@@ -185,6 +187,7 @@ func TestAgentHub_ReplaceExistingAgent(t *testing.T) {
 		node:    "pve01",
 		cluster: "test-cluster",
 		send:    make(chan []byte, 64),
+		done:    make(chan struct{}),
 	}
 	hub.register(newAgent)
 
@@ -193,13 +196,11 @@ func TestAgentHub_ReplaceExistingAgent(t *testing.T) {
 		t.Errorf("expected 1 agent after replacement, got %d", len(agents))
 	}
 
-	// Old agent's send channel should be closed
+	// Old agent's done channel should be closed (signals writePump to stop)
 	select {
-	case _, ok := <-oldAgent.send:
-		if ok {
-			t.Error("old agent's send channel should be closed")
-		}
+	case <-oldAgent.done:
+		// Good — done channel is closed
 	default:
-		// Channel might already be drained — that's ok
+		t.Error("old agent's done channel should be closed after replacement")
 	}
 }

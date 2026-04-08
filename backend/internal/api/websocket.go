@@ -94,17 +94,32 @@ func (h *Hub) Run() {
 			slog.Debug("websocket client disconnected", "clients", len(h.clients))
 
 		case message := <-h.broadcast:
+			// Collect slow clients under read lock, then clean up under write lock.
+			// Previously this did close()+delete() under RLock which is unsafe:
+			// RLock allows concurrent readers, but delete() mutates the map and
+			// close() can race with writePump sending on the channel.
 			h.mu.RLock()
+			var slow []*Client
 			for client := range h.clients {
 				select {
 				case client.send <- message:
 				default:
-					// Client buffer full, disconnect
-					close(client.send)
-					delete(h.clients, client)
+					slow = append(slow, client)
 				}
 			}
 			h.mu.RUnlock()
+
+			// Clean up slow clients under write lock
+			if len(slow) > 0 {
+				h.mu.Lock()
+				for _, client := range slow {
+					if _, ok := h.clients[client]; ok {
+						delete(h.clients, client)
+						close(client.send)
+					}
+				}
+				h.mu.Unlock()
+			}
 		}
 	}
 }

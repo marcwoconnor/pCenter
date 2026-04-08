@@ -48,6 +48,7 @@ type AgentConn struct {
 	cluster   string
 	version   string
 	send      chan []byte
+	done      chan struct{} // closed to signal writePump to stop
 	lastSeen  time.Time
 }
 
@@ -120,6 +121,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		hub:      h,
 		conn:     conn,
 		send:     make(chan []byte, 64),
+		done:     make(chan struct{}),
 		lastSeen: time.Now(),
 	}
 
@@ -149,13 +151,25 @@ func (a *AgentConn) readPump() {
 	}
 }
 
-// writePump handles outgoing messages to agent
+// writePump handles outgoing messages to agent.
+// Stops when the done channel is closed (safe shutdown signal) or on write error.
+// Previously this ranged over the send channel, which required close(send) to stop.
+// Closing send while another goroutine might send on it causes a panic. Using a
+// separate done channel avoids this race entirely.
 func (a *AgentConn) writePump() {
 	defer a.conn.Close()
 
-	for message := range a.send {
-		if err := a.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+	for {
+		select {
+		case <-a.done:
 			return
+		case message, ok := <-a.send:
+			if !ok {
+				return // channel closed (shouldn't happen with done pattern, but safe)
+			}
+			if err := a.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				return
+			}
 		}
 	}
 }
@@ -562,9 +576,11 @@ func (h *Hub) register(a *AgentConn) {
 
 	key := a.cluster + "/" + a.node
 
-	// Close existing connection if any
+	// Signal existing connection to stop via done channel.
+	// Previously this called close(existing.send) which could panic if
+	// writePump was concurrently sending on the channel.
 	if existing, ok := h.agents[key]; ok {
-		close(existing.send)
+		close(existing.done)
 	}
 
 	h.agents[key] = a
@@ -582,7 +598,7 @@ func (h *Hub) unregister(a *AgentConn) {
 	key := a.cluster + "/" + a.node
 	if existing, ok := h.agents[key]; ok && existing == a {
 		delete(h.agents, key)
-		close(a.send)
+		close(a.done)
 		slog.Info("agent disconnected", "key", key, "total", len(h.agents))
 	}
 }
