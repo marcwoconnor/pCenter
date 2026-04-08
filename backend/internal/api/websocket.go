@@ -15,17 +15,12 @@ import (
 	"github.com/moconnor/pcenter/internal/state"
 )
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins for now
-	},
-}
-
 // Hub manages WebSocket connections and broadcasts
 type Hub struct {
-	store   *state.Store
-	clients map[*Client]bool
-	mu      sync.RWMutex
+	store    *state.Store
+	clients  map[*Client]bool
+	mu       sync.RWMutex
+	upgrader websocket.Upgrader
 
 	broadcast  chan []byte
 	register   chan *Client
@@ -39,11 +34,37 @@ type Client struct {
 	send chan []byte
 }
 
-// NewHub creates a new WebSocket hub
-func NewHub(store *state.Store) *Hub {
+// NewHub creates a new WebSocket hub.
+// allowedOrigins controls which cross-origin WebSocket connections are accepted.
+// If empty, only same-origin connections are allowed (gorilla/websocket default).
+// This prevents cross-site WebSocket hijacking (CSWSH) where a malicious page
+// opens a WebSocket to pCenter and receives real-time cluster state.
+func NewHub(store *state.Store, allowedOrigins []string) *Hub {
+	originSet := make(map[string]bool)
+	for _, o := range allowedOrigins {
+		originSet[o] = true
+	}
+
 	return &Hub{
-		store:      store,
-		clients:    make(map[*Client]bool),
+		store:   store,
+		clients: make(map[*Client]bool),
+		upgrader: websocket.Upgrader{
+			// CheckOrigin validates the Origin header on WebSocket upgrade requests.
+			// SECURITY: Browsers send Origin on cross-origin WS requests but do NOT
+			// enforce the server's response (unlike CORS for HTTP). So the server MUST
+			// reject unauthorized origins here. If no origins configured, we use
+			// gorilla/websocket's default behavior: require Origin == Host (same-origin).
+			CheckOrigin: func(r *http.Request) bool {
+				origin := r.Header.Get("Origin")
+				if origin == "" {
+					return true // No origin = same-origin or non-browser client
+				}
+				if len(originSet) == 0 {
+					return false // No configured origins = reject all cross-origin
+				}
+				return originSet[origin]
+			},
+		},
 		broadcast:  make(chan []byte, 256),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
@@ -443,7 +464,7 @@ func (h *Hub) buildStateMessage() []byte {
 
 // HandleWebSocket handles WebSocket upgrade requests
 func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		slog.Error("websocket upgrade failed", "error", err)
 		return

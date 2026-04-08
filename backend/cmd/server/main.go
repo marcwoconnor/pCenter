@@ -51,8 +51,8 @@ func main() {
 	// Create state store
 	store := state.New()
 
-	// Create WebSocket hub (browser clients)
-	hub := api.NewHub(store)
+	// Create WebSocket hub (browser clients) with origin checking
+	hub := api.NewHub(store, cfg.Server.CORSOrigins)
 	go hub.Run()
 
 	// Create agent hub (pve-agents) with pre-shared auth token

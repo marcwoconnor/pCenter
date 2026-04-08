@@ -13,13 +13,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var consoleUpgrader = websocket.Upgrader{
-	ReadBufferSize:  4096,
-	WriteBufferSize: 4096,
-	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins for console
-	},
-}
+// Console WebSocket upgrader is now configured per-handler via Handler.consoleUpgrader
+// with proper origin checking. See NewHandler() in handlers.go.
 
 // ConsoleTicket returns VNC proxy ticket for authentication
 func (h *Handler) ConsoleTicket(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +156,7 @@ func (h *Handler) ConsoleWebsocket(w http.ResponseWriter, r *http.Request) {
 	slog.Info("proxying console websocket", "vmid", vmid, "type", pveType, "node", node, "cluster", cluster)
 
 	// Upgrade client connection
-	clientConn, err := consoleUpgrader.Upgrade(w, r, nil)
+	clientConn, err := h.consoleUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		slog.Error("failed to upgrade websocket", "error", err)
 		return

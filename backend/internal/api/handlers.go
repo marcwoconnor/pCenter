@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/moconnor/pcenter/internal/activity"
 	"github.com/moconnor/pcenter/internal/agent"
 	"github.com/moconnor/pcenter/internal/config"
@@ -27,24 +28,49 @@ import (
 
 // Handler holds dependencies for API handlers
 type Handler struct {
-	store     *state.Store
-	poller    *poller.Poller
-	metrics   *metrics.QueryService
-	folders   *folders.Service
-	activity  *activity.Service
-	inventory *inventory.Service
-	agentHub  *agent.Hub
-	clusters  []config.ClusterConfig // For on-demand client creation
-	secrets   map[string]string      // Token secrets keyed by cluster/agent name
-	onChange  func()                 // Callback to broadcast state changes
-	cfg       *config.Config         // Full config for agent deployment
+	store           *state.Store
+	poller          *poller.Poller
+	metrics         *metrics.QueryService
+	folders         *folders.Service
+	activity        *activity.Service
+	inventory       *inventory.Service
+	agentHub        *agent.Hub
+	clusters        []config.ClusterConfig // For on-demand client creation
+	secrets         map[string]string      // Token secrets keyed by cluster/agent name
+	onChange        func()                 // Callback to broadcast state changes
+	cfg             *config.Config         // Full config for agent deployment
+	consoleUpgrader websocket.Upgrader     // WebSocket upgrader for console proxy (origin-checked)
 }
 
-// NewHandler creates a new API handler
-func NewHandler(store *state.Store, p *poller.Poller) *Handler {
+// NewHandler creates a new API handler.
+// allowedOrigins configures which cross-origin WebSocket connections the console
+// proxy will accept. Uses the same origin list as CORS and the user WebSocket hub.
+func NewHandler(store *state.Store, p *poller.Poller, allowedOrigins []string) *Handler {
+	originSet := make(map[string]bool)
+	for _, o := range allowedOrigins {
+		originSet[o] = true
+	}
+
 	return &Handler{
 		store:  store,
 		poller: p,
+		consoleUpgrader: websocket.Upgrader{
+			ReadBufferSize:  4096,
+			WriteBufferSize: 4096,
+			// SECURITY: Same origin validation as the main WebSocket hub.
+			// Console WebSockets are particularly sensitive because they proxy
+			// VNC/terminal connections directly to Proxmox nodes.
+			CheckOrigin: func(r *http.Request) bool {
+				origin := r.Header.Get("Origin")
+				if origin == "" {
+					return true // Same-origin or non-browser client
+				}
+				if len(originSet) == 0 {
+					return false // No configured origins = reject cross-origin
+				}
+				return originSet[origin]
+			},
+		},
 	}
 }
 

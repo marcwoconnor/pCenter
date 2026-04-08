@@ -63,7 +63,7 @@ func CORSMiddleware(origins []string) func(http.Handler) http.Handler {
 // NewRouter creates the HTTP router with all routes
 // Returns both the http.Handler and the Handler for configuration
 func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.Hub, authSvc *auth.Service, corsOrigins []string) (http.Handler, *Handler) {
-	h := NewHandler(store, p)
+	h := NewHandler(store, p, corsOrigins)
 
 	mux := http.NewServeMux()
 
