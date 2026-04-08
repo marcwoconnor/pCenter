@@ -42,6 +42,11 @@ import { getCSRFToken } from './auth';
 
 const BASE_URL = '/api';
 
+// Debounce 401 redirects: when multiple concurrent requests all get 401,
+// only the first one triggers the redirect. Without this, N concurrent fetches
+// returning 401 cause N rapid window.location.href assignments.
+let redirecting = false;
+
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -64,10 +69,10 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
     credentials: 'include', // Include cookies for session
   });
 
-  // Handle 401 - redirect to login
+  // Handle 401 - redirect to login (debounced)
   if (res.status === 401) {
-    // Only redirect if we're not already on login page
-    if (!window.location.pathname.includes('/login')) {
+    if (!redirecting && !window.location.pathname.includes('/login')) {
+      redirecting = true;
       window.location.href = '/login';
     }
     throw new Error('Session expired');

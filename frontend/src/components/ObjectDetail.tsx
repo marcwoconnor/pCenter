@@ -7,6 +7,7 @@ import { MetricsChart } from './MetricsChart';
 import type { MetricSeries, VMConfig, ContainerConfig, NetworkInterface, Node, Guest, Storage, StorageVolume } from '../types';
 import { NetworkTopology } from './NetworkTopology';
 import { SnapshotsTab } from './SnapshotsTab';
+import { ErrorBoundary } from './ErrorBoundary';
 
 type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d';
 
@@ -200,12 +201,18 @@ export function ObjectDetail() {
           </div>
         )}
         {activeTab === 'console' && guest && (
-          <ConsoleTab
-            vmid={guest.vmid}
-            type={guest.type === 'qemu' ? 'vm' : 'ct'}
-            name={guest.name}
-            isRunning={guest.status === 'running'}
-          />
+          <ErrorBoundary fallback={
+            <div className="flex items-center justify-center h-64 text-gray-500">
+              Console failed to initialize. The VM may need to be running.
+            </div>
+          }>
+            <ConsoleTab
+              vmid={guest.vmid}
+              type={guest.type === 'qemu' ? 'vm' : 'ct'}
+              name={guest.name}
+              isRunning={guest.status === 'running'}
+            />
+          </ErrorBoundary>
         )}
         {activeTab === 'vms' && node && <NodeVMs nodeId={node.node} />}
         {activeTab === 'vms' && storageItem && <StorageVMs storage={storageItem} />}
