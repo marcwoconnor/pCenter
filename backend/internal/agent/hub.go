@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -12,11 +13,12 @@ import (
 	"github.com/moconnor/pcenter/internal/state"
 )
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true // TODO: add token validation
-	},
-}
+// upgrader for agent WebSocket connections.
+// CheckOrigin is intentionally nil (default = same-origin only).
+// Agent connections are server-to-server and don't send Origin headers,
+// so the default check passes. Browser-based cross-origin attempts are
+// rejected. Authentication is handled in HandleWebSocket via pre-shared token.
+var upgrader = websocket.Upgrader{}
 
 // Message types from agent protocol
 const (
@@ -30,11 +32,12 @@ const (
 
 // Hub manages agent WebSocket connections
 type Hub struct {
-	store    *state.Store
-	agents   map[string]*AgentConn // keyed by "cluster/node"
-	commands *CommandTracker
-	mu       sync.RWMutex
-	onChange func() // callback when state changes
+	store     *state.Store
+	agents    map[string]*AgentConn // keyed by "cluster/node"
+	commands  *CommandTracker
+	mu        sync.RWMutex
+	onChange  func() // callback when state changes
+	authToken string // pre-shared token agents must present to connect
 }
 
 // AgentConn represents a connected agent
@@ -48,12 +51,19 @@ type AgentConn struct {
 	lastSeen  time.Time
 }
 
-// NewHub creates a new agent hub
-func NewHub(store *state.Store) *Hub {
+// NewHub creates a new agent hub.
+// authToken is the pre-shared secret agents must present via ?token= query param.
+// If empty, ALL agent connections are rejected (fail-closed).
+func NewHub(store *state.Store, authToken string) *Hub {
+	if authToken == "" {
+		slog.Warn("agent auth_token not configured - all agent connections will be rejected. " +
+			"Set agent.auth_token in config.yaml to allow pve-agent connections")
+	}
 	return &Hub{
-		store:    store,
-		agents:   make(map[string]*AgentConn),
-		commands: NewCommandTracker(),
+		store:     store,
+		agents:    make(map[string]*AgentConn),
+		commands:  NewCommandTracker(),
+		authToken: authToken,
 	}
 }
 
@@ -74,8 +84,32 @@ func (h *Hub) GetConnectedAgents() []string {
 	return agents
 }
 
-// HandleWebSocket handles agent WebSocket connections
+// HandleWebSocket handles agent WebSocket connections.
+//
+// SECURITY: Agents must authenticate by passing their pre-shared token
+// as a query parameter: /api/agent/ws?token=<auth_token>
+//
+// The token is configured in config.yaml under agent.auth_token.
+// If no token is configured, ALL connections are rejected (fail-closed).
+// This prevents unauthenticated agents from pushing fake cluster state
+// or receiving commands intended for legitimate agents.
+//
+// We use constant-time comparison to prevent timing attacks on the token.
 func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
+	// Validate pre-shared agent token (fail-closed: no token configured = reject all)
+	if h.authToken == "" {
+		slog.Warn("agent connection rejected: no auth_token configured")
+		http.Error(w, "agent auth not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	token := r.URL.Query().Get("token")
+	if subtle.ConstantTimeCompare([]byte(token), []byte(h.authToken)) != 1 {
+		slog.Warn("agent connection rejected: invalid token", "remote", r.RemoteAddr)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		slog.Error("agent websocket upgrade failed", "error", err)
@@ -89,6 +123,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		lastSeen: time.Now(),
 	}
 
+	slog.Info("agent connection authenticated", "remote", r.RemoteAddr)
 	go agent.readPump()
 	go agent.writePump()
 }

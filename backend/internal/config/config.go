@@ -37,6 +37,7 @@ type AgentConfig struct {
 	BinaryPath   string `yaml:"binary_path"`   // Path to pve-agent binary on pCenter server
 	PCenterURL   string `yaml:"pcenter_url"`   // WebSocket URL agents connect to (ws://host:port/api/agent/ws)
 	TokenName    string `yaml:"token_name"`    // PVE API token name to create (default: pve-agent)
+	AuthToken    string `yaml:"auth_token"`    // Pre-shared token agents must present to connect (required)
 }
 
 // AuthConfig holds authentication settings

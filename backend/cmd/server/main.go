@@ -55,8 +55,8 @@ func main() {
 	hub := api.NewHub(store)
 	go hub.Run()
 
-	// Create agent hub (pve-agents)
-	agentHub := agent.NewHub(store)
+	// Create agent hub (pve-agents) with pre-shared auth token
+	agentHub := agent.NewHub(store, cfg.Agent.AuthToken)
 
 	// Broadcast state changes via WebSocket
 	broadcastFn := func() {

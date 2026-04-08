@@ -2,6 +2,7 @@ package api
 
 import (
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,26 +14,41 @@ import (
 	"github.com/moconnor/pcenter/internal/state"
 )
 
-// CORSMiddleware adds CORS headers
+// CORSMiddleware adds CORS headers.
+//
+// SECURITY: When origins is empty, NO cross-origin requests are allowed.
+// This is intentional — the safe default is to deny all CORS requests
+// unless the admin explicitly configures allowed origins in config.yaml
+// under server.cors_origins. Previously, an empty list allowed ALL origins,
+// which defeated CORS protection entirely on default deployments.
+//
+// Same-origin requests (no Origin header) are always allowed because
+// browsers only send Origin on cross-origin requests.
 func CORSMiddleware(origins []string) func(http.Handler) http.Handler {
 	originSet := make(map[string]bool)
 	for _, o := range origins {
 		originSet[o] = true
 	}
 
+	if len(origins) == 0 {
+		slog.Warn("no CORS origins configured - cross-origin requests will be blocked. " +
+			"Set server.cors_origins in config.yaml if you need cross-origin access")
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
 
-			// Check if origin is allowed
-			if originSet[origin] || len(origins) == 0 {
+			// Only set CORS headers if origin is explicitly allowed.
+			// Empty origins list = deny all cross-origin (safe default).
+			// Same-origin requests have no Origin header and pass through normally.
+			if origin != "" && originSet[origin] {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CSRF-Token")
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+				w.Header().Set("Access-Control-Max-Age", "86400")
 			}
-
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CSRF-Token")
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Max-Age", "86400")
 
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
