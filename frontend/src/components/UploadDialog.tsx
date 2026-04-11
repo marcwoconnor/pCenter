@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import { getCSRFToken } from '../api/auth';
 
 interface UploadDialogProps {
   storage: string;
@@ -64,6 +65,11 @@ export function UploadDialog({ storage, node, contentType, onClose }: UploadDial
       });
 
       xhr.open('POST', `/api/storage/${storage}/upload?node=${node}&content=${contentType}`);
+      const csrfToken = getCSRFToken();
+      if (csrfToken) {
+        xhr.setRequestHeader('X-CSRF-Token', csrfToken);
+      }
+      xhr.withCredentials = true;
       xhr.send(formData);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed');

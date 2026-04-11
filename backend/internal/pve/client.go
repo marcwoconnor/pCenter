@@ -25,6 +25,13 @@ import (
 func runSSHCommand(ctx context.Context, host string, command string) (string, error) {
 	slog.Info("running SSH command", "host", host, "command", command)
 
+	// Enforce 30s hard timeout if context has no deadline
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
+
 	// accept-new: accept on first connection (TOFU), reject if key changes (MITM).
 	// Previously used StrictHostKeyChecking=no which silently accepts changed keys.
 	cmd := exec.CommandContext(ctx, "ssh",
@@ -161,7 +168,10 @@ func AuthenticateWithPassword(ctx context.Context, address, username, password s
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("authentication failed: %s", string(body))
 	}
@@ -221,7 +231,10 @@ func CreateAPIToken(ctx context.Context, address string, auth *AuthResult, token
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("create token failed: %s", string(body))
 	}
@@ -1956,7 +1969,10 @@ func (c *Client) postForm(ctx context.Context, path string, data url.Values) err
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("API error %d (body unreadable: %w)", resp.StatusCode, err)
+		}
 		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -1980,7 +1996,10 @@ func (c *Client) putForm(ctx context.Context, path string, data url.Values) erro
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("API error %d (body unreadable: %w)", resp.StatusCode, err)
+		}
 		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -2003,7 +2022,10 @@ func (c *Client) delete(ctx context.Context, path string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("API error %d (body unreadable: %w)", resp.StatusCode, err)
+		}
 		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -2025,7 +2047,10 @@ func (c *Client) deleteWithData(ctx context.Context, path string) ([]byte, error
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
 	}

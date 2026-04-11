@@ -20,6 +20,8 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const MAX_RECONNECT_DELAY = 30000; // 30s cap
 
   // Store callbacks in refs to avoid re-triggering effects
   const onMessageRef = useRef(options.onMessage);
@@ -45,6 +47,7 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
       ws.onopen = () => {
         if (!isMounted) return;
         setIsConnected(true);
+        reconnectAttemptsRef.current = 0; // reset backoff on success
         onConnectRef.current?.();
       };
 
@@ -53,8 +56,13 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
         setIsConnected(false);
         onDisconnectRef.current?.();
         wsRef.current = null;
-        // Auto-reconnect
-        reconnectTimeoutRef.current = setTimeout(connect, reconnectInterval);
+        // Exponential backoff: 3s, 6s, 12s, 24s, 30s (capped)
+        const delay = Math.min(
+          reconnectInterval * Math.pow(2, reconnectAttemptsRef.current),
+          MAX_RECONNECT_DELAY
+        );
+        reconnectAttemptsRef.current++;
+        reconnectTimeoutRef.current = setTimeout(connect, delay);
       };
 
       ws.onerror = () => {
