@@ -1,0 +1,14 @@
+# pve-agent configuration example
+
+pcenter:
+  url: "wss://pcenter2:8080/api/agent/ws"  # WebSocket endpoint
+  token: ""  # Optional auth token
+
+node:
+  name: ""      # Auto-detected from hostname if empty
+  cluster: "homelab"  # Cluster name this node belongs to
+
+collection:
+  interval: 5        # Status update interval in seconds
+  include_smart: false  # Include SMART disk data
+  include_ceph: true    # Include Ceph status

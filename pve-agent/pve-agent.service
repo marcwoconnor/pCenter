@@ -1,0 +1,18 @@
+[Unit]
+Description=Proxmox VE Agent for pCenter
+After=network.target pvedaemon.service
+Wants=pvedaemon.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/pve-agent -config /etc/pve-agent/config.yaml
+Restart=always
+RestartSec=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pve-agent
+
+[Install]
+WantedBy=multi-user.target

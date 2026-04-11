@@ -1,0 +1,88 @@
+interface HAStatusBadgeProps {
+  enabled: boolean;
+  quorum: boolean;
+  manager?: string;
+  className?: string;
+}
+
+export function HAStatusBadge({ enabled, quorum, manager, className = '' }: HAStatusBadgeProps) {
+  if (!enabled) {
+    return (
+      <span className={`px-1.5 py-0.5 text-xs rounded bg-gray-600/30 text-gray-400 ${className}`}>
+        HA: Off
+      </span>
+    );
+  }
+
+  if (!quorum) {
+    return (
+      <span className={`px-1.5 py-0.5 text-xs rounded bg-red-600/30 text-red-400 ${className}`} title="No quorum - HA services degraded">
+        HA: No Quorum
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className={`px-1.5 py-0.5 text-xs rounded bg-green-600/30 text-green-400 ${className}`}
+      title={manager ? `HA Manager: ${manager}` : 'HA services running'}
+    >
+      HA: OK
+    </span>
+  );
+}
+
+// Compact badge for tree items
+export function HAGuestBadge({ haState }: { haState?: string }) {
+  if (!haState) return null;
+
+  const getStateStyle = () => {
+    switch (haState) {
+      case 'started':
+        return 'bg-green-500/20 text-green-400';
+      case 'stopped':
+        return 'bg-gray-500/20 text-gray-400';
+      case 'fence':
+        return 'bg-red-500/20 text-red-400';
+      case 'freeze':
+        return 'bg-blue-500/20 text-blue-400';
+      case 'migrate':
+        return 'bg-purple-500/20 text-purple-400';
+      case 'relocate':
+        return 'bg-purple-500/20 text-purple-400';
+      case 'error':
+        return 'bg-red-500/20 text-red-400';
+      default:
+        return 'bg-gray-500/20 text-gray-400';
+    }
+  };
+
+  const getStateIcon = () => {
+    switch (haState) {
+      case 'started':
+        return 'HA';
+      case 'stopped':
+        return 'HA';
+      case 'fence':
+        return 'FENCE';
+      case 'freeze':
+        return 'FREEZE';
+      case 'migrate':
+      case 'relocate':
+        return 'HA';
+      case 'error':
+        return 'ERR';
+      default:
+        return 'HA';
+    }
+  };
+
+  return (
+    <span
+      className={`px-1 py-0.5 text-xs rounded ${getStateStyle()}`}
+      title={`HA State: ${haState}`}
+    >
+      {getStateIcon()}
+    </span>
+  );
+}
