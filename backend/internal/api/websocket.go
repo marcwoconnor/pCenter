@@ -474,6 +474,31 @@ func (h *Hub) buildStateMessage() []byte {
 		}
 	}
 
+	// Ensure slices are never nil — Go encodes nil slices as JSON null,
+	// which crashes the frontend if it calls .filter() on them
+	if nodeList == nil {
+		nodeList = []NodeWithStatus{}
+	}
+	if guests == nil {
+		guests = []Guest{}
+	}
+	if storageList == nil {
+		storageList = []StorageInfo{}
+	}
+	if clusters == nil {
+		clusters = []ClusterInfo{}
+	}
+
+	migrations := h.store.GetMigrations()
+	if migrations == nil {
+		migrations = []pve.MigrationProgress{}
+	}
+
+	drs := h.store.GetAllDRSRecommendations()
+	if drs == nil {
+		drs = []pve.DRSRecommendation{}
+	}
+
 	payload := StatePayload{
 		Clusters:   clusters,
 		Summary:    globalSummary.Total,
@@ -481,8 +506,8 @@ func (h *Hub) buildStateMessage() []byte {
 		Guests:     guests,
 		Storage:    storageList,
 		CephStatus: cephInfo,
-		Migrations: h.store.GetMigrations(),
-		DRS:        h.store.GetAllDRSRecommendations(),
+		Migrations: migrations,
+		DRS:        drs,
 	}
 
 	msg := WSMessage{

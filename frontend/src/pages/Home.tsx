@@ -479,8 +479,10 @@ export function Home() {
     );
   }
 
-  const vms = guests.filter(g => g.type === 'qemu');
-  const cts = guests.filter(g => g.type === 'lxc');
+  const safeGuests = guests || [];
+  const safeNodes = nodes || [];
+  const vms = safeGuests.filter(g => g.type === 'qemu');
+  const cts = safeGuests.filter(g => g.type === 'lxc');
   const runningVMs = vms.filter(g => g.status === 'running').length;
   const runningCTs = cts.filter(g => g.status === 'running').length;
   const totalVMs = vms.length;
@@ -636,10 +638,10 @@ export function Home() {
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Hosts</h2>
         {nodes.length > 0 && <QDeviceBanner cluster={nodes[0].cluster} />}
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-          {nodes.map((node) => {
+          {safeNodes.map((node) => {
             const cpuPercent = node.cpu * 100;
             const memPercent = (node.mem / node.maxmem) * 100;
-            const nodeGuests = guests.filter(g => g.node === node.node);
+            const nodeGuests = safeGuests.filter(g => g.node === node.node);
             const nodeRunning = nodeGuests.filter(g => g.status === 'running').length;
 
             return (

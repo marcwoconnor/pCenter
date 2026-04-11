@@ -169,9 +169,9 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
             api.getStorage(),
           ]);
           setSummary(s);
-          setNodes(n);
-          setGuests(g);
-          setStorage(st);
+          setNodes(n || []);
+          setGuests(g || []);
+          setStorage(st || []);
           setError(null);
         } catch (e) {
           setError(e instanceof Error ? e.message : 'Failed to fetch');
