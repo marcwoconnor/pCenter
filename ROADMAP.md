@@ -136,11 +136,11 @@ cd frontend && npm run dev
 nodes:
   - name: pve04
     host: 10.31.11.1:8006
-    token_id: root@pam!claudeCode
+    token_id: root@pam!pcenter
     token_secret: ${PVE_TOKEN_SECRET}
   - name: pve05
     host: 10.31.13.1:8006
-    token_id: root@pam!claudeCode
+    token_id: root@pam!pcenter
     token_secret: ${PVE_TOKEN_SECRET}
 
 server:

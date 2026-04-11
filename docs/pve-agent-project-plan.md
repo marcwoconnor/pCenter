@@ -103,7 +103,7 @@ poller:
 clusters:
   - name: default
     discovery_node: 10.31.10.14:8006
-    token_id: root@pam!claudeCode
+    token_id: root@pam!pcenter
     token_secret: ${PVE_TOKEN_SECRET}
     insecure: true
 

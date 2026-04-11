@@ -1,4 +1,4 @@
-# pCenter - CLAUDE.md
+# pCenter - Developer Notes
 
 Proxmox datacenter manager - vCenter alternative
 
