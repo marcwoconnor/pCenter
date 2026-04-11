@@ -232,7 +232,9 @@ jobs:
 
       - name: Download .deb from release
         run: |
+          mkdir -p gh-pages/pool
           gh release download v${{ steps.version.outputs.VERSION }} \
+            --repo marcwoconnor/pCenter \
             --pattern '*.deb' --dir gh-pages/pool/
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -304,6 +306,4 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "Update APT repo for v${{ steps.version.outputs.VERSION }}" || true
-          git push origin gh-pages --force
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/marcwoconnor/pCenter.git" HEAD:gh-pages --force
