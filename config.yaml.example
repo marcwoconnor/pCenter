@@ -23,6 +23,10 @@ drs:
   cpu_threshold: 0.8   # trigger when node CPU > 80%
   mem_threshold: 0.85  # trigger when node memory > 85%
 
+auth:
+  enabled: true
+  encryption_key: ${PCENTER_ENCRYPTION_KEY}  # Auto-generated on first run
+
 server:
   port: 8080
   cors_origins:

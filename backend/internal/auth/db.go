@@ -600,6 +600,69 @@ func boolToInt(b bool) int {
 	return 0
 }
 
+// MigrateTOTPSecrets encrypts any plaintext TOTP secrets in the database.
+// Detects plaintext by attempting to decrypt — if decryption fails, it's plaintext.
+func (d *DB) MigrateTOTPSecrets(crypto *Crypto) (int, error) {
+	if crypto == nil {
+		return 0, nil // no encryption configured
+	}
+
+	rows, err := d.db.Query("SELECT id, totp_secret FROM users WHERE totp_enabled = 1 AND totp_secret IS NOT NULL AND totp_secret != ''")
+	if err != nil {
+		return 0, fmt.Errorf("query TOTP users: %w", err)
+	}
+	defer rows.Close()
+
+	type userSecret struct {
+		id     string
+		secret string
+	}
+	var toMigrate []userSecret
+
+	for rows.Next() {
+		var u userSecret
+		if err := rows.Scan(&u.id, &u.secret); err != nil {
+			return 0, fmt.Errorf("scan user: %w", err)
+		}
+		// Try to decrypt — if it fails, this is a plaintext secret
+		if _, err := crypto.Decrypt(u.secret); err != nil {
+			toMigrate = append(toMigrate, u)
+		}
+	}
+
+	if len(toMigrate) == 0 {
+		return 0, nil
+	}
+
+	tx, err := d.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare("UPDATE users SET totp_secret = ? WHERE id = ?")
+	if err != nil {
+		return 0, fmt.Errorf("prepare stmt: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, u := range toMigrate {
+		encrypted, err := crypto.Encrypt(u.secret)
+		if err != nil {
+			return 0, fmt.Errorf("encrypt secret for user %s: %w", u.id, err)
+		}
+		if _, err := stmt.Exec(encrypted, u.id); err != nil {
+			return 0, fmt.Errorf("update user %s: %w", u.id, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+
+	return len(toMigrate), nil
+}
+
 func timeToInt(t time.Time) *int64 {
 	if t.IsZero() {
 		return nil

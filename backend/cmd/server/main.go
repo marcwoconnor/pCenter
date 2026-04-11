@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -90,7 +92,22 @@ func main() {
 		}
 		defer authDB.Close()
 
-		// Initialize crypto (optional - for TOTP secret encryption)
+		// Initialize crypto for TOTP secret encryption
+		// Auto-generate key if not configured
+		if cfg.Auth.EncryptionKey == "" {
+			key, genErr := auth.GenerateKey()
+			if genErr != nil {
+				slog.Error("failed to generate encryption key", "error", genErr)
+				os.Exit(1)
+			}
+			if err := persistEncryptionKey(key); err != nil {
+				slog.Warn("could not persist encryption key to env file — set PCENTER_ENCRYPTION_KEY manually", "error", err)
+			} else {
+				slog.Info("auto-generated TOTP encryption key and saved to env file")
+			}
+			cfg.Auth.EncryptionKey = key
+		}
+
 		crypto, err := auth.NewCrypto(cfg.Auth.EncryptionKey)
 		if err != nil {
 			slog.Error("failed to initialize auth crypto", "error", err)
@@ -126,6 +143,16 @@ func main() {
 		}
 
 		authSvc = auth.NewService(authDB, crypto, authCfg)
+
+		// Migrate any existing plaintext TOTP secrets to encrypted
+		migrated, migErr := authDB.MigrateTOTPSecrets(crypto)
+		if migErr != nil {
+			slog.Error("failed to migrate TOTP secrets", "error", migErr)
+			os.Exit(1)
+		}
+		if migrated > 0 {
+			slog.Info("encrypted existing plaintext TOTP secrets", "count", migrated)
+		}
 
 		// Check if we need first-user setup
 		userCount, err := authSvc.UserCount(ctx)
@@ -388,4 +415,52 @@ func migrateConfigClusters(ctx context.Context, svc *inventory.Service, cfg *con
 	}
 
 	return nil
+}
+
+// persistEncryptionKey writes the auto-generated encryption key to the env file
+// Tries /etc/pcenter/env first (deb package), then /opt/pcenter/.env (manual install)
+func persistEncryptionKey(key string) error {
+	envPaths := []string{"/etc/pcenter/env", "/opt/pcenter/.env"}
+	envLine := fmt.Sprintf("PCENTER_ENCRYPTION_KEY=%s", key)
+
+	for _, path := range envPaths {
+		// Check if file exists or directory exists
+		dir := path[:strings.LastIndex(path, "/")]
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			continue
+		}
+
+		// Read existing content to avoid duplicates
+		existing := ""
+		if data, err := os.ReadFile(path); err == nil {
+			existing = string(data)
+			// Check if key already set
+			scanner := bufio.NewScanner(strings.NewReader(existing))
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if strings.HasPrefix(line, "PCENTER_ENCRYPTION_KEY=") {
+					return nil // already set
+				}
+			}
+		}
+
+		// Append the key
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		if err != nil {
+			continue // try next path
+		}
+		defer f.Close()
+
+		if existing != "" && !strings.HasSuffix(existing, "\n") {
+			envLine = "\n" + envLine
+		}
+		if _, err := fmt.Fprintln(f, envLine); err != nil {
+			continue
+		}
+
+		slog.Info("encryption key saved", "path", path)
+		return nil
+	}
+
+	return fmt.Errorf("no writable env file found (tried %v)", envPaths)
 }

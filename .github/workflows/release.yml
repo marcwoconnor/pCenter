@@ -80,6 +80,7 @@ jobs:
           auth:
             enabled: true
             database_path: "/opt/pcenter/data/auth.db"
+            encryption_key: "${PCENTER_ENCRYPTION_KEY}"
 
           metrics:
             enabled: true

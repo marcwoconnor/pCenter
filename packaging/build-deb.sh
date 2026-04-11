@@ -60,6 +60,7 @@ server:
 auth:
   enabled: true
   database_path: "/opt/pcenter/data/auth.db"
+  encryption_key: "${PCENTER_ENCRYPTION_KEY}"  # Auto-generated on first run
 
 metrics:
   enabled: true
