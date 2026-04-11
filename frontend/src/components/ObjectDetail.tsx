@@ -8,9 +8,6 @@ import type { MetricSeries, VMConfig, ContainerConfig, NetworkInterface, Node, G
 import { NetworkTopology } from './NetworkTopology';
 import { SnapshotsTab } from './SnapshotsTab';
 import { ErrorBoundary } from './ErrorBoundary';
-import { ClusterDetail } from './ClusterDetail';
-import { DatacenterDetail } from './DatacenterDetail';
-import { PCenterRootDetail } from './PCenterRootDetail';
 
 type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d';
 
@@ -34,10 +31,8 @@ interface Tab {
 
 const nodeTabs: Tab[] = [
   { id: 'summary', label: 'Summary' },
-  { id: 'console', label: 'Console' },
   { id: 'vms', label: 'Virtual Machines' },
   { id: 'monitor', label: 'Monitor' },
-  { id: 'configure', label: 'Configure' },
 ];
 
 const guestTabs: Tab[] = [
@@ -76,29 +71,6 @@ export function ObjectDetail() {
       <div className="flex-1 flex items-center justify-center text-gray-500">
         Select an object from the inventory tree
       </div>
-    );
-  }
-
-  // Delegate to specialized detail components for higher-level objects
-  if (selectedObject.type === 'datacenter') {
-    if (selectedObject.id === 'root') {
-      return <PCenterRootDetail defaultTab={selectedObject.defaultTab} />;
-    }
-    return (
-      <DatacenterDetail
-        datacenterId={String(selectedObject.id)}
-        datacenterName={selectedObject.name}
-        defaultTab={selectedObject.defaultTab}
-      />
-    );
-  }
-
-  if (selectedObject.type === 'cluster') {
-    return (
-      <ClusterDetail
-        clusterName={selectedObject.cluster || String(selectedObject.id)}
-        defaultTab={selectedObject.defaultTab}
-      />
     );
   }
 
@@ -242,21 +214,6 @@ export function ObjectDetail() {
             />
           </ErrorBoundary>
         )}
-        {activeTab === 'console' && node && (
-          <ErrorBoundary fallback={
-            <div className="flex items-center justify-center h-64 text-gray-500">
-              Console failed to initialize. The node may be offline.
-            </div>
-          }>
-            <ConsoleTab
-              vmid={0}
-              type="node"
-              nodeId={`${node.cluster}:${node.node}`}
-              name={node.node}
-              isRunning={node.status === 'online'}
-            />
-          </ErrorBoundary>
-        )}
         {activeTab === 'vms' && node && <NodeVMs nodeId={node.node} />}
         {activeTab === 'vms' && storageItem && <StorageVMs storage={storageItem} />}
         {activeTab === 'monitor' && node && <NodeMonitorTab node={node.node} />}
@@ -276,9 +233,6 @@ export function ObjectDetail() {
             type={guest.type === 'qemu' ? 'vm' : 'ct'}
             cluster={guest.cluster}
           />
-        )}
-        {activeTab === 'configure' && node && (
-          <NodeConfigureTab node={node} />
         )}
       </div>
     </div>
@@ -1192,133 +1146,6 @@ function NodeMonitorTab({ node }: { node: string }) {
   );
 }
 
-// Node Configuration tab - shows PVE version, kernel, network interfaces, etc.
-function NodeConfigureTab({ node }: { node: Node }) {
-  const [interfaces, setInterfaces] = useState<NetworkInterface[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    if (node.cluster) {
-      fetch(`/api/clusters/${node.cluster}/network/interfaces`, {
-        signal: controller.signal,
-        credentials: 'include',
-      })
-        .then(r => r.ok ? r.json() : [])
-        .then((ifaces: NetworkInterface[]) => {
-          setInterfaces(ifaces.filter(i => i.node === node.node));
-        })
-        .catch(() => {})
-        .finally(() => setLoading(false));
-    } else {
-      setLoading(false);
-    }
-    return () => controller.abort();
-  }, [node.cluster, node.node]);
-
-  return (
-    <div className="space-y-6">
-      {/* System Info */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-        <h3 className="font-medium mb-4 text-gray-900 dark:text-white pb-2 border-b border-gray-200 dark:border-gray-700">
-          System
-        </h3>
-        <div className="grid md:grid-cols-2 gap-x-8 gap-y-2 text-sm">
-          <div className="flex justify-between py-1.5">
-            <span className="text-gray-500">Node Name</span>
-            <span className="text-gray-900 dark:text-white">{node.node}</span>
-          </div>
-          <div className="flex justify-between py-1.5">
-            <span className="text-gray-500">Cluster</span>
-            <span className="text-gray-900 dark:text-white">{node.cluster || 'N/A'}</span>
-          </div>
-          {node.pve_version && (
-            <div className="flex justify-between py-1.5">
-              <span className="text-gray-500">PVE Version</span>
-              <span className="text-gray-900 dark:text-white">{node.pve_version}</span>
-            </div>
-          )}
-          {node.kernel_version && (
-            <div className="flex justify-between py-1.5">
-              <span className="text-gray-500">Kernel</span>
-              <span className="text-gray-900 dark:text-white">{node.kernel_version}</span>
-            </div>
-          )}
-          {node.cpu_model && (
-            <div className="flex justify-between py-1.5">
-              <span className="text-gray-500">CPU Model</span>
-              <span className="text-gray-900 dark:text-white">{node.cpu_model}</span>
-            </div>
-          )}
-          <div className="flex justify-between py-1.5">
-            <span className="text-gray-500">CPU Cores</span>
-            <span className="text-gray-900 dark:text-white">{node.maxcpu}</span>
-          </div>
-          <div className="flex justify-between py-1.5">
-            <span className="text-gray-500">Total Memory</span>
-            <span className="text-gray-900 dark:text-white">{formatBytes(node.maxmem)}</span>
-          </div>
-          <div className="flex justify-between py-1.5">
-            <span className="text-gray-500">Total Disk</span>
-            <span className="text-gray-900 dark:text-white">{formatBytes(node.maxdisk)}</span>
-          </div>
-          {node.loadavg && (
-            <div className="flex justify-between py-1.5">
-              <span className="text-gray-500">Load Average</span>
-              <span className="text-gray-900 dark:text-white">{node.loadavg.join(', ')}</span>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Network Interfaces */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-        <h3 className="font-medium mb-4 text-gray-900 dark:text-white pb-2 border-b border-gray-200 dark:border-gray-700">
-          Network Interfaces
-        </h3>
-        {loading ? (
-          <div className="text-gray-500 text-sm">Loading...</div>
-        ) : interfaces.length === 0 ? (
-          <div className="text-gray-500 text-sm">No interface data available</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-gray-500 border-b border-gray-200 dark:border-gray-700">
-                  <th className="pb-2 font-medium">Interface</th>
-                  <th className="pb-2 font-medium">Type</th>
-                  <th className="pb-2 font-medium">Address</th>
-                  <th className="pb-2 font-medium">Active</th>
-                </tr>
-              </thead>
-              <tbody>
-                {interfaces.map(iface => (
-                  <tr key={iface.iface} className="border-b border-gray-100 dark:border-gray-700/50">
-                    <td className="py-2 font-medium text-gray-900 dark:text-white">{iface.iface}</td>
-                    <td className="py-2 text-gray-700 dark:text-gray-300">{iface.type}</td>
-                    <td className="py-2 text-gray-700 dark:text-gray-300">
-                      {iface.cidr || iface.address || '-'}
-                    </td>
-                    <td className="py-2">
-                      <span className={`px-2 py-0.5 rounded text-xs ${
-                        iface.active
-                          ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-                          : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
-                      }`}>
-                        {iface.active ? 'Yes' : 'No'}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 type ConfigSubTab = 'hardware' | 'options' | 'network' | 'storage';
 
 const CONFIG_SUB_TABS: { id: ConfigSubTab; label: string }[] = [
@@ -1937,21 +1764,17 @@ function PendingChangesPanel({ editor }: { editor: UseConfigEditorReturn }) {
 }
 
 // Console tab with inline VNC viewer
-// For nodes: type='node', nodeId='cluster:nodename', vmid is ignored
 function ConsoleTab({
   vmid,
   type,
   name,
   isRunning,
-  nodeId,
 }: {
   vmid: number;
-  type: 'vm' | 'ct' | 'node';
+  type: 'vm' | 'ct';
   name: string;
   isRunning: boolean;
-  nodeId?: string;
 }) {
-  const consoleId = type === 'node' ? encodeURIComponent(nodeId || '') : String(vmid);
   const containerRef = useRef<HTMLDivElement>(null);
   const rfbRef = useRef<RFBInstance | null>(null);
   const [status, setStatus] = useState<'connecting' | 'connected' | 'error' | 'closed'>('connecting');
@@ -1967,7 +1790,7 @@ function ConsoleTab({
 
     const connect = async () => {
       try {
-        const ticketResp = await fetch(`/api/console/${type}/${consoleId}/ticket`);
+        const ticketResp = await fetch(`/api/console/${type}/${vmid}/ticket`);
         if (!ticketResp.ok) {
           throw new Error(`Failed to get ticket: ${ticketResp.statusText}`);
         }
@@ -1976,7 +1799,7 @@ function ConsoleTab({
         if (!mounted || !containerRef.current) return;
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/api/console/${type}/${consoleId}/ws?ticket=${encodeURIComponent(ticket)}&port=${port}`;
+        const wsUrl = `${protocol}//${window.location.host}/api/console/${type}/${vmid}/ws?ticket=${encodeURIComponent(ticket)}&port=${port}`;
 
         const module = await import('@novnc/novnc/lib/rfb.js');
         if (!mounted || !containerRef.current) return;
@@ -2069,13 +1892,13 @@ function ConsoleTab({
         rfbRef.current = null;
       }
     };
-  }, [type, vmid, isRunning, consoleId]);
+  }, [type, vmid, isRunning]);
 
-  // Reset state when switching targets
+  // Reset state when switching VMs
   useEffect(() => {
     setStatus('connecting');
     setError(null);
-  }, [vmid, consoleId]);
+  }, [vmid]);
 
   // Update scale mode on existing connection
   useEffect(() => {
@@ -2085,22 +1908,19 @@ function ConsoleTab({
   }, [scaleMode]);
 
   if (!isRunning) {
-    const label = type === 'node' ? 'Node' : type === 'vm' ? 'VM' : 'Container';
     return (
       <div className="flex items-center justify-center h-full text-gray-500 dark:text-gray-400">
         <div className="text-center">
-          <p className="text-lg mb-2">{label} is not {type === 'node' ? 'online' : 'running'}</p>
-          <p className="text-sm">{type === 'node' ? 'Node must be online' : `Start the ${label.toLowerCase()}`} to access the console</p>
+          <p className="text-lg mb-2">{type === 'vm' ? 'VM' : 'Container'} is not running</p>
+          <p className="text-sm">Start the {type === 'vm' ? 'VM' : 'container'} to access the console</p>
         </div>
       </div>
     );
   }
 
   const handlePopout = () => {
-    const url = type === 'node'
-      ? `/console/node/${consoleId}/${encodeURIComponent(name)}`
-      : `/console/${type}/${vmid}/${encodeURIComponent(name)}`;
-    window.open(url, `console-${type === 'node' ? consoleId : vmid}`, 'width=1024,height=768');
+    const url = `/console/${type}/${vmid}/${encodeURIComponent(name)}`;
+    window.open(url, `console-${vmid}`, 'width=1024,height=768');
   };
 
   return (

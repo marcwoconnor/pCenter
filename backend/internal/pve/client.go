@@ -1680,22 +1680,6 @@ func (v *VNCProxyResponse) PortInt() int {
 	return int(p)
 }
 
-// GetNodeVNCProxy gets a VNC proxy ticket for a node shell console
-func (c *Client) GetNodeVNCProxy(ctx context.Context) (*VNCProxyResponse, error) {
-	params := map[string]string{
-		"websocket": "1",
-	}
-	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/vncproxy", c.nodeName), params)
-	if err != nil {
-		return nil, err
-	}
-	var resp APIResponse[VNCProxyResponse]
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, fmt.Errorf("unmarshal vncproxy response: %w", err)
-	}
-	return &resp.Data, nil
-}
-
 // GetVMVNCProxy gets a VNC proxy ticket for a VM
 func (c *Client) GetVMVNCProxy(ctx context.Context, vmid int) (*VNCProxyResponse, error) {
 	params := map[string]string{

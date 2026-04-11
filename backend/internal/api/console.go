@@ -21,52 +21,37 @@ func (h *Handler) ConsoleTicket(w http.ResponseWriter, r *http.Request) {
 	guestType := r.PathValue("type")
 	vmidStr := r.PathValue("vmid")
 
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		http.Error(w, "invalid vmid", http.StatusBadRequest)
+		return
+	}
+
 	var node string
 	var cluster string
 	var pveType string
-	var vmid int
 
-	if guestType == "node" {
-		// For node console, vmid path param is actually "cluster:nodename"
-		// e.g. /api/console/node/cluster:pve04/ticket
-		parts := strings.SplitN(vmidStr, ":", 2)
-		if len(parts) != 2 {
-			http.Error(w, "node console requires cluster:node format", http.StatusBadRequest)
+	if guestType == "vm" {
+		vm, ok := h.store.GetVM(vmid)
+		if !ok {
+			http.Error(w, "VM not found", http.StatusNotFound)
 			return
 		}
-		cluster = parts[0]
-		node = parts[1]
-		pveType = "node"
+		node = vm.Node
+		cluster = vm.Cluster
+		pveType = "qemu"
+	} else if guestType == "ct" {
+		ct, ok := h.store.GetContainer(vmid)
+		if !ok {
+			http.Error(w, "container not found", http.StatusNotFound)
+			return
+		}
+		node = ct.Node
+		cluster = ct.Cluster
+		pveType = "lxc"
 	} else {
-		var err error
-		vmid, err = strconv.Atoi(vmidStr)
-		if err != nil {
-			http.Error(w, "invalid vmid", http.StatusBadRequest)
-			return
-		}
-
-		if guestType == "vm" {
-			vm, ok := h.store.GetVM(vmid)
-			if !ok {
-				http.Error(w, "VM not found", http.StatusNotFound)
-				return
-			}
-			node = vm.Node
-			cluster = vm.Cluster
-			pveType = "qemu"
-		} else if guestType == "ct" {
-			ct, ok := h.store.GetContainer(vmid)
-			if !ok {
-				http.Error(w, "container not found", http.StatusNotFound)
-				return
-			}
-			node = ct.Node
-			cluster = ct.Cluster
-			pveType = "lxc"
-		} else {
-			http.Error(w, "invalid type", http.StatusBadRequest)
-			return
-		}
+		http.Error(w, "invalid type", http.StatusBadRequest)
+		return
 	}
 
 	client, ok := h.getClient(cluster, node)
@@ -77,15 +62,7 @@ func (h *Handler) ConsoleTicket(w http.ResponseWriter, r *http.Request) {
 
 	var ticket string
 	var port int
-	if pveType == "node" {
-		proxy, err := client.GetNodeVNCProxy(r.Context())
-		if err != nil {
-			http.Error(w, "failed to get node VNC proxy: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		ticket = proxy.Ticket
-		port = proxy.PortInt()
-	} else if pveType == "qemu" {
+	if pveType == "qemu" {
 		proxy, err := client.GetVMVNCProxy(r.Context(), vmid)
 		if err != nil {
 			http.Error(w, "failed to get VNC proxy: "+err.Error(), http.StatusInternalServerError)
@@ -129,50 +106,37 @@ func (h *Handler) ConsoleWebsocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		http.Error(w, "invalid vmid", http.StatusBadRequest)
+		return
+	}
+
 	var node string
 	var cluster string
 	var pveType string
-	var vmid int
 
-	if guestType == "node" {
-		parts := strings.SplitN(vmidStr, ":", 2)
-		if len(parts) != 2 {
-			http.Error(w, "node console requires cluster:node format", http.StatusBadRequest)
+	if guestType == "vm" {
+		vm, ok := h.store.GetVM(vmid)
+		if !ok {
+			http.Error(w, "VM not found", http.StatusNotFound)
 			return
 		}
-		cluster = parts[0]
-		node = parts[1]
-		pveType = "node"
+		node = vm.Node
+		cluster = vm.Cluster
+		pveType = "qemu"
+	} else if guestType == "ct" {
+		ct, ok := h.store.GetContainer(vmid)
+		if !ok {
+			http.Error(w, "container not found", http.StatusNotFound)
+			return
+		}
+		node = ct.Node
+		cluster = ct.Cluster
+		pveType = "lxc"
 	} else {
-		var err error
-		vmid, err = strconv.Atoi(vmidStr)
-		if err != nil {
-			http.Error(w, "invalid vmid", http.StatusBadRequest)
-			return
-		}
-
-		if guestType == "vm" {
-			vm, ok := h.store.GetVM(vmid)
-			if !ok {
-				http.Error(w, "VM not found", http.StatusNotFound)
-				return
-			}
-			node = vm.Node
-			cluster = vm.Cluster
-			pveType = "qemu"
-		} else if guestType == "ct" {
-			ct, ok := h.store.GetContainer(vmid)
-			if !ok {
-				http.Error(w, "container not found", http.StatusNotFound)
-				return
-			}
-			node = ct.Node
-			cluster = ct.Cluster
-			pveType = "lxc"
-		} else {
-			http.Error(w, "invalid type", http.StatusBadRequest)
-			return
-		}
+		http.Error(w, "invalid type, must be 'vm' or 'ct'", http.StatusBadRequest)
+		return
 	}
 
 	client, ok := h.getClient(cluster, node)
@@ -182,17 +146,14 @@ func (h *Handler) ConsoleWebsocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build the Proxmox websocket URL
-	pveHost := client.Host()
-	var pveWSURL string
-	if pveType == "node" {
-		pveWSURL = fmt.Sprintf("wss://%s/api2/json/nodes/%s/vncwebsocket?port=%d&vncticket=%s",
-			pveHost, node, port, url.QueryEscape(ticket))
-	} else {
-		pveWSURL = fmt.Sprintf("wss://%s/api2/json/nodes/%s/%s/%d/vncwebsocket?port=%d&vncticket=%s",
-			pveHost, node, pveType, vmid, port, url.QueryEscape(ticket))
-	}
+	// Both VMs and containers use vncwebsocket endpoint
+	wsType := "vncwebsocket"
 
-	slog.Info("proxying console websocket", "type", pveType, "node", node, "cluster", cluster)
+	pveHost := client.Host()
+	pveWSURL := fmt.Sprintf("wss://%s/api2/json/nodes/%s/%s/%d/%s?port=%d&vncticket=%s",
+		pveHost, node, pveType, vmid, wsType, port, url.QueryEscape(ticket))
+
+	slog.Info("proxying console websocket", "vmid", vmid, "type", pveType, "node", node, "cluster", cluster)
 
 	// Upgrade client connection
 	clientConn, err := h.consoleUpgrader.Upgrade(w, r, nil)
