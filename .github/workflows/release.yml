@@ -1,0 +1,309 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build backend
+        working-directory: backend
+        run: |
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o pcenter ./cmd/server
+
+      - name: Build .deb package
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          ARCH=amd64
+          PKG_DIR=$(mktemp -d)/pcenter_${VERSION}_${ARCH}
+
+          mkdir -p ${PKG_DIR}/DEBIAN
+          mkdir -p ${PKG_DIR}/opt/pcenter/frontend
+          mkdir -p ${PKG_DIR}/opt/pcenter/data
+          mkdir -p ${PKG_DIR}/etc/pcenter
+          mkdir -p ${PKG_DIR}/lib/systemd/system
+          mkdir -p ${PKG_DIR}/usr/local/bin
+
+          # Binary
+          cp backend/pcenter ${PKG_DIR}/opt/pcenter/pcenter
+          chmod 755 ${PKG_DIR}/opt/pcenter/pcenter
+
+          # Frontend
+          cp -r frontend/dist/* ${PKG_DIR}/opt/pcenter/frontend/
+
+          # Default config
+          cat > ${PKG_DIR}/etc/pcenter/config.yaml << 'CONF'
+          # pCenter Configuration
+          # Edit this file, then restart: systemctl restart pcenter
+          # Full reference: https://github.com/marcwoconnor/pCenter#configuration-reference
+
+          clusters:
+            - name: default
+              discovery_node: "YOUR_PROXMOX_IP:8006"
+              token_id: "root@pam!pcenter"
+              token_secret: "${PVE_TOKEN_SECRET}"
+              insecure: true
+
+          server:
+            port: 8080
+
+          auth:
+            enabled: true
+            database_path: "/opt/pcenter/data/auth.db"
+
+          metrics:
+            enabled: true
+            database_path: "/opt/pcenter/data/metrics.db"
+
+          activity:
+            database_path: "/opt/pcenter/data/activity.db"
+
+          folders:
+            database_path: "/opt/pcenter/data/folders.db"
+
+          inventory:
+            database_path: "/opt/pcenter/data/inventory.db"
+
+          library:
+            enabled: true
+            database_path: "/opt/pcenter/data/library.db"
+
+          drs:
+            enabled: true
+            mode: manual
+          CONF
+
+          # Fix indentation (heredoc adds leading spaces)
+          sed -i 's/^          //' ${PKG_DIR}/etc/pcenter/config.yaml
+
+          # Systemd service
+          cat > ${PKG_DIR}/lib/systemd/system/pcenter.service << 'SVC'
+          [Unit]
+          Description=pCenter - Proxmox Datacenter Manager
+          After=network.target
+          Documentation=https://github.com/marcwoconnor/pCenter
+
+          [Service]
+          Type=simple
+          WorkingDirectory=/opt/pcenter
+          ExecStart=/opt/pcenter/pcenter -config /etc/pcenter/config.yaml
+          Restart=always
+          RestartSec=5
+          EnvironmentFile=-/etc/pcenter/env
+
+          NoNewPrivileges=true
+          ProtectSystem=strict
+          ProtectHome=true
+          ReadWritePaths=/opt/pcenter/data
+          PrivateTmp=true
+
+          [Install]
+          WantedBy=multi-user.target
+          SVC
+          sed -i 's/^          //' ${PKG_DIR}/lib/systemd/system/pcenter.service
+
+          # Control file
+          cat > ${PKG_DIR}/DEBIAN/control << CTRL
+          Package: pcenter
+          Version: ${VERSION}
+          Architecture: ${ARCH}
+          Maintainer: Marc O'Connor <marc@techsnet.net>
+          Description: Proxmox Datacenter Manager
+           A vCenter-like management platform for Proxmox VE.
+           Multi-cluster, real-time dashboard with VM/container lifecycle,
+           live migration, DRS, HA, metrics, snapshots, and more.
+          Section: admin
+          Priority: optional
+          Homepage: https://github.com/marcwoconnor/pCenter
+          Depends: libc6
+          CTRL
+          sed -i 's/^          //' ${PKG_DIR}/DEBIAN/control
+
+          # postinst
+          cat > ${PKG_DIR}/DEBIAN/postinst << 'POST'
+          #!/bin/bash
+          set -e
+          ln -sf /opt/pcenter/pcenter /usr/local/bin/pcenter
+          if [ ! -f /etc/pcenter/env ]; then
+              echo "# PVE_TOKEN_SECRET=your-token-secret-here" > /etc/pcenter/env
+              chmod 600 /etc/pcenter/env
+          fi
+          chmod 750 /opt/pcenter/data
+          systemctl daemon-reload
+          systemctl enable pcenter 2>/dev/null || true
+          echo ""
+          echo "pCenter installed! Edit /etc/pcenter/config.yaml then: systemctl start pcenter"
+          echo ""
+          POST
+          sed -i 's/^          //' ${PKG_DIR}/DEBIAN/postinst
+          chmod 755 ${PKG_DIR}/DEBIAN/postinst
+
+          # prerm
+          cat > ${PKG_DIR}/DEBIAN/prerm << 'PRERM'
+          #!/bin/bash
+          set -e
+          systemctl stop pcenter 2>/dev/null || true
+          systemctl disable pcenter 2>/dev/null || true
+          PRERM
+          sed -i 's/^          //' ${PKG_DIR}/DEBIAN/prerm
+          chmod 755 ${PKG_DIR}/DEBIAN/prerm
+
+          # postrm
+          cat > ${PKG_DIR}/DEBIAN/postrm << 'POSTRM'
+          #!/bin/bash
+          set -e
+          rm -f /usr/local/bin/pcenter
+          systemctl daemon-reload
+          if [ "$1" = "purge" ]; then
+              rm -rf /opt/pcenter /etc/pcenter
+          fi
+          POSTRM
+          sed -i 's/^          //' ${PKG_DIR}/DEBIAN/postrm
+          chmod 755 ${PKG_DIR}/DEBIAN/postrm
+
+          # conffiles
+          echo "/etc/pcenter/config.yaml" > ${PKG_DIR}/DEBIAN/conffiles
+
+          # Build
+          dpkg-deb --build ${PKG_DIR} pcenter_${VERSION}_${ARCH}.deb
+
+      - name: Upload .deb to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: pcenter_*.deb
+
+      - name: Upload binary to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: backend/pcenter
+
+  update-apt-repo:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: gh-pages
+        continue-on-error: true
+
+      - name: Create gh-pages if needed
+        run: |
+          if [ ! -d gh-pages ]; then
+            mkdir gh-pages
+            cd gh-pages
+            git init
+            git checkout -b gh-pages
+          fi
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Download .deb from release
+        run: |
+          gh release download v${{ steps.version.outputs.VERSION }} \
+            --pattern '*.deb' --dir gh-pages/pool/
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Import GPG key
+        run: |
+          echo "${{ secrets.APT_GPG_PRIVATE_KEY }}" | gpg --batch --import
+        env:
+          GPG_TTY: /dev/null
+
+      - name: Generate APT repo metadata
+        run: |
+          cd gh-pages
+          mkdir -p pool dists/stable/main/binary-amd64
+
+          # Generate Packages file
+          dpkg-scanpackages --multiversion pool/ > dists/stable/main/binary-amd64/Packages
+          gzip -k -f dists/stable/main/binary-amd64/Packages
+
+          # Generate Release file
+          cd dists/stable
+          cat > Release << RELEASE
+          Origin: pCenter
+          Label: pCenter
+          Suite: stable
+          Codename: stable
+          Architectures: amd64
+          Components: main
+          Description: pCenter APT Repository
+          Date: $(date -Ru)
+          RELEASE
+
+          # Add hashes
+          apt-ftparchive release . >> Release
+
+          # Sign
+          gpg --batch --yes --default-key "${{ secrets.APT_GPG_KEY_ID }}" \
+            -abs -o Release.gpg Release
+          gpg --batch --yes --default-key "${{ secrets.APT_GPG_KEY_ID }}" \
+            --clearsign -o InRelease Release
+
+      - name: Export public key
+        run: |
+          gpg --armor --export "${{ secrets.APT_GPG_KEY_ID }}" > gh-pages/pcenter.gpg.key
+
+      - name: Create repo index page
+        run: |
+          cat > gh-pages/index.html << 'HTML'
+          <!DOCTYPE html>
+          <html>
+          <head><title>pCenter APT Repository</title></head>
+          <body>
+          <h1>pCenter APT Repository</h1>
+          <h2>Quick Install</h2>
+          <pre>
+          curl -fsSL https://marcwoconnor.github.io/pCenter/pcenter.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/pcenter.gpg
+          echo "deb [signed-by=/usr/share/keyrings/pcenter.gpg] https://marcwoconnor.github.io/pCenter stable main" | sudo tee /etc/apt/sources.list.d/pcenter.list
+          sudo apt update
+          sudo apt install pcenter
+          </pre>
+          </body>
+          </html>
+          HTML
+
+      - name: Push to gh-pages
+        run: |
+          cd gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Update APT repo for v${{ steps.version.outputs.VERSION }}" || true
+          git push origin gh-pages --force
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
