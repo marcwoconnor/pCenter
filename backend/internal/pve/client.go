@@ -12,7 +12,10 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/moconnor/pcenter/internal/config"
@@ -379,7 +382,57 @@ func (c *Client) GetNextVMID(ctx context.Context) (int, error) {
 
 // --- VM operations ---
 
-// GetVMs returns all VMs on this node
+var netKeyRe = regexp.MustCompile(`^net(\d+)$`)
+
+// parseNICsFromConfig extracts GuestNICs from a VM/CT config map.
+// VM net values look like: "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,tag=501"
+// CT net values look like: "name=eth0,bridge=vmbr0,hwaddr=AA:BB:CC:DD:EE:FF"
+func parseNICsFromConfig(cfg map[string]interface{}) []GuestNIC {
+	var nics []GuestNIC
+	for key, val := range cfg {
+		if !netKeyRe.MatchString(key) {
+			continue
+		}
+		s, ok := val.(string)
+		if !ok {
+			continue
+		}
+		nic := GuestNIC{Name: key}
+		for _, part := range strings.Split(s, ",") {
+			kv := strings.SplitN(part, "=", 2)
+			if len(kv) != 2 {
+				// First token for VMs is "model=MAC" e.g. "virtio=AA:BB..."
+				if strings.Contains(part, ":") {
+					// bare MAC (shouldn't happen), skip
+				} else {
+					nic.Model = part
+				}
+				continue
+			}
+			switch kv[0] {
+			case "bridge":
+				nic.Bridge = kv[1]
+			case "hwaddr":
+				nic.MAC = kv[1]
+			case "tag":
+				if v, err := strconv.Atoi(kv[1]); err == nil {
+					nic.Tag = v
+				}
+			case "name":
+				// CT interface name (eth0, etc) — keep key as Name for consistency
+			case "virtio", "e1000", "rtl8139", "vmxnet3":
+				nic.Model = kv[0]
+				nic.MAC = kv[1]
+			}
+		}
+		if nic.Bridge != "" {
+			nics = append(nics, nic)
+		}
+	}
+	return nics
+}
+
+// GetVMs returns all VMs on this node, including NIC info from config
 func (c *Client) GetVMs(ctx context.Context) ([]VM, error) {
 	vms, err := get[[]VM](c, ctx, fmt.Sprintf("/nodes/%s/qemu", c.nodeName))
 	if err != nil {
@@ -389,7 +442,40 @@ func (c *Client) GetVMs(ctx context.Context) ([]VM, error) {
 	for i := range vms {
 		vms[i].Node = c.nodeName
 	}
+	c.fetchVMNICs(ctx, vms)
 	return vms, nil
+}
+
+// fetchVMNICs fetches config for each VM in parallel and populates NICs.
+func (c *Client) fetchVMNICs(ctx context.Context, vms []VM) {
+	var wg sync.WaitGroup
+	for i := range vms {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			cfg, err := get[map[string]interface{}](c, ctx, fmt.Sprintf("/nodes/%s/qemu/%d/config", c.nodeName, vms[idx].VMID))
+			if err == nil {
+				vms[idx].NICs = parseNICsFromConfig(cfg)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+// fetchCTNICs fetches config for each container in parallel and populates NICs.
+func (c *Client) fetchCTNICs(ctx context.Context, cts []Container) {
+	var wg sync.WaitGroup
+	for i := range cts {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			cfg, err := get[map[string]interface{}](c, ctx, fmt.Sprintf("/nodes/%s/lxc/%d/config", c.nodeName, cts[idx].VMID))
+			if err == nil {
+				cts[idx].NICs = parseNICsFromConfig(cfg)
+			}
+		}(i)
+	}
+	wg.Wait()
 }
 
 // GetVM returns a single VM by VMID
@@ -633,6 +719,7 @@ func (c *Client) GetContainers(ctx context.Context) ([]Container, error) {
 		cts[i].Node = c.nodeName
 		cts[i].Type = "lxc"
 	}
+	c.fetchCTNICs(ctx, cts)
 	return cts, nil
 }
 

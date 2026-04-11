@@ -63,6 +63,9 @@ func NewHub(store *state.Store, allowedOrigins []string) *Hub {
 				if len(originSet) == 0 {
 					return false // No configured origins = reject all cross-origin
 				}
+				if !originSet[origin] {
+					slog.Warn("websocket origin rejected", "origin", origin)
+				}
 				return originSet[origin]
 			},
 		},

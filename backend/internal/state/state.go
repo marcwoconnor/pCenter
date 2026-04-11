@@ -147,26 +147,45 @@ func (cs *ClusterStore) UpdateNode(nodeName string, node pve.Node, vms []pve.VM,
 	cs.lastUpdate[nodeName] = time.Now()
 	delete(cs.errors, nodeName)
 
-	// Update VMs - remove old ones from this node first
-	for vmid, vm := range cs.vms {
-		if vm.Node == nodeName {
-			delete(cs.vms, vmid)
-		}
-	}
+	// Merge VMs: update existing, add new, remove only what's gone
+	incomingVMs := make(map[int]struct{}, len(vms))
 	for _, vm := range vms {
 		vm.Cluster = cs.name
+		incomingVMs[vm.VMID] = struct{}{}
+		if prev, ok := cs.vms[vm.VMID]; ok {
+			// Preserve fields the caller didn't provide
+			if len(vm.NICs) == 0 && len(prev.NICs) > 0 {
+				vm.NICs = prev.NICs
+			}
+		}
 		cs.vms[vm.VMID] = vm
 	}
-
-	// Update containers
-	for vmid, ct := range cs.containers {
-		if ct.Node == nodeName {
-			delete(cs.containers, vmid)
+	for vmid, vm := range cs.vms {
+		if vm.Node == nodeName {
+			if _, ok := incomingVMs[vmid]; !ok {
+				delete(cs.vms, vmid)
+			}
 		}
 	}
+
+	// Merge containers
+	incomingCTs := make(map[int]struct{}, len(cts))
 	for _, ct := range cts {
 		ct.Cluster = cs.name
+		incomingCTs[ct.VMID] = struct{}{}
+		if prev, ok := cs.containers[ct.VMID]; ok {
+			if len(ct.NICs) == 0 && len(prev.NICs) > 0 {
+				ct.NICs = prev.NICs
+			}
+		}
 		cs.containers[ct.VMID] = ct
+	}
+	for vmid, ct := range cs.containers {
+		if ct.Node == nodeName {
+			if _, ok := incomingCTs[vmid]; !ok {
+				delete(cs.containers, vmid)
+			}
+		}
 	}
 
 	// Set cluster on storage

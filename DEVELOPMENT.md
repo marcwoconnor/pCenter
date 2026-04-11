@@ -317,10 +317,18 @@ ssh root@pve04 "journalctl -u pve-agent -f"
 - Use `h.getClient(cluster, node)` helper which falls back to `createOnDemandClient()`
 - Get nodes from store: `cs.GetNodes()` where `cs, _ := h.store.GetCluster(name)`
 
+### Guest NIC Data
+- PVE list endpoints (`/nodes/{node}/qemu`, `/lxc`) do NOT return NIC config
+- NICs come from per-guest config endpoints (`/nodes/{node}/qemu/{vmid}/config`)
+- Poller fetches configs in parallel via `fetchVMNICs()`/`fetchCTNICs()` in `client.go`
+- Config `net0`/`net1` values are parsed by `parseNICsFromConfig()` into `[]GuestNIC`
+- `UpdateNode()` uses merge (not delete-rebuild) to preserve NICs if a caller omits them
+
 ### State Store Patterns
 - `h.store.GetCluster(name)` returns `*ClusterState`
 - `cs.GetVM(vmid)` / `cs.GetContainer(vmid)` - methods on ClusterState, not Store
 - `h.store.GetVM(vmid)` searches all clusters (legacy/global endpoints)
+- `UpdateNode()` merges incoming data — only deletes guests absent from incoming list
 
 ### Proxmox DELETE Operations
 - DELETE requests return UPID for task tracking (not just success/error)
