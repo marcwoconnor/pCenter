@@ -28,6 +28,9 @@ type Config struct {
 	// Inventory settings for datacenter/cluster management
 	Inventory InventoryConfig `yaml:"inventory"`
 
+	// Content library settings
+	Library LibraryConfig `yaml:"library"`
+
 	// Legacy: flat nodes array (auto-converted to single cluster)
 	Nodes []NodeConfig `yaml:"nodes,omitempty"`
 }
@@ -99,6 +102,12 @@ type FoldersConfig struct {
 
 // InventoryConfig holds datacenter/cluster inventory settings
 type InventoryConfig struct {
+	DatabasePath string `yaml:"database_path"`
+}
+
+// LibraryConfig holds content library settings
+type LibraryConfig struct {
+	Enabled      bool   `yaml:"enabled"`
 	DatabasePath string `yaml:"database_path"`
 }
 
@@ -267,6 +276,11 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Auth.RateLimit.RequestsPerMinute == 0 {
 		cfg.Auth.RateLimit.RequestsPerMinute = 10
+	}
+
+	// Library defaults
+	if cfg.Library.DatabasePath == "" {
+		cfg.Library.DatabasePath = "data/library.db"
 	}
 
 	// Agent defaults

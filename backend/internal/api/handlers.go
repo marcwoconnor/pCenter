@@ -20,6 +20,7 @@ import (
 	"github.com/moconnor/pcenter/internal/config"
 	"github.com/moconnor/pcenter/internal/folders"
 	"github.com/moconnor/pcenter/internal/inventory"
+	"github.com/moconnor/pcenter/internal/library"
 	"github.com/moconnor/pcenter/internal/metrics"
 	"github.com/moconnor/pcenter/internal/poller"
 	"github.com/moconnor/pcenter/internal/pve"
@@ -34,6 +35,7 @@ type Handler struct {
 	folders         *folders.Service
 	activity        *activity.Service
 	inventory       *inventory.Service
+	library         *library.Service
 	agentHub        *agent.Hub
 	clusters        []config.ClusterConfig // For on-demand client creation
 	secrets         map[string]string      // Token secrets keyed by cluster/agent name

@@ -12,6 +12,7 @@ const navItems = [
   { path: '/vms', label: 'VMs & Templates', icon: '◫' },
   { path: '/storage', label: 'Storage', icon: '▤' },
   { path: '/network', label: 'Network', icon: '◈' },
+  { path: '/library', label: 'Library', icon: '📚' },
 ];
 
 const MIN_SIDEBAR_WIDTH = 150;

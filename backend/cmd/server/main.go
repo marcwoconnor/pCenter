@@ -18,6 +18,7 @@ import (
 	"github.com/moconnor/pcenter/internal/config"
 	"github.com/moconnor/pcenter/internal/folders"
 	"github.com/moconnor/pcenter/internal/inventory"
+	"github.com/moconnor/pcenter/internal/library"
 	"github.com/moconnor/pcenter/internal/metrics"
 	"github.com/moconnor/pcenter/internal/migration"
 	"github.com/moconnor/pcenter/internal/poller"
@@ -228,6 +229,20 @@ func main() {
 	}
 
 	slog.Info("inventory enabled", "database", cfg.Inventory.DatabasePath)
+
+	// Initialize content library
+	if cfg.Library.Enabled {
+		libraryDB, err := library.Open(cfg.Library.DatabasePath)
+		if err != nil {
+			slog.Error("failed to open library database", "error", err)
+			os.Exit(1)
+		}
+		defer libraryDB.Close()
+
+		libraryService := library.NewService(libraryDB, store)
+		handler.SetLibraryService(libraryService)
+		slog.Info("content library enabled", "database", cfg.Library.DatabasePath)
+	}
 
 	// Load clusters from inventory and start poller
 	if cfg.Poller.Enabled && p != nil {

@@ -36,6 +36,10 @@ import type {
   CreateContainerRequest,
   Snapshot,
   CreateSnapshotRequest,
+  LibraryItem,
+  CreateLibraryItemRequest,
+  UpdateLibraryItemRequest,
+  DeployLibraryItemRequest,
 } from '../types';
 
 import { getCSRFToken } from './auth';
@@ -398,6 +402,30 @@ export const api = {
     fetchAPI<{ success: boolean; message: string; token_secret?: string }>(`/inventory/hosts/${id}/deploy-agent`, {
       method: 'POST',
     }),
+
+  // Content Library
+  getLibraryItems: (params?: { type?: string; category?: string; cluster?: string; search?: string; tag?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.type) query.set('type', params.type);
+    if (params?.category) query.set('category', params.category);
+    if (params?.cluster) query.set('cluster', params.cluster);
+    if (params?.search) query.set('search', params.search);
+    if (params?.tag) query.set('tag', params.tag);
+    const qs = query.toString();
+    return fetchAPI<LibraryItem[]>(`/library${qs ? `?${qs}` : ''}`);
+  },
+  getLibraryItem: (id: string) =>
+    fetchAPI<LibraryItem>(`/library/${id}`),
+  getLibraryCategories: () =>
+    fetchAPI<string[]>('/library/categories'),
+  createLibraryItem: (req: CreateLibraryItemRequest) =>
+    fetchAPI<LibraryItem>('/library', { method: 'POST', body: JSON.stringify(req) }),
+  updateLibraryItem: (id: string, req: UpdateLibraryItemRequest) =>
+    fetchAPI<{ message: string }>(`/library/${id}`, { method: 'PUT', body: JSON.stringify(req) }),
+  deleteLibraryItem: (id: string) =>
+    fetchAPI<{ message: string }>(`/library/${id}`, { method: 'DELETE' }),
+  deployLibraryItem: (id: string, req: DeployLibraryItemRequest) =>
+    fetchAPI<{ upid: string; message: string }>(`/library/${id}/deploy`, { method: 'POST', body: JSON.stringify(req) }),
 };
 
 // Helper functions

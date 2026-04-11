@@ -7,6 +7,7 @@ import { HostsAndClusters } from './pages/HostsAndClusters';
 import { VMsAndTemplates } from './pages/VMsAndTemplates';
 import { StoragePage } from './pages/Storage';
 import { NetworkPage } from './pages/Network';
+import { ContentLibrary } from './pages/ContentLibrary';
 import { ConsolePage } from './pages/ConsolePage';
 import { Settings } from './pages/Settings';
 import { Login } from './pages/Login';
@@ -118,6 +119,18 @@ function AppRoutes() {
               <ClusterProvider>
                 <FolderProvider>
                   <NetworkPage />
+                </FolderProvider>
+              </ClusterProvider>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/library"
+          element={
+            <ProtectedRoute>
+              <ClusterProvider>
+                <FolderProvider>
+                  <ContentLibrary />
                 </FolderProvider>
               </ClusterProvider>
             </ProtectedRoute>

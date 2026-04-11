@@ -697,3 +697,70 @@ export interface CreateContainerRequest {
   start?: boolean;
   unprivileged: boolean;
 }
+
+// Content Library types
+
+export type LibraryItemType = 'iso' | 'vztmpl' | 'vm-template' | 'ova' | 'snippet';
+
+export interface LibraryItem {
+  id: string;
+  name: string;
+  description?: string;
+  type: LibraryItemType;
+  category?: string;
+  version?: string;
+  tags: string[];
+
+  cluster: string;
+  node?: string;
+  storage: string;
+  volume: string;
+
+  size: number;
+  format?: string;
+
+  vmid?: number;
+  os_type?: string;
+  cores?: number;
+  memory?: number;
+
+  created_at: string;
+  updated_at: string;
+  created_by?: string;
+}
+
+export interface CreateLibraryItemRequest {
+  name: string;
+  description?: string;
+  type: LibraryItemType;
+  category?: string;
+  version?: string;
+  tags?: string[];
+  cluster: string;
+  node?: string;
+  storage: string;
+  volume: string;
+  size?: number;
+  format?: string;
+  vmid?: number;
+  os_type?: string;
+  cores?: number;
+  memory?: number;
+}
+
+export interface UpdateLibraryItemRequest {
+  name?: string;
+  description?: string;
+  category?: string;
+  version?: string;
+  tags?: string[];
+}
+
+export interface DeployLibraryItemRequest {
+  target_cluster: string;
+  target_node: string;
+  target_storage?: string;
+  new_name?: string;
+  new_vmid?: number;
+  full: boolean;
+}

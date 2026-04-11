@@ -270,6 +270,15 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("DELETE /api/folders/{id}/members", h.RemoveFolderMember)
 	protectedMux.HandleFunc("POST /api/resources/move", h.MoveResource)
 
+	// --- Content Library endpoints ---
+	protectedMux.HandleFunc("GET /api/library", h.GetLibraryItems)
+	protectedMux.HandleFunc("GET /api/library/categories", h.GetLibraryCategories)
+	protectedMux.HandleFunc("GET /api/library/{id}", h.GetLibraryItem)
+	protectedMux.HandleFunc("POST /api/library", h.CreateLibraryItem)
+	protectedMux.HandleFunc("PUT /api/library/{id}", h.UpdateLibraryItem)
+	protectedMux.HandleFunc("DELETE /api/library/{id}", h.DeleteLibraryItem)
+	protectedMux.HandleFunc("POST /api/library/{id}/deploy", h.DeployLibraryItem)
+
 	// --- Inventory endpoints (datacenter/cluster management) ---
 
 	// Datacenters

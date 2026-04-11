@@ -2,7 +2,7 @@
 
 Comparison of VMware vCenter Server features vs pCenter current implementation, with prioritized roadmap for feature development.
 
-**Last Updated:** 2026-01-18
+**Last Updated:** 2026-04-10
 
 ---
 
@@ -12,7 +12,6 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 - ✅ Implemented
 - 🟡 Partial
 - 🔴 Missing
-- 🚧 In Progress
 - N/A Not Applicable (platform-specific)
 
 ---
@@ -22,11 +21,15 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 | vCenter Feature | pCenter | Notes |
 |-----------------|---------|-------|
 | Multi-cluster management | ✅ | Full support |
-| Cluster discovery | ✅ | Auto-discovers nodes |
-| Datacenter hierarchy | ✅ | Inventory datacenters |
-| Folder organization | ✅ | Custom folder structure |
+| Cluster discovery | ✅ | Auto-discovers nodes from discovery node |
+| Datacenter hierarchy | ✅ | Datacenters → Clusters → Hosts → Guests |
+| Folder organization | ✅ | Separate host/VM trees, drag-and-drop |
+| Host onboarding wizard | ✅ | Test → SSH → Deploy Agent → Activate |
+| Maintenance mode | ✅ | Preflight checks + automated evacuation |
+| QDevice monitoring | ✅ | Quorum device status tracking |
 | Host profiles | 🔴 | Config templates for hosts |
-| Update Manager | 🔴 | Patch/update hosts |
+| Update Manager | 🔴 | Patch/update hosts from UI |
+| Rolling updates | 🔴 | Update hosts sequentially |
 
 ---
 
@@ -34,13 +37,40 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 
 | vCenter Feature | pCenter | Notes |
 |-----------------|---------|-------|
-| Create/Delete VMs | ✅ | Full CRUD |
-| Start/Stop/Restart | ✅ | All power states |
-| Suspend/Resume | ✅ | Pause VMs |
-| VM Configuration | ✅ | CPU/RAM/disk/network |
+| Create/Delete VMs | ✅ | Full CRUD with config |
+| Create/Delete Containers | ✅ | Full LXC lifecycle (vCenter has no equivalent) |
+| Start/Stop/Restart/Shutdown | ✅ | All power states |
+| VM Configuration editing | ✅ | CPU/RAM/disk/network with conflict detection |
 | Console (VNC) | ✅ | noVNC integration |
 | Container terminal | ✅ | LXC shell access |
-| Guest agent integration | ✅ | qemu-guest-agent |
+
+---
+
+## Snapshots
+
+| vCenter Feature | pCenter | Notes |
+|-----------------|---------|-------|
+| Create snapshot | ✅ | Point-in-time VM/CT state |
+| Snapshot with memory | ✅ | Include RAM state |
+| Snapshot tree/hierarchy | ✅ | Parent/child visualization |
+| Revert to snapshot | ✅ | Rollback to previous state |
+| Delete snapshot | ✅ | Consolidate disk changes |
+| Scheduled snapshots | 🔴 | Automatic periodic snapshots |
+
+---
+
+## Cloning & Templates
+
+| vCenter Feature | pCenter | Notes |
+|-----------------|---------|-------|
+| Full clone | ✅ | Creates independent copy |
+| Linked clone | ✅ | Space-efficient clone |
+| Clone from template | ✅ | Clone existing VM/CT |
+| Target node selection | ✅ | Choose destination during clone |
+| Convert VM to template | 🔴 | Mark VM as template (first-class object) |
+| Template library | 🔴 | Centralized template management |
+| Content library | 🔴 | Share templates/ISOs across clusters |
+| OVF/OVA import/export | 🔴 | Virtual appliance portability |
 
 ---
 
@@ -48,9 +78,12 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 
 | vCenter Feature | pCenter | Notes |
 |-----------------|---------|-------|
-| vMotion (live migration) | ✅ | With progress tracking |
-| Storage vMotion | 🔴 | Move disks between storage pools |
-| Cross-cluster migration | 🔴 | Migrate VMs between clusters |
+| Live migration (vMotion) | ✅ | Online with progress tracking |
+| Offline migration | ✅ | With guest shutdown |
+| Migration monitoring | ✅ | Active migrations dashboard, UPID tracking |
+| Migration targets API | ✅ | Available target node listing |
+| Storage vMotion | 🔴 | Move disks between storage pools while running |
+| Cross-cluster migration | 🔴 | Migrate VMs between Proxmox clusters |
 | Migration scheduling | 🔴 | Schedule migrations for maintenance windows |
 
 ---
@@ -59,16 +92,17 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 
 | vCenter Feature | pCenter | Notes |
 |-----------------|---------|-------|
-| Load analysis | ✅ | CPU/memory imbalance detection |
-| Migration recommendations | ✅ | Manual approval mode |
+| Load analysis | ✅ | CPU/memory std deviation analysis |
+| Migration recommendations | ✅ | With apply/dismiss actions |
 | Manual DRS mode | ✅ | Recommendations only |
-| Partially automated DRS | 🔴 | Auto-place new VMs |
-| Fully automated DRS | 🔴 | Auto-execute all migrations |
+| Semi-automatic DRS | ✅ | Auto-place new VMs |
+| Fully automatic DRS | ✅ | Auto-execute migrations |
+| Configurable thresholds | ✅ | CPU/memory load thresholds |
 | VM-VM affinity rules | 🔴 | Keep VMs together on same host |
 | VM-VM anti-affinity rules | 🔴 | Keep VMs apart on different hosts |
 | VM-Host affinity rules | 🔴 | Pin VMs to specific hosts |
+| DRS groups | 🔴 | Group VMs/hosts for rule targeting |
 | DPM (Distributed Power Mgmt) | 🔴 | Power off idle hosts to save energy |
-| DRS groups | 🔴 | Group VMs/hosts for rules |
 
 ---
 
@@ -76,14 +110,15 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 
 | vCenter Feature | pCenter | Notes |
 |-----------------|---------|-------|
-| HA enable/disable | ✅ | Per-VM control |
-| HA status display | ✅ | Visual badges |
-| HA groups | 🟡 | Basic support (Proxmox 8+) |
+| HA enable/disable | ✅ | Per-VM/CT with policies |
+| HA status display | ✅ | Badges throughout UI |
+| HA groups | ✅ | Group configuration |
+| Recovery policies | ✅ | Max restart, max relocate |
 | Admission control | 🔴 | Reserve capacity for failover |
-| Host isolation response | 🔴 | Action when host isolated |
-| VM restart priority | 🔴 | Order of VM restarts |
-| VM monitoring | 🔴 | Restart unresponsive VMs |
-| Proactive HA | 🔴 | Pre-emptive migration on hardware alerts |
+| Host isolation response | 🔴 | Action when host isolated from network |
+| VM restart priority | 🔴 | Order of VM restarts after failure |
+| VM monitoring | 🔴 | Restart unresponsive VMs via heartbeat |
+| Proactive HA | 🔴 | Pre-emptive migration on hardware sensor alerts |
 
 ---
 
@@ -91,55 +126,8 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 
 | vCenter Feature | pCenter | Notes |
 |-----------------|---------|-------|
-| Continuous availability | 🔴 | Shadow VM replication (VMware-specific) |
-| Zero downtime failover | 🔴 | FT is VMware-proprietary |
-
-> **Note:** Proxmox doesn't have an equivalent to VMware FT. Consider HA with fast restart as alternative.
-
----
-
-## Templates & Cloning
-
-| vCenter Feature | pCenter | Notes |
-|-----------------|---------|-------|
-| Convert VM to template | 🔴 | Mark VM as template |
-| Clone from template | 🟡 | Basic clone support exists |
-| Full clone | 🟡 | Creates independent copy |
-| Linked clone | 🔴 | Space-efficient clone sharing base disk |
-| Template library | 🔴 | Centralized template management |
-| Content library | 🔴 | Share templates across clusters |
-| OVF/OVA import | 🔴 | Import virtual appliances |
-| OVF/OVA export | 🔴 | Export VMs as appliances |
-
----
-
-## Snapshots
-
-| vCenter Feature | pCenter | Notes |
-|-----------------|---------|-------|
-| Create snapshot | 🔴 | Point-in-time VM state |
-| Snapshot with memory | 🔴 | Include RAM state |
-| Snapshot without memory | 🔴 | Disk-only snapshot |
-| Snapshot tree/hierarchy | 🔴 | Multiple snapshot branches |
-| Revert to snapshot | 🔴 | Rollback to previous state |
-| Delete snapshot | 🔴 | Consolidate disk changes |
-| Snapshot manager UI | 🔴 | Visual snapshot management |
-| Scheduled snapshots | 🔴 | Automatic periodic snapshots |
-
----
-
-## Resource Management
-
-| vCenter Feature | pCenter | Notes |
-|-----------------|---------|-------|
-| Resource pools | 🔴 | Group and allocate resources |
-| CPU reservations | 🔴 | Guarantee minimum CPU |
-| Memory reservations | 🔴 | Guarantee minimum RAM |
-| CPU limits | 🔴 | Cap maximum CPU |
-| Memory limits | 🔴 | Cap maximum RAM |
-| Shares (priority) | 🔴 | Relative resource priority |
-| Expandable reservations | 🔴 | Borrow from parent pool |
-| Resource pool hierarchy | 🔴 | Nested resource pools |
+| Continuous availability | N/A | VMware FT is proprietary — no Proxmox equivalent |
+| Zero downtime failover | N/A | Use HA with fast restart as alternative |
 
 ---
 
@@ -147,13 +135,13 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 
 | vCenter Feature | pCenter | Notes |
 |-----------------|---------|-------|
-| Storage overview | ✅ | All pools listed |
-| Storage content browse | ✅ | Volumes, ISOs, templates |
-| Ceph integration | ✅ | Health monitoring, commands |
-| SMART monitoring | ✅ | Disk health alerts |
-| File upload (ISO/templates) | ✅ | Upload to storage |
-| Storage profiles/policies | 🔴 | Policy-based VM placement |
-| Storage DRS | 🔴 | Auto-balance storage (VMware-specific) |
+| Storage overview | ✅ | All pools listed with usage |
+| Storage content browse | ✅ | ISOs, templates, backups, images |
+| File upload | ✅ | Upload ISOs/templates to storage |
+| Ceph integration | ✅ | Health monitoring + whitelisted commands |
+| SMART monitoring | ✅ | Disk health + temperature tracking |
+| Storage profiles/policies | 🔴 | Policy-based VM storage placement |
+| Storage DRS | 🔴 | Auto-balance storage across pools |
 | Datastore clusters | 🔴 | Group storage pools |
 
 ---
@@ -162,15 +150,16 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 
 | vCenter Feature | pCenter | Notes |
 |-----------------|---------|-------|
-| Network overview | ✅ | Interface listing |
+| Network overview | ✅ | Per-node interface listing |
+| Network topology | ✅ | Visual representation |
 | SDN zones | ✅ | Proxmox SDN support |
-| VNets (VLANs/overlays) | ✅ | Virtual networks |
+| VNets | ✅ | Virtual networks |
 | Subnets | ✅ | Subnet definitions |
-| Distributed switch | 🔴 | Centralized virtual switch |
-| Port groups | 🔴 | Network policies per group |
+| Guest NIC display | ✅ | Parsed from config endpoints |
+| Distributed switch | 🔴 | Centralized virtual switch across hosts |
+| Port groups | 🔴 | Network policies per port group |
 | Traffic shaping | 🔴 | Bandwidth limits |
-| Network I/O control | 🔴 | QoS for network traffic |
-| Private VLANs | 🔴 | Micro-segmentation |
+| Network I/O control | 🔴 | QoS for VM network traffic |
 
 ---
 
@@ -178,13 +167,12 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 
 | vCenter Feature | pCenter | Notes |
 |-----------------|---------|-------|
-| Backup scheduling | 🔴 | Schedule VM backups |
+| Backup scheduling | 🔴 | Schedule VM backups (vzdump or PBS) |
 | Backup jobs | 🔴 | Manage backup tasks |
 | Backup retention | 🔴 | Retention policies |
 | Restore from backup | 🔴 | Recovery operations |
 | File-level restore | 🔴 | Restore individual files |
 | Backup verification | 🔴 | Verify backup integrity |
-| Backup to remote | 🔴 | Off-site backup targets |
 | Replication | 🔴 | VM replication to DR site |
 
 ---
@@ -193,16 +181,16 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 
 | vCenter Feature | pCenter | Notes |
 |-----------------|---------|-------|
-| Performance charts | ✅ | CPU/RAM/disk/network |
-| Metrics retention | ✅ | Multi-resolution (raw→monthly) |
-| Real-time metrics | ✅ | WebSocket streaming |
-| Events/tasks log | ✅ | Activity tracking |
-| SMART monitoring | ✅ | Disk health |
-| Alarms | 🔴 | Threshold-based alerts |
-| Alarm actions | 🔴 | Email/script on alarm |
-| Alarm acknowledgment | 🔴 | Track alarm handling |
-| Custom alarms | 🔴 | User-defined conditions |
-| Triggered alarm list | 🔴 | Active alerts dashboard |
+| Performance charts | ✅ | CPU/RAM/disk/network time-series |
+| Metrics retention | ✅ | Raw→Hourly→Daily→Weekly→Monthly rollup |
+| Real-time metrics | ✅ | 30s collection, WebSocket push |
+| Activity/audit log | ✅ | Filterable by resource, action, cluster |
+| SMART monitoring | ✅ | Disk health tracking |
+| Alarms (threshold alerts) | 🔴 | CPU > 90% for 5min → notification |
+| Alarm actions | 🔴 | Email/webhook/Slack on alarm |
+| Alarm acknowledgment | 🔴 | Track alarm handling workflow |
+| Custom alarm conditions | 🔴 | User-defined thresholds |
+| Active alerts dashboard | 🔴 | Triggered alarm overview |
 
 ---
 
@@ -210,18 +198,19 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 
 | vCenter Feature | pCenter | Notes |
 |-----------------|---------|-------|
-| Local users | ✅ | Full support |
+| Local users | ✅ | Create/delete users |
 | Admin role | ✅ | Full privileges |
-| 2FA/TOTP | ✅ | Two-factor auth |
+| 2FA/TOTP | ✅ | With recovery codes |
 | Session management | ✅ | View/revoke sessions |
-| Trusted IPs | ✅ | Skip 2FA on trusted networks |
-| Account lockout | ✅ | Brute-force protection |
-| Custom roles | 🔴 | Define permission sets |
-| Object-level permissions | 🔴 | Per-VM/folder permissions |
-| Permission inheritance | 🔴 | Hierarchical permissions |
-| LDAP/AD integration | 🔴 | Directory service auth |
+| Trusted IPs | ✅ | Skip 2FA on known networks |
+| Account lockout | ✅ | Progressive brute-force protection |
+| Auth event logging | ✅ | Login/logout/failure audit trail |
+| Rate limiting | ✅ | Login attempt throttling |
+| Custom roles | 🔴 | Define named permission sets |
+| Object-level permissions | 🔴 | Per-VM/folder/cluster permissions |
+| Permission inheritance | 🔴 | Propagate through folder hierarchy |
+| LDAP/AD integration | 🔴 | Directory service authentication |
 | SSO | 🔴 | Single sign-on |
-| Audit logging | 🟡 | Auth events logged, need full audit |
 
 ---
 
@@ -229,12 +218,13 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 
 | vCenter Feature | pCenter | Notes |
 |-----------------|---------|-------|
-| VM tags | 🟡 | Basic tag display |
-| Create/edit tags | 🔴 | Tag management |
+| Folder trees | ✅ | Host tree + VM tree |
+| Drag-and-drop organization | ✅ | Move resources between folders |
+| Resource assignment to folders | ✅ | Add/remove folder members |
+| VM tags | 🔴 | Free-form tagging on any object |
 | Tag categories | 🔴 | Organize tags by type |
-| Tag-based search | 🔴 | Find VMs by tag |
-| Tag-based policies | 🔴 | Automation based on tags |
-| Custom attributes | 🔴 | User-defined VM metadata |
+| Tag-based search | 🔴 | Find resources by tag |
+| Custom attributes | 🔴 | User-defined metadata |
 
 ---
 
@@ -243,22 +233,9 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 | vCenter Feature | pCenter | Notes |
 |-----------------|---------|-------|
 | Scheduled tasks | 🔴 | Timed operations |
-| Power schedules | 🔴 | Auto start/stop VMs |
+| Power schedules | 🔴 | Auto start/stop VMs on schedule |
 | Scheduled snapshots | 🔴 | Periodic snapshots |
 | Scheduled migrations | 🔴 | Maintenance window migrations |
-
----
-
-## Maintenance Operations
-
-| vCenter Feature | pCenter | Notes |
-|-----------------|---------|-------|
-| Maintenance mode | ✅ | With guest evacuation |
-| Pre-flight checks | ✅ | Validate before maintenance |
-| Evacuation progress | ✅ | Track migration progress |
-| QDevice monitoring | ✅ | Quorum status |
-| Rolling updates | 🔴 | Update hosts sequentially |
-| Host remediation | 🔴 | Apply patches/updates |
 
 ---
 
@@ -266,190 +243,205 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 
 | vCenter Feature | pCenter | Notes |
 |-----------------|---------|-------|
-| REST API | ✅ | Full HTTP/JSON API |
-| WebSocket API | ✅ | Real-time updates |
+| REST API | ✅ | 90+ endpoints |
+| WebSocket API | ✅ | Real-time state push |
 | CORS support | ✅ | Configurable origins |
-| API authentication | ✅ | Session-based |
-| PowerCLI equivalent | 🔴 | CLI/scripting interface |
-| SDK | 🔴 | Client libraries |
-| Webhooks | 🔴 | Event notifications |
+| Session auth | ✅ | Cookie-based sessions |
+| CSRF protection | ✅ | On state-changing operations |
+| Agent system | ✅ | Push-based pve-agent architecture |
+| OpenAPI spec | 🔴 | Published API documentation |
+| CLI tool | 🔴 | PowerCLI-equivalent scripting |
+| Webhooks | 🔴 | Event notifications to external systems |
+| Client SDK | 🔴 | Go/Python/JS client libraries |
 
 ---
 
-## Prioritized Roadmap
+## TODO: Prioritized Implementation Roadmap
 
-### Phase 1: Core Gaps (High Value, High Impact)
+### Phase 1 — High Value, Close the Biggest Gaps
 
-These features are expected by most users and represent significant gaps.
+| # | Feature | Effort | Value | Dependencies |
+|---|---------|--------|-------|--------------|
+| 1 | **RBAC (roles + object permissions)** | High | Critical | Extends auth.db |
+| 2 | **Alerting & notifications** | Medium | High | Uses existing metrics |
+| 3 | **Tags & custom attributes** | Low | High | New SQLite table |
+| 4 | **Affinity/anti-affinity rules** | Medium | High | Extends DRS engine |
+| 5 | **Scheduled tasks** | Medium | High | New scheduler + SQLite |
 
-| Feature | Effort | Business Value | Technical Complexity |
-|---------|--------|----------------|---------------------|
-| **Snapshots** | Medium | High | Medium |
-| **Alarms/Alerts** | Medium | High | Medium |
-| **Backup scheduling** | High | High | High |
-| **Full RBAC** | High | High | High |
+#### 1. RBAC
+- [ ] `roles` table: name, description, permissions bitmask
+- [ ] `role_assignments` table: user_id, role_id, object_type, object_id
+- [ ] Built-in roles: Admin, Operator, VM-Admin, Read-Only
+- [ ] Custom role creation UI
+- [ ] Permission check middleware (replace simple admin check)
+- [ ] Permission inheritance through folder hierarchy
+- [ ] UI: permission editor on object detail panels
 
-#### 1.1 Snapshots
-- Create/delete snapshots
-- Snapshot with/without memory
-- Revert to snapshot
-- Snapshot tree visualization
-- **API:** Proxmox already supports via `/nodes/{node}/qemu/{vmid}/snapshot`
+#### 2. Alerting & Notifications
+- [ ] `alarm_definitions` table: metric, condition, threshold, duration, severity
+- [ ] `alarm_state` table: current state per alarm per resource
+- [ ] Alarm evaluator goroutine (runs every 30s against metrics)
+- [ ] States: Normal → Warning → Critical (with hysteresis)
+- [ ] Notification channels: email, webhook, Slack
+- [ ] Active alarms dashboard panel
+- [ ] Alarm acknowledgment workflow
+- [ ] Per-object alarm assignment (or global defaults)
 
-#### 1.2 Alarms & Alerting
-- Define threshold conditions (CPU > 90% for 5min)
-- Alarm states: Normal, Warning, Critical
-- Notification channels: Email, webhook, Slack
-- Alarm dashboard showing active alerts
-- Alarm acknowledgment workflow
+#### 3. Tags & Custom Attributes
+- [ ] `tags` table: id, category, name, color
+- [ ] `tag_assignments` table: tag_id, object_type, object_id
+- [ ] Tag CRUD API endpoints
+- [ ] Tag categories (Environment, Owner, Purpose, etc.)
+- [ ] Tag picker component in object detail panels
+- [ ] Tag-based search/filtering in all list views
+- [ ] Bulk tag operations
 
-#### 1.3 Backup Scheduling
-- Schedule backup jobs (daily, weekly, custom cron)
-- Retention policies (keep last N, keep for N days)
-- Backup storage targets
-- Restore UI
-- **Note:** Proxmox Backup Server integration is ideal path
+#### 4. Affinity/Anti-Affinity Rules
+- [ ] `drs_rules` table: type (affinity/anti-affinity/host-pin), members
+- [ ] `drs_groups` table: group VMs or hosts for rule targeting
+- [ ] Rule CRUD API endpoints
+- [ ] DRS engine respects rules when generating recommendations
+- [ ] Rule conflict detection (affinity + anti-affinity on same VMs)
+- [ ] Rules UI in cluster settings
+- [ ] Rule violations shown in DRS panel
 
-#### 1.4 Full RBAC
-- Custom roles with granular permissions
-- Object-level permission assignment
-- Permission inheritance through folder hierarchy
-- Role templates (VM Admin, Read-Only, Operator)
-
----
-
-### Phase 2: Power User Features (Medium Value)
-
-Features that improve efficiency for experienced users.
-
-| Feature | Effort | Business Value | Technical Complexity |
-|---------|--------|----------------|---------------------|
-| **Affinity/Anti-affinity rules** | Medium | Medium | Medium |
-| **Automated DRS** | Medium | Medium | Medium |
-| **Resource pools** | Medium | Medium | Medium |
-| **Template library** | Medium | Medium | Low |
-| **Scheduled tasks** | Medium | Medium | Low |
-| **Tag management** | Low | Medium | Low |
-
-#### 2.1 DRS Affinity Rules
-- VM-VM affinity (keep together)
-- VM-VM anti-affinity (keep apart)
-- VM-Host affinity (pin to hosts)
-- Rule conflict detection
-- DRS respects rules in recommendations
-
-#### 2.2 Automated DRS
-- Partially automated: auto-place new VMs
-- Fully automated: execute migrations automatically
-- Configurable thresholds
-- Migration rate limiting
-
-#### 2.3 Resource Pools
-- Create/edit/delete pools
-- Assign VMs to pools
-- Set reservations, limits, shares
-- Pool hierarchy
-
-#### 2.4 Template Library
-- Convert VM to template
-- Clone from template
-- Template metadata (description, version)
-- Template categories
-
-#### 2.5 Scheduled Tasks
-- Schedule power operations
-- Schedule migrations
-- Schedule snapshots
-- Cron-like scheduling UI
+#### 5. Scheduled Tasks
+- [ ] `scheduled_tasks` table: type, target, cron_expression, params, enabled
+- [ ] `task_history` table: execution log
+- [ ] Go cron scheduler goroutine
+- [ ] Supported task types: power ops, snapshots, migrations
+- [ ] Schedule builder UI (cron expression helper)
+- [ ] Task execution history view
+- [ ] Enable/disable/delete schedules
 
 ---
 
-### Phase 3: Enterprise Features (Strategic Value)
+### Phase 2 — Power User Features
 
-Features for large-scale and enterprise deployments.
+| # | Feature | Effort | Value | Dependencies |
+|---|---------|--------|-------|--------------|
+| 6 | **Template library** | Medium | Medium | New inventory concept |
+| 7 | **Backup management** | High | Medium | PBS integration |
+| 8 | **Resource pools** | Medium | Medium | Proxmox pools API |
+| 9 | **Scheduled snapshots** | Low | Medium | Phase 1 scheduler |
+| 10 | **Power schedules** | Low | Medium | Phase 1 scheduler |
 
-| Feature | Effort | Business Value | Technical Complexity |
-|---------|--------|----------------|---------------------|
-| **LDAP/AD integration** | High | High | Medium |
-| **Storage vMotion** | High | Medium | High |
-| **Cross-cluster migration** | High | Medium | High |
-| **Distributed switch** | High | Low | High |
-| **Content library** | Medium | Medium | Medium |
-| **Webhooks/Events** | Medium | Medium | Low |
+#### 6. Template Library
+- [ ] Convert VM/CT to template (Proxmox API `POST .../template`)
+- [ ] Template listing with metadata (OS, description, size)
+- [ ] Clone from template with customization (name, resources)
+- [ ] Template categories and search
+- [ ] Cross-cluster template visibility
 
-#### 3.1 LDAP/AD Integration
-- Connect to Active Directory or LDAP
-- Group-based role assignment
-- SSO support
-- Sync users/groups
+#### 7. Backup Management
+- [ ] Proxmox Backup Server connection config
+- [ ] Backup job scheduling (vzdump wrapper)
+- [ ] Backup retention policies
+- [ ] Backup listing and browsing
+- [ ] Restore from backup UI
+- [ ] Backup job status and history
 
-#### 3.2 Storage vMotion
-- Move VM disks between storage pools
-- Online disk migration
-- Progress tracking
-- Storage load balancing
+#### 8. Resource Pools
+- [ ] List Proxmox pools (`GET /pools`)
+- [ ] Create/edit/delete pools
+- [ ] Assign VMs/CTs to pools
+- [ ] Pool resource limits display
+- [ ] Pool hierarchy (nested pools)
 
-#### 3.3 Cross-Cluster Migration
-- Migrate VMs between Proxmox clusters
-- Requires shared or replicated storage
-- Network considerations
-
----
-
-### Phase 4: Nice-to-Have (Lower Priority)
-
-| Feature | Notes |
-|---------|-------|
-| Distributed Power Management | Power off idle hosts |
-| Network I/O Control | QoS for VM traffic |
-| OVF/OVA import/export | Virtual appliance portability |
-| PowerCLI equivalent | CLI scripting |
-| Proactive HA | Pre-emptive migration on hardware alerts |
+#### 9-10. Scheduled Snapshots & Power Schedules
+- [ ] Snapshot schedule: target, frequency, retention count
+- [ ] Auto-delete old snapshots beyond retention
+- [ ] Power schedule: start/stop times per day of week
+- [ ] Holiday/exception handling
 
 ---
 
-## Implementation Notes
+### Phase 3 — Enterprise Features
 
-### Proxmox API Endpoints for Key Features
+| # | Feature | Effort | Value | Dependencies |
+|---|---------|--------|-------|--------------|
+| 11 | **LDAP/AD integration** | High | High | Extends auth |
+| 12 | **Storage vMotion** | High | Medium | Proxmox API support |
+| 13 | **Content library** | Medium | Medium | Phase 2 templates |
+| 14 | **Webhooks** | Medium | Medium | Activity system |
+| 15 | **OpenAPI spec** | Low | Medium | Documentation |
+| 16 | **Cross-cluster migration** | High | Medium | Shared storage required |
 
-**Snapshots:**
-```
-POST /nodes/{node}/qemu/{vmid}/snapshot
-GET  /nodes/{node}/qemu/{vmid}/snapshot
-POST /nodes/{node}/qemu/{vmid}/snapshot/{snapname}/rollback
-DELETE /nodes/{node}/qemu/{vmid}/snapshot/{snapname}
-```
+#### 11. LDAP/AD Integration
+- [ ] LDAP connection config (server, base DN, bind user)
+- [ ] LDAP authentication backend (go-ldap library)
+- [ ] Group-to-role mapping
+- [ ] User sync (periodic or on-login)
+- [ ] Mixed auth (local + LDAP users)
 
-**Backup:**
-```
-POST /nodes/{node}/vzdump
-GET  /nodes/{node}/tasks/{upid}/status
-GET  /storage/{storage}/content (type=backup)
-```
+#### 12. Storage vMotion
+- [ ] API for online disk migration between storage pools
+- [ ] Progress tracking via UPID
+- [ ] Storage load balancing recommendations
+
+#### 13. Content Library
+- [ ] Centralized ISO/template/OVA repository
+- [ ] Sync templates across clusters
+- [ ] Version tracking
+
+#### 14. Webhooks
+- [ ] `webhook_endpoints` table: URL, secret, event filters
+- [ ] Fire webhooks from activity log events
+- [ ] Retry with backoff on failure
+- [ ] Webhook test/ping endpoint
+
+#### 15. OpenAPI Spec
+- [ ] Generate OpenAPI 3.0 spec from route definitions
+- [ ] Swagger UI endpoint (`/api/docs`)
+- [ ] Keep spec in sync with code
+
+---
+
+### Phase 4 — Nice-to-Have
+
+| # | Feature | Effort | Notes |
+|---|---------|--------|-------|
+| 17 | CLI tool (pcenterctl) | Medium | Scripting interface |
+| 18 | Distributed Power Mgmt | Medium | Power off idle hosts |
+| 19 | Host profiles | High | Config templates |
+| 20 | Proactive HA | High | Hardware sensor integration |
+| 21 | Network I/O control | Medium | QoS for VM traffic |
+| 22 | OVF/OVA import/export | Medium | Appliance portability |
+| 23 | Distributed switch | High | Centralized network config |
+
+---
+
+## Proxmox API Endpoints for Key Features
 
 **Resource Pools:**
 ```
-GET  /pools
-POST /pools
-PUT  /pools/{poolid}
+GET    /pools
+POST   /pools
+PUT    /pools/{poolid}
 DELETE /pools/{poolid}
 ```
 
-### Architecture Considerations
+**Backup (vzdump):**
+```
+POST /nodes/{node}/vzdump
+GET  /nodes/{node}/tasks/{upid}/status
+GET  /storage/{storage}/content?content=backup
+```
 
-1. **Alarms:** Consider using a separate SQLite table for alarm definitions and state. Poll metrics and evaluate conditions on a configurable interval (e.g., every 30 seconds).
+**Templates:**
+```
+POST /nodes/{node}/qemu/{vmid}/template    # Convert to template
+POST /nodes/{node}/lxc/{vmid}/template
+```
 
-2. **RBAC:** Extend auth.db with `roles`, `permissions`, and `role_assignments` tables. Check permissions in API middleware.
+## Architecture Notes
 
-3. **Scheduled Tasks:** Use a scheduler (e.g., cron-like library in Go) with persistence in SQLite. Store job definitions and execution history.
+1. **RBAC:** Extend auth.db with `roles`, `permissions`, `role_assignments`. Check in API middleware. Propagate through folder hierarchy.
 
-4. **LDAP:** Use Go LDAP library (go-ldap/ldap). Support both simple bind and SASL authentication.
+2. **Alerting:** Separate SQLite table. Evaluator goroutine polls metrics every 30s. Use hysteresis to avoid flapping (e.g., trigger at 90%, clear at 80%).
 
----
+3. **Scheduled Tasks:** Use Go cron library (robfig/cron). Persist definitions in SQLite. Log execution history.
 
-## References
+4. **LDAP:** go-ldap/ldap library. Support simple bind + search. Cache group memberships.
 
-- [VMware DRS vs HA Explained](https://www.nakivo.com/blog/vmware-vsphere-ha-and-drs-compared-and-explained/)
-- [vCenter Roles and Permissions](https://kb.expedient.com/docs/vmware-vcenter-roles-and-permissions)
-- [VMware DRS Configuration](https://www.nakivo.com/blog/vmware-cluster-drs-configuration/)
-- [Proxmox VE API Documentation](https://pve.proxmox.com/pve-docs/api-viewer/)
+5. **Webhooks:** Fire async from activity logger. Use exponential backoff on failure. HMAC signature for verification.
