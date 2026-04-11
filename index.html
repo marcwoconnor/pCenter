@@ -1,1 +1,14 @@
-APT repo - will be populated by release workflow
+<!DOCTYPE html>
+<html>
+<head><title>pCenter APT Repository</title></head>
+<body>
+<h1>pCenter APT Repository</h1>
+<h2>Quick Install</h2>
+<pre>
+curl -fsSL https://marcwoconnor.github.io/pCenter/pcenter.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/pcenter.gpg
+echo "deb [signed-by=/usr/share/keyrings/pcenter.gpg] https://marcwoconnor.github.io/pCenter stable main" | sudo tee /etc/apt/sources.list.d/pcenter.list
+sudo apt update
+sudo apt install pcenter
+</pre>
+</body>
+</html>

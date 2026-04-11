@@ -1,0 +1,25 @@
+Origin: pCenter
+Label: pCenter
+Suite: stable
+Codename: stable
+Architectures: amd64
+Components: main
+Description: pCenter APT Repository
+Date: Sat, 11 Apr 2026 19:06:51 +0000
+Date: Sat, 11 Apr 2026 19:06:51 +0000
+MD5Sum:
+ bf138233bf0305d4bcfd58fc0d41b722              212 Release
+ cc923e47d707d6e859506395dd4b4c13              625 main/binary-amd64/Packages
+ 05fb9bb851cd284daa481a4aa938ed6b              465 main/binary-amd64/Packages.gz
+SHA1:
+ 628f3f74ae1862eeb349fc2683d599d137f89a50              212 Release
+ 532271b8547e34d85eedee3fb1f1b538c5ca85b9              625 main/binary-amd64/Packages
+ ae2d238b63c5eb78d47e0d1b1ba243f656466e2b              465 main/binary-amd64/Packages.gz
+SHA256:
+ 5efd41b50f1e987184fbc8c0382dae278dedfce5deb552e5deed4ebcd00c5fae              212 Release
+ 25dde66f5175829c6dc0ddaa8df18bc2c3683232b4ce19204cd5b06ab3d97fc7              625 main/binary-amd64/Packages
+ 625f508e5efe51760d0cd35beecb886125848c43413b9516f00f817b9d17e6f5              465 main/binary-amd64/Packages.gz
+SHA512:
+ 0445f6535d3cfd48866989c41a4198d92c6fd377ef6fb4702b761a0c1bf13d9f40027ac4fb1518240be12e4d405087dec4d38c21bb35e79b8793e10fb45cb7f7              212 Release
+ 9f394fbeecaab938e4f4bad792638199e59746c8a4afb039c20f7c39c05a2fe1e5a91b2c202a72af20478b3f0fe306ca09528d67b9faf5643652698369060803              625 main/binary-amd64/Packages
+ f86b96d8c39a5643489c4123392c181c091c06f5ff54c00212d60b6923861c2a8d28896103c79c6a924547c91e9a28a8256d05cc40c955c373acae3351526014              465 main/binary-amd64/Packages.gz
