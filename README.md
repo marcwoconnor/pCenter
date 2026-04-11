@@ -4,7 +4,7 @@ A datacenter management platform for Proxmox VE. Think vCenter, but for Proxmox.
 
 Built because PDM (Proxmox Datacenter Manager) links to individual node UIs instead of providing a unified experience. pCenter gives you one interface for everything: VMs, containers, storage, networking, HA, DRS, metrics, and maintenance — across all your clusters.
 
-![License](https://img.shields.io/badge/license-private-red)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
 ---
 
@@ -717,4 +717,4 @@ pCenter/
 
 ## License
 
-Private. Not open source.
+MIT
