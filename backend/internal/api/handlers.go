@@ -4167,6 +4167,79 @@ func (h *Handler) UpdateHost(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeleteHost deletes a host
+// MoveHostToCluster moves a standalone host into a cluster
+func (h *Handler) MoveHostToCluster(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+
+	hostID := r.PathValue("id")
+	var req struct {
+		ClusterID string `json:"cluster_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.ClusterID == "" {
+		writeError(w, http.StatusBadRequest, "cluster_id required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	// Get host details before move
+	host, err := h.inventory.GetHost(ctx, hostID)
+	if err != nil || host == nil {
+		writeError(w, http.StatusNotFound, "host not found")
+		return
+	}
+
+	if err := h.inventory.MoveHostToCluster(ctx, hostID, req.ClusterID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// If host is online, auto-activate the cluster and start polling
+	if host.Status == inventory.HostStatusOnline && host.TokenSecret != "" {
+		h.inventory.SetClusterStatus(ctx, req.ClusterID, inventory.ClusterStatusActive)
+
+		// Get cluster name for poller
+		cluster, _ := h.inventory.GetCluster(ctx, req.ClusterID)
+		if cluster != nil && h.poller != nil {
+			agentName := cluster.AgentName
+			if agentName == "" {
+				agentName = cluster.Name
+			}
+			if h.secrets != nil {
+				h.secrets[agentName] = host.TokenSecret
+			}
+			cfg := config.ClusterConfig{
+				Name:          agentName,
+				DiscoveryNode: host.Address,
+				TokenID:       host.TokenID,
+				TokenSecret:   host.TokenSecret,
+				Insecure:      host.Insecure,
+			}
+			h.poller.AddCluster(cfg)
+			slog.Info("started polling cluster after host move", "cluster", agentName, "host", host.Address)
+		}
+	}
+
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "host_move",
+			ResourceType: "host",
+			ResourceID:   hostID,
+			Details:      fmt.Sprintf(`{"cluster_id":"%s"}`, req.ClusterID),
+		})
+	}
+
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
 func (h *Handler) DeleteHost(w http.ResponseWriter, r *http.Request) {
 	if h.inventory == nil {
 		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
@@ -4602,15 +4675,21 @@ func (h *Handler) DeployAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get cluster for agent_name
-	cluster, err := h.inventory.GetCluster(ctx, host.ClusterID)
-	if err != nil || cluster == nil {
-		writeError(w, http.StatusInternalServerError, "failed to get cluster")
-		return
-	}
-	clusterName := cluster.AgentName
-	if clusterName == "" {
-		clusterName = cluster.Name
+	// Get cluster name for agent config
+	var clusterName string
+	if host.ClusterID != "" {
+		cluster, err := h.inventory.GetCluster(ctx, host.ClusterID)
+		if err != nil || cluster == nil {
+			writeError(w, http.StatusInternalServerError, "failed to get cluster")
+			return
+		}
+		clusterName = cluster.AgentName
+		if clusterName == "" {
+			clusterName = cluster.Name
+		}
+	} else {
+		// Standalone host - use synthetic cluster name
+		clusterName = "standalone:" + host.ID
 	}
 
 	// Extract hostname/IP from address (remove port if present)

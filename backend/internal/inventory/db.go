@@ -384,7 +384,7 @@ func (db *DB) prepareStatements() error {
 	}
 
 	db.stmtListHostsByCluster, err = db.conn.Prepare(`
-		SELECT id, cluster_id, address, token_id, insecure, status, error, node_name, created_at, updated_at
+		SELECT id, cluster_id, address, token_id, COALESCE(token_secret, ''), insecure, status, error, node_name, created_at, updated_at
 		FROM inventory_hosts WHERE cluster_id = ? ORDER BY created_at
 	`)
 	if err != nil {
@@ -933,7 +933,7 @@ func (db *DB) ListHostsByCluster(ctx context.Context, clusterID string) ([]Inven
 		var createdAt, updatedAt int64
 
 		if err := rows.Scan(
-			&h.ID, &h.ClusterID, &h.Address, &h.TokenID, &insecure,
+			&h.ID, &h.ClusterID, &h.Address, &h.TokenID, &h.TokenSecret, &insecure,
 			&status, &errMsg, &nodeName, &createdAt, &updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan host: %w", err)
@@ -974,6 +974,25 @@ func (db *DB) UpdateHost(ctx context.Context, id string, req UpdateHostRequest) 
 		return fmt.Errorf("host not found")
 	}
 
+	return nil
+}
+
+// MoveHostToCluster moves a host from standalone to a cluster (or between clusters)
+func (db *DB) MoveHostToCluster(ctx context.Context, hostID, clusterID string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	result, err := db.conn.ExecContext(ctx, `
+		UPDATE inventory_hosts SET cluster_id = ?, datacenter_id = NULL, updated_at = ? WHERE id = ?
+	`, clusterID, time.Now().Unix(), hostID)
+	if err != nil {
+		return fmt.Errorf("move host: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("host not found")
+	}
 	return nil
 }
 

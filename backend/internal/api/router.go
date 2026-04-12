@@ -361,6 +361,7 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("GET /api/inventory/hosts/{id}", h.GetHost)
 	protectedMux.HandleFunc("PUT /api/inventory/hosts/{id}", h.UpdateHost)
 	protectedMux.HandleFunc("DELETE /api/inventory/hosts/{id}", h.DeleteHost)
+	protectedMux.HandleFunc("POST /api/inventory/hosts/{id}/move", h.MoveHostToCluster)
 	protectedMux.HandleFunc("POST /api/inventory/hosts/{id}/activate", h.ActivateHost)
 	protectedMux.HandleFunc("POST /api/inventory/hosts/{id}/setup-ssh", h.SetupHostSSH)
 	protectedMux.HandleFunc("POST /api/inventory/hosts/{id}/deploy-agent", h.DeployAgent)

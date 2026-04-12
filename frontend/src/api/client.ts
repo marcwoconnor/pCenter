@@ -485,6 +485,8 @@ export const api = {
     fetchAPI<void>(`/inventory/hosts/${id}`, { method: 'PUT', body: JSON.stringify(req) }),
   deleteHost: (id: string) =>
     fetchAPI<void>(`/inventory/hosts/${id}`, { method: 'DELETE' }),
+  moveHostToCluster: (hostId: string, clusterId: string) =>
+    fetchAPI<{ status: string }>(`/inventory/hosts/${hostId}/move`, { method: 'POST', body: JSON.stringify({ cluster_id: clusterId }) }),
 
   // Host setup actions
   setupHostSSH: (id: string, sshPassword: string) =>

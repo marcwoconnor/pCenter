@@ -541,6 +541,26 @@ func (s *Service) DeleteHost(ctx context.Context, id string) error {
 	return nil
 }
 
+// MoveHostToCluster moves a standalone host into a cluster
+func (s *Service) MoveHostToCluster(ctx context.Context, hostID, clusterID string) error {
+	// Validate cluster exists
+	cluster, err := s.db.GetCluster(ctx, clusterID)
+	if err != nil || cluster == nil {
+		return fmt.Errorf("cluster not found")
+	}
+
+	if err := s.db.MoveHostToCluster(ctx, hostID, clusterID); err != nil {
+		return err
+	}
+
+	// Update cluster status if it was empty
+	if cluster.Status == ClusterStatusEmpty {
+		s.db.SetClusterStatus(ctx, clusterID, ClusterStatusPending)
+	}
+
+	return nil
+}
+
 // SetHostStatus updates a host's status
 func (s *Service) SetHostStatus(ctx context.Context, id string, status HostStatus, errMsg, nodeName string) error {
 	return s.db.SetHostStatus(ctx, id, status, errMsg, nodeName)
@@ -587,6 +607,10 @@ func (s *Service) GetClusterConfigs(ctx context.Context, secrets map[string]stri
 		}
 
 		secret := secrets[agentName]
+		// Fall back to persisted token_secret on the host record
+		if secret == "" && onlineHost.TokenSecret != "" {
+			secret = onlineHost.TokenSecret
+		}
 		if secret == "" {
 			continue
 		}

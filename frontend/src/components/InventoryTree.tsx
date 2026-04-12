@@ -843,7 +843,7 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
 
   // Get inventory host context menu items
   const getInventoryHostMenuItems = (host: InventoryHost, clusterOrDcName: string): MenuItem[] => {
-    return [
+    const items: MenuItem[] = [
       {
         label: 'Setup SSH Key',
         icon: '🔑',
@@ -872,22 +872,63 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
           }
         },
       },
-      {
-        label: 'Delete Host',
-        icon: '🗑️',
-        action: async () => {
-          if (confirm(`Remove host "${host.address}" from "${clusterOrDcName}"?`)) {
-            try {
-              await api.deleteHost(host.id);
-              fetchDatacenterTree();
-            } catch (err) {
-              alert('Failed to delete: ' + (err instanceof Error ? err.message : 'Unknown error'));
-            }
-          }
-        },
-        danger: true,
-      },
     ];
+
+    // "Move to Cluster" submenu — collect all clusters from all datacenters
+    const allClusters: { id: string; name: string }[] = [];
+    for (const dc of datacenters) {
+      for (const c of (dc.clusters || [])) {
+        if (c.id !== host.cluster_id) {
+          allClusters.push({ id: c.id, name: c.name });
+        }
+      }
+    }
+    for (const c of orphanClusters) {
+      if (c.id !== host.cluster_id) {
+        allClusters.push({ id: c.id, name: c.name });
+      }
+    }
+
+    if (allClusters.length > 0) {
+      items.push({
+        label: 'Move to Cluster',
+        icon: '🏛️',
+        action: () => {},
+        submenu: allClusters.map(c => ({
+          label: c.name,
+          icon: '🏛️',
+          action: async () => {
+            if (confirm(`Move "${host.node_name || host.address}" to cluster "${c.name}"?`)) {
+              try {
+                await api.moveHostToCluster(host.id, c.id);
+                fetchDatacenterTree();
+              } catch (err) {
+                alert('Move failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
+              }
+            }
+          },
+        })),
+      });
+    }
+
+    items.push({ label: '', action: () => {}, divider: true });
+    items.push({
+      label: 'Delete Host',
+      icon: '🗑️',
+      action: async () => {
+        if (confirm(`Remove host "${host.address}" from "${clusterOrDcName}"?`)) {
+          try {
+            await api.deleteHost(host.id);
+            fetchDatacenterTree();
+          } catch (err) {
+            alert('Failed to delete: ' + (err instanceof Error ? err.message : 'Unknown error'));
+          }
+        }
+      },
+      danger: true,
+    });
+
+    return items;
   };
 
   // Get root menu items for hosts view
