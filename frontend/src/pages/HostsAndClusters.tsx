@@ -2,11 +2,17 @@ import { useState } from 'react';
 import { Layout } from '../components/Layout';
 import { InventoryTree } from '../components/InventoryTree';
 import { ObjectDetail } from '../components/ObjectDetail';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { useCluster } from '../context/ClusterContext';
 
 export function HostsAndClusters() {
   const { selectedObject } = useCluster();
   const [filter, setFilter] = useState('');
+
+  // Key resets ErrorBoundary when selection changes so crashes don't persist
+  const errorKey = selectedObject
+    ? `${selectedObject.type}-${selectedObject.id}-${selectedObject.cluster || ''}`
+    : 'none';
 
   const sidebar = (
     <div className="flex flex-col h-full">
@@ -29,7 +35,9 @@ export function HostsAndClusters() {
     <Layout sidebar={sidebar}>
       <div className="flex-1 overflow-auto">
         {selectedObject ? (
-          <ObjectDetail />
+          <ErrorBoundary key={errorKey}>
+            <ObjectDetail />
+          </ErrorBoundary>
         ) : (
           <div className="flex-1 flex items-center justify-center text-gray-500">
             Select an object from the tree
