@@ -191,7 +191,7 @@ export function ObjectDetail() {
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={`px-4 py-2 text-sm font-medium transition-colors ${
-                activeTab === tab.id
+                activeTab === tab.id || (tab.id === 'vms' && (activeTab === 'only-vms' || activeTab === 'only-cts'))
                   ? 'text-blue-600 border-b-2 border-blue-600 bg-white dark:bg-gray-700'
                   : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
               }`}
@@ -237,7 +237,9 @@ export function ObjectDetail() {
             />
           </ErrorBoundary>
         )}
-        {activeTab === 'vms' && node && <NodeVMs nodeId={node.node} />}
+        {(activeTab === 'vms' || activeTab === 'only-vms' || activeTab === 'only-cts') && node && (
+          <NodeVMs nodeId={node.node} typeFilter={activeTab === 'only-vms' ? 'qemu' : activeTab === 'only-cts' ? 'lxc' : undefined} />
+        )}
         {activeTab === 'vms' && storageItem && <StorageVMs storage={storageItem} />}
         {activeTab === 'configure' && node && (
           <NodeConfigureTab node={node.node} cluster={node.cluster} />
@@ -971,21 +973,6 @@ function GuestSummary({ guest, tags, tagAssignments, onTagsChanged }: {
 
   return (
     <div className="space-y-4">
-      {/* Tags */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-        <h3 className="font-medium mb-3 text-gray-900 dark:text-white">Tags</h3>
-        <TagPicker
-          objectType={objectType}
-          objectId={objectId}
-          cluster={guest.cluster}
-          tags={assignedTags}
-          allTags={tags}
-          onAssign={handleAssign}
-          onUnassign={handleUnassign}
-          onTagCreated={() => onTagsChanged()}
-        />
-      </div>
-
     <div className="grid md:grid-cols-2 gap-4">
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
         <h3 className="font-medium mb-3 text-gray-900 dark:text-white">Status</h3>
@@ -1043,6 +1030,21 @@ function GuestSummary({ guest, tags, tagAssignments, onTagsChanged }: {
         </div>
       </div>
     </div>
+
+      {/* Tags */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+        <h3 className="font-medium mb-3 text-gray-900 dark:text-white">Tags</h3>
+        <TagPicker
+          objectType={objectType}
+          objectId={objectId}
+          cluster={guest.cluster}
+          tags={assignedTags}
+          allTags={tags}
+          onAssign={handleAssign}
+          onUnassign={handleUnassign}
+          onTagCreated={() => onTagsChanged()}
+        />
+      </div>
     </div>
   );
 }
@@ -1098,18 +1100,18 @@ function StorageSummary({ storage }: { storage: Storage }) {
   );
 }
 
-function NodeVMs({ nodeId }: { nodeId: string }) {
-  const { guests, performAction, setSelectedObject } = useCluster();
+function NodeVMs({ nodeId, typeFilter }: { nodeId: string; typeFilter?: 'qemu' | 'lxc' }) {
+  const { guests, setSelectedObject, tags, tagAssignments } = useCluster();
   const nodeGuests = useMemo(
     () => guests
-      .filter((g) => g.node === nodeId)
+      .filter((g) => g.node === nodeId && (!typeFilter || g.type === typeFilter))
       .sort((a, b) => {
         // Running first, then by name
         if (a.status === 'running' && b.status !== 'running') return -1;
         if (a.status !== 'running' && b.status === 'running') return 1;
         return a.name.localeCompare(b.name);
       }),
-    [guests, nodeId]
+    [guests, nodeId, typeFilter]
   );
 
   const handleClick = (g: typeof nodeGuests[0]) => {
@@ -1131,105 +1133,42 @@ function NodeVMs({ nodeId }: { nodeId: string }) {
   }
 
   return (
-    <div className="space-y-2">
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] gap-2">
       {nodeGuests.map((g) => {
-        const cpuPercent = g.status === 'running' ? g.cpu * 100 : 0;
-        const memPercent = g.maxmem > 0 ? (g.mem / g.maxmem) * 100 : 0;
         const isRunning = g.status === 'running';
+        const isVM = g.type === 'qemu';
+        const objType = isVM ? 'vm' : 'ct';
+        const guestTags = tagAssignments
+          .filter(a => a.object_type === objType && a.object_id === String(g.vmid) && a.cluster === g.cluster)
+          .map(a => tags.find(t => t.id === a.tag_id))
+          .filter(Boolean);
 
         return (
           <div
             key={g.vmid}
-            className={`bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3
-              hover:border-blue-400 dark:hover:border-blue-500 cursor-pointer transition-colors
-              ${!isRunning ? 'opacity-60' : ''}`}
             onClick={() => handleClick(g)}
+            className={`rounded-lg border-2 p-2 cursor-pointer transition-all hover:scale-105 hover:shadow-md relative
+              ${isRunning
+                ? 'border-green-500/40 bg-green-50 dark:bg-green-900/10'
+                : 'border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/50 opacity-60'
+              }`}
+            title={`${g.name} (${g.vmid}) - ${g.status}`}
           >
-            <div className="flex items-center gap-4">
-              {/* Icon and Name */}
-              <div className="flex items-center gap-2 min-w-[200px]">
-                <span className="text-lg" title={g.type === 'qemu' ? 'Virtual Machine' : 'Container'}>
-                  {g.type === 'qemu' ? '💻' : '📦'}
-                </span>
-                <div>
-                  <div className="font-medium text-gray-900 dark:text-white text-sm">
-                    {g.name}
-                  </div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">
-                    ID: {g.vmid}
-                  </div>
-                </div>
-              </div>
-
-              {/* Status */}
-              <div className="flex items-center gap-1.5 min-w-[80px]">
-                <span className={`w-2 h-2 rounded-full ${isRunning ? 'bg-green-500' : 'bg-gray-400'}`} />
-                <span className={`text-xs ${isRunning ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
-                  {g.status}
-                </span>
-              </div>
-
-              {/* CPU */}
-              <div className="flex-1 min-w-[120px]">
-                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
-                  <span>CPU</span>
-                  <span>{isRunning ? `${cpuPercent.toFixed(0)}%` : '-'}</span>
-                </div>
-                <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      cpuPercent > 80 ? 'bg-red-500' : cpuPercent > 50 ? 'bg-yellow-500' : 'bg-blue-500'
-                    }`}
-                    style={{ width: isRunning ? `${Math.min(cpuPercent, 100)}%` : '0%' }}
-                  />
-                </div>
-              </div>
-
-              {/* Memory */}
-              <div className="flex-1 min-w-[120px]">
-                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
-                  <span>Memory</span>
-                  <span>{isRunning ? `${memPercent.toFixed(0)}%` : '-'}</span>
-                </div>
-                <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      memPercent > 80 ? 'bg-red-500' : memPercent > 50 ? 'bg-yellow-500' : 'bg-green-500'
-                    }`}
-                    style={{ width: isRunning ? `${Math.min(memPercent, 100)}%` : '0%' }}
-                  />
-                </div>
-              </div>
-
-              {/* Actions */}
-              <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
-                {g.status === 'stopped' ? (
-                  <button
-                    onClick={() => performAction(g.type === 'qemu' ? 'vm' : 'ct', g.vmid, 'start')}
-                    className="px-2.5 py-1 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
-                  >
-                    Start
-                  </button>
-                ) : (
-                  <>
-                    <button
-                      onClick={() => performAction(g.type === 'qemu' ? 'vm' : 'ct', g.vmid, 'shutdown')}
-                      className="px-2.5 py-1 text-xs bg-gray-600 hover:bg-gray-700 text-white rounded transition-colors"
-                      title="Graceful shutdown"
-                    >
-                      Shutdown
-                    </button>
-                    <button
-                      onClick={() => performAction(g.type === 'qemu' ? 'vm' : 'ct', g.vmid, 'stop')}
-                      className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
-                      title="Force stop"
-                    >
-                      Stop
-                    </button>
-                  </>
-                )}
-              </div>
+            <div className="flex items-center gap-1 mb-1">
+              <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isRunning ? 'bg-green-500' : 'bg-gray-400'}`} />
+              <span className="text-[10px] text-gray-400 dark:text-gray-500">{isVM ? 'VM' : 'CT'}</span>
             </div>
+            <div className="font-medium text-xs text-gray-900 dark:text-white truncate leading-tight">
+              {g.name}
+            </div>
+            <div className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">{g.vmid}</div>
+            {guestTags.length > 0 && (
+              <div className="absolute bottom-1.5 right-1.5 flex gap-0.5">
+                {guestTags.map(t => (
+                  <span key={t!.id} className="w-2 h-2 rounded-full" style={{ backgroundColor: t!.color }} title={`${t!.category}: ${t!.name}`} />
+                ))}
+              </div>
+            )}
           </div>
         );
       })}

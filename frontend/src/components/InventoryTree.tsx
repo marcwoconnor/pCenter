@@ -1137,12 +1137,14 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
                 count={nodeGuests.length}
               >
                 {vms.length > 0 && (
-                  <TreeNode icon="📁" label="Virtual Machines" count={vms.length} defaultExpanded>
+                  <TreeNode icon="📁" label="Virtual Machines" count={vms.length} defaultExpanded
+                    onClick={() => setSelectedObject({ type: 'node', id: node.node, name: node.node, cluster: node.cluster, defaultTab: 'only-vms' })}>
                     {vms.map((vm) => renderGuestNode(vm, 'vm', treeView))}
                   </TreeNode>
                 )}
                 {cts.length > 0 && (
-                  <TreeNode icon="📁" label="Containers" count={cts.length} defaultExpanded>
+                  <TreeNode icon="📁" label="Containers" count={cts.length} defaultExpanded
+                    onClick={() => setSelectedObject({ type: 'node', id: node.node, name: node.node, cluster: node.cluster, defaultTab: 'only-cts' })}>
                     {cts.map((ct) => renderGuestNode(ct, 'ct', treeView))}
                   </TreeNode>
                 )}
@@ -1267,12 +1269,14 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
                 count={nodeGuests.length}
               >
                 {vms.length > 0 && (
-                  <TreeNode icon="📁" label="Virtual Machines" count={vms.length} defaultExpanded>
+                  <TreeNode icon="📁" label="Virtual Machines" count={vms.length} defaultExpanded
+                    onClick={() => setSelectedObject({ type: 'node', id: node.node, name: node.node, cluster: node.cluster, defaultTab: 'only-vms' })}>
                     {vms.map((vm) => renderGuestNode(vm, 'vm', 'hosts'))}
                   </TreeNode>
                 )}
                 {cts.length > 0 && (
-                  <TreeNode icon="📁" label="Containers" count={cts.length} defaultExpanded>
+                  <TreeNode icon="📁" label="Containers" count={cts.length} defaultExpanded
+                    onClick={() => setSelectedObject({ type: 'node', id: node.node, name: node.node, cluster: node.cluster, defaultTab: 'only-cts' })}>
                     {cts.map((ct) => renderGuestNode(ct, 'ct', 'hosts'))}
                   </TreeNode>
                 )}
@@ -1476,12 +1480,14 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
                   count={nodeGuests.length}
                 >
                   {vms.length > 0 && (
-                    <TreeNode icon="📁" label="Virtual Machines" count={vms.length} defaultExpanded>
+                    <TreeNode icon="📁" label="Virtual Machines" count={vms.length} defaultExpanded
+                      onClick={() => setSelectedObject({ type: 'node', id: node.node, name: node.node, defaultTab: 'only-vms' })}>
                       {vms.map((vm) => renderGuestNode(vm, 'vm', 'hosts'))}
                     </TreeNode>
                   )}
                   {cts.length > 0 && (
-                    <TreeNode icon="📁" label="Containers" count={cts.length} defaultExpanded>
+                    <TreeNode icon="📁" label="Containers" count={cts.length} defaultExpanded
+                      onClick={() => setSelectedObject({ type: 'node', id: node.node, name: node.node, defaultTab: 'only-cts' })}>
                       {cts.map((ct) => renderGuestNode(ct, 'ct', 'hosts'))}
                     </TreeNode>
                   )}
