@@ -15,6 +15,7 @@ import (
 
 	"github.com/moconnor/pcenter/internal/activity"
 	"github.com/moconnor/pcenter/internal/alarms"
+	"github.com/moconnor/pcenter/internal/drs"
 	"github.com/moconnor/pcenter/internal/agent"
 	"github.com/moconnor/pcenter/internal/api"
 	"github.com/moconnor/pcenter/internal/auth"
@@ -283,6 +284,19 @@ func main() {
 	tagsService := tags.NewService(tagsDB)
 	handler.SetTagsService(tagsService)
 	slog.Info("tags enabled", "database", cfg.Tags.DatabasePath)
+
+	// DRS Rules
+	rulesDB, err := drs.OpenRulesDB(cfg.DRSRules.DatabasePath)
+	if err != nil {
+		slog.Error("failed to open DRS rules database", "error", err)
+		os.Exit(1)
+	}
+	defer rulesDB.Close()
+	if p != nil {
+		p.SetDRSRulesDB(rulesDB)
+	}
+	handler.SetDRSRulesDB(rulesDB)
+	slog.Info("DRS rules enabled", "database", cfg.DRSRules.DatabasePath)
 
 	// Alarms
 	var alarmService *alarms.Service

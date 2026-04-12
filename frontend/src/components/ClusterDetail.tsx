@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, type FormEvent } from 'react';
 import { useCluster } from '../context/ClusterContext';
-import { formatBytes } from '../api/client';
+import { api, formatBytes } from '../api/client';
 import { DRSPanel } from './DRSPanel';
-import type { Node, Guest } from '../types';
+import type { Node, Guest, DRSRule, DRSRuleViolation } from '../types';
 
 interface Tab { id: string; label: string; }
 const clusterTabs: Tab[] = [
@@ -70,7 +70,12 @@ export function ClusterDetail({ clusterName, displayName, defaultTab }: { cluste
       <div className="flex-1 overflow-auto p-4 bg-gray-50 dark:bg-gray-900">
         {activeTab === 'summary' && <ClusterSummary nodes={cn} guests={cg} ha={cluster?.ha} />}
         {activeTab === 'ha' && <ClusterHA clusterName={clusterName} />}
-        {activeTab === 'drs' && <DRSPanel recommendations={cd} onRefresh={() => window.location.reload()} />}
+        {activeTab === 'drs' && (
+          <div className="space-y-6">
+            <DRSPanel recommendations={cd} onRefresh={() => window.location.reload()} />
+            <DRSRulesPanel clusterName={clusterName} guests={cg} nodes={cn} />
+          </div>
+        )}
         {activeTab === 'configure' && <ClusterConfigure clusterName={clusterName} cluster={cluster} />}
       </div>
     </div>
@@ -232,6 +237,191 @@ function ClusterConfigure({ clusterName, cluster }: { clusterName: string; clust
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
         <h3 className="font-medium mb-4 text-gray-900 dark:text-white pb-2 border-b border-gray-200 dark:border-gray-700">DRS</h3>
         <p className="text-sm text-gray-500">DRS settings apply globally. Configure under pCenter → Configure → DRS.</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── DRS Rules Panel ────────────────────────────────────────────────────────
+
+function DRSRulesPanel({ clusterName, guests, nodes }: { clusterName: string; guests: Guest[]; nodes: Node[] }) {
+  const [rules, setRules] = useState<DRSRule[]>([]);
+  const [violations, setViolations] = useState<DRSRuleViolation[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Create form
+  const [name, setName] = useState('');
+  const [ruleType, setRuleType] = useState<string>('anti-affinity');
+  const [selectedMembers, setSelectedMembers] = useState<number[]>([]);
+  const [hostNode, setHostNode] = useState('');
+  const [creating, setCreating] = useState(false);
+
+  const load = () => {
+    Promise.all([
+      api.getDRSRules(clusterName),
+      api.getDRSViolations(clusterName),
+    ]).then(([r, v]) => {
+      setRules(r || []);
+      setViolations(v || []);
+    }).catch(() => {}).finally(() => setLoading(false));
+  };
+
+  useEffect(load, [clusterName]);
+
+  // Build guest list for member picker
+  const allGuests = guests.filter(g => g.status === 'running').sort((a, b) => a.vmid - b.vmid);
+
+  const handleCreate = async (e: FormEvent) => {
+    e.preventDefault();
+    if (selectedMembers.length === 0) { setError('Select at least one VM/CT'); return; }
+    setCreating(true); setError(null);
+    try {
+      await api.createDRSRule(clusterName, {
+        name, type: ruleType, members: selectedMembers,
+        host_node: ruleType === 'host-pin' ? hostNode : undefined,
+      });
+      setShowCreate(false); setName(''); setSelectedMembers([]); load();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Failed'); }
+    finally { setCreating(false); }
+  };
+
+  const handleDelete = (id: string) => api.deleteDRSRule(clusterName, id).then(load);
+  const handleToggle = (rule: DRSRule) => api.updateDRSRule(clusterName, rule.id, { ...rule, enabled: !rule.enabled }).then(load);
+
+  const toggleMember = (vmid: number) => {
+    setSelectedMembers(prev => prev.includes(vmid) ? prev.filter(v => v !== vmid) : [...prev, vmid]);
+  };
+
+  const getGuestName = (vmid: number) => {
+    const g = guests.find(g => g.vmid === vmid);
+    return g ? `${vmid} (${g.name})` : String(vmid);
+  };
+
+  const ruleTypeColors: Record<string, string> = {
+    'affinity': 'bg-blue-500/20 text-blue-400',
+    'anti-affinity': 'bg-orange-500/20 text-orange-400',
+    'host-pin': 'bg-purple-500/20 text-purple-400',
+  };
+
+  if (loading) return <div className="text-gray-500">Loading rules...</div>;
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+      <div className="flex justify-between items-center mb-4">
+        <div>
+          <h3 className="font-medium text-gray-900 dark:text-white">Affinity Rules</h3>
+          <p className="text-xs text-gray-500">Control VM/CT placement across cluster nodes</p>
+        </div>
+        <button onClick={() => setShowCreate(!showCreate)}
+          className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+          {showCreate ? 'Cancel' : '+ New Rule'}
+        </button>
+      </div>
+
+      {error && <div className="mb-3 p-2 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 text-sm rounded">{error}</div>}
+
+      {/* Violations */}
+      {violations.length > 0 && (
+        <div className="mb-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded">
+          <div className="text-sm font-medium text-yellow-700 dark:text-yellow-400 mb-1">Rule Violations ({violations.length})</div>
+          {violations.map((v, i) => (
+            <div key={i} className="text-xs text-yellow-600 dark:text-yellow-500">
+              <span className="font-medium">{v.rule_name}:</span> {v.message}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Create form */}
+      {showCreate && (
+        <form onSubmit={handleCreate} className="mb-4 p-3 border border-gray-200 dark:border-gray-700 rounded space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Rule Name</label>
+              <input type="text" value={name} onChange={e => setName(e.target.value)} required
+                className="w-full px-3 py-1.5 text-sm border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                placeholder="Keep DB replicas apart" />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Type</label>
+              <select value={ruleType} onChange={e => setRuleType(e.target.value)}
+                className="w-full px-3 py-1.5 text-sm border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                <option value="anti-affinity">Anti-Affinity (keep apart)</option>
+                <option value="affinity">Affinity (keep together)</option>
+                <option value="host-pin">Host Pin (lock to host)</option>
+              </select>
+            </div>
+          </div>
+
+          {ruleType === 'host-pin' && (
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Pin to Host</label>
+              <select value={hostNode} onChange={e => setHostNode(e.target.value)} required
+                className="w-full px-3 py-1.5 text-sm border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                <option value="">Select host...</option>
+                {nodes.map(n => <option key={n.node} value={n.node}>{n.node}</option>)}
+              </select>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Members (click to select VMs/CTs)</label>
+            <div className="max-h-40 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded p-1 space-y-0.5">
+              {allGuests.map(g => (
+                <button key={g.vmid} type="button" onClick={() => toggleMember(g.vmid)}
+                  className={`w-full text-left px-2 py-1 text-sm rounded ${
+                    selectedMembers.includes(g.vmid)
+                      ? 'bg-blue-600 text-white'
+                      : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300'
+                  }`}>
+                  {g.vmid} — {g.name} <span className="text-xs opacity-60">({g.type === 'qemu' ? 'VM' : 'CT'})</span>
+                </button>
+              ))}
+            </div>
+            {selectedMembers.length > 0 && (
+              <div className="text-xs text-gray-500 mt-1">{selectedMembers.length} selected</div>
+            )}
+          </div>
+
+          <button type="submit" disabled={creating}
+            className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50">
+            {creating ? 'Creating...' : 'Create Rule'}
+          </button>
+        </form>
+      )}
+
+      {/* Rules list */}
+      <div className="space-y-2">
+        {rules.length === 0 && !showCreate && (
+          <p className="text-gray-500 text-sm text-center py-4">No affinity rules configured</p>
+        )}
+        {rules.map(rule => (
+          <div key={rule.id} className="border border-gray-200 dark:border-gray-700 rounded p-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <button onClick={() => handleToggle(rule)}
+                  className={`w-9 h-5 rounded-full relative transition-colors ${rule.enabled ? 'bg-blue-600' : 'bg-gray-400'}`}>
+                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${rule.enabled ? 'left-4' : 'left-0.5'}`} />
+                </button>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-sm text-gray-900 dark:text-white">{rule.name}</span>
+                    <span className={`px-1.5 py-0.5 text-xs rounded ${ruleTypeColors[rule.type] || 'bg-gray-500/20 text-gray-400'}`}>
+                      {rule.type}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    Members: {rule.members.map(m => getGuestName(m)).join(', ')}
+                    {rule.host_node && <span> &middot; Host: {rule.host_node}</span>}
+                  </div>
+                </div>
+              </div>
+              <button onClick={() => handleDelete(rule.id)} className="text-xs text-red-500 hover:text-red-700">Delete</button>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

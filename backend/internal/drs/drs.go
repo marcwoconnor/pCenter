@@ -1,6 +1,7 @@
 package drs
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"math"
@@ -14,8 +15,9 @@ import (
 
 // Scheduler analyzes cluster load and generates migration recommendations
 type Scheduler struct {
-	cfg   config.DRSConfig
-	store *state.Store
+	cfg     config.DRSConfig
+	store   *state.Store
+	rulesDB *RulesDB
 }
 
 // NewScheduler creates a new DRS scheduler
@@ -24,6 +26,11 @@ func NewScheduler(cfg config.DRSConfig, store *state.Store) *Scheduler {
 		cfg:   cfg,
 		store: store,
 	}
+}
+
+// SetRulesDB sets the rules database for affinity-aware scheduling
+func (s *Scheduler) SetRulesDB(db *RulesDB) {
+	s.rulesDB = db
 }
 
 // NodeLoad holds calculated load metrics for a node
@@ -181,11 +188,11 @@ func (s *Scheduler) generateRecommendations(clusterName string, loads []NodeLoad
 	// Generate recommendations from overloaded nodes
 	for _, src := range overloaded {
 		// Try to find a suitable guest to migrate
-		candidates := s.selectMigrationCandidates(src)
+		candidates := s.selectMigrationCandidates(src, clusterName)
 
 		for _, candidate := range candidates {
-			// Find best target node
-			target := s.selectTargetNode(candidate, underloaded)
+			// Find best target node (respects affinity rules)
+			target := s.selectTargetNode(candidate, underloaded, clusterName)
 			if target == nil {
 				continue
 			}
@@ -242,13 +249,18 @@ type migrationCandidate struct {
 }
 
 // selectMigrationCandidates picks guests suitable for migration
-func (s *Scheduler) selectMigrationCandidates(src NodeLoad) []migrationCandidate {
+func (s *Scheduler) selectMigrationCandidates(src NodeLoad, clusterName string) []migrationCandidate {
 	var candidates []migrationCandidate
+	rules := s.getRules(clusterName)
 
 	// Add VMs (prefer smaller VMs for quicker migration)
 	for _, vm := range src.VMs {
 		if vm.Template {
 			continue // Skip templates
+		}
+		// Skip host-pinned VMs — they must stay on this node
+		if s.isHostPinned(vm.VMID, rules) {
+			continue
 		}
 		candidates = append(candidates, migrationCandidate{
 			vmid:    vm.VMID,
@@ -282,16 +294,100 @@ func (s *Scheduler) selectMigrationCandidates(src NodeLoad) []migrationCandidate
 	return candidates
 }
 
-// selectTargetNode picks the best destination for a guest
-func (s *Scheduler) selectTargetNode(candidate migrationCandidate, targets []NodeLoad) *NodeLoad {
+// selectTargetNode picks the best destination for a guest, respecting affinity rules
+func (s *Scheduler) selectTargetNode(candidate migrationCandidate, targets []NodeLoad, clusterName string) *NodeLoad {
+	rules := s.getRules(clusterName)
+
 	for i := range targets {
 		target := &targets[i]
-		// Simple check: ensure target won't become overloaded
-		if target.CPUUsage < s.cfg.CPUThreshold*0.8 && target.MemUsage < s.cfg.MemThreshold*0.8 {
-			return target
+		// Check capacity
+		if target.CPUUsage >= s.cfg.CPUThreshold*0.8 || target.MemUsage >= s.cfg.MemThreshold*0.8 {
+			continue
 		}
+		// Check anti-affinity: don't move to a node that has a member of the same anti-affinity group
+		if s.violatesAntiAffinity(candidate.vmid, target.Node, rules, targets) {
+			continue
+		}
+		// Check host-pin: only allow the pinned host as target
+		if pinnedHost := s.getPinnedHost(candidate.vmid, rules); pinnedHost != "" && target.Node != pinnedHost {
+			continue
+		}
+		return target
 	}
 	return nil
+}
+
+// violatesAntiAffinity checks if placing vmid on targetNode would violate any anti-affinity rule
+func (s *Scheduler) violatesAntiAffinity(vmid int, targetNode string, rules []Rule, loads []NodeLoad) bool {
+	for _, rule := range rules {
+		if !rule.Enabled || rule.Type != RuleAntiAffinity {
+			continue
+		}
+		if !containsInt(rule.Members, vmid) {
+			continue
+		}
+		// Check if any other member is already on the target node
+		for _, otherVMID := range rule.Members {
+			if otherVMID == vmid {
+				continue
+			}
+			for _, load := range loads {
+				if load.Node != targetNode {
+					continue
+				}
+				for _, vm := range load.VMs {
+					if vm.VMID == otherVMID {
+						return true
+					}
+				}
+				for _, ct := range load.CTs {
+					if ct.VMID == otherVMID {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// getPinnedHost returns the host a VM is pinned to, or "" if not pinned
+func (s *Scheduler) getPinnedHost(vmid int, rules []Rule) string {
+	for _, rule := range rules {
+		if !rule.Enabled || rule.Type != RuleHostPin {
+			continue
+		}
+		if containsInt(rule.Members, vmid) {
+			return rule.HostNode
+		}
+	}
+	return ""
+}
+
+// isHostPinned returns true if the VMID is pinned to a specific host
+func (s *Scheduler) isHostPinned(vmid int, rules []Rule) bool {
+	return s.getPinnedHost(vmid, rules) != ""
+}
+
+func (s *Scheduler) getRules(clusterName string) []Rule {
+	if s.rulesDB == nil {
+		return nil
+	}
+	rules, err := s.rulesDB.ListRules(context.Background(), clusterName)
+	if err != nil {
+		slog.Error("DRS: failed to load rules", "error", err)
+		return nil
+	}
+	return rules
+}
+
+func containsInt(slice []int, val int) bool {
+	for _, v := range slice {
+		if v == val {
+			return true
+		}
+	}
+	return false
 }
 
 // formatReason creates a human-readable reason
@@ -320,6 +416,96 @@ func (s *Scheduler) calculatePriority(src NodeLoad) int {
 	default:
 		return 1
 	}
+}
+
+// CheckViolations detects current rule violations for a cluster
+func (s *Scheduler) CheckViolations(clusterName string) []RuleViolation {
+	if s.rulesDB == nil {
+		return nil
+	}
+
+	rules, err := s.rulesDB.ListRules(context.Background(), clusterName)
+	if err != nil || len(rules) == 0 {
+		return nil
+	}
+
+	cs, ok := s.store.GetCluster(clusterName)
+	if !ok {
+		return nil
+	}
+
+	// Build vmid -> node map
+	vmNode := make(map[int]string)
+	for _, vm := range cs.GetVMs() {
+		vmNode[vm.VMID] = vm.Node
+	}
+	for _, ct := range cs.GetContainers() {
+		vmNode[ct.VMID] = ct.Node
+	}
+
+	var violations []RuleViolation
+
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+
+		switch rule.Type {
+		case RuleAntiAffinity:
+			// Check if any two members are on the same node
+			nodeMembers := make(map[string][]int) // node -> VMIDs on that node
+			for _, vmid := range rule.Members {
+				if node, ok := vmNode[vmid]; ok {
+					nodeMembers[node] = append(nodeMembers[node], vmid)
+				}
+			}
+			for node, members := range nodeMembers {
+				if len(members) > 1 {
+					violations = append(violations, RuleViolation{
+						RuleID:   rule.ID,
+						RuleName: rule.Name,
+						RuleType: string(rule.Type),
+						Cluster:  clusterName,
+						Message:  fmt.Sprintf("VMs %v are on the same node %s", members, node),
+					})
+				}
+			}
+
+		case RuleAffinity:
+			// Check if all members are on the same node
+			nodes := make(map[string]bool)
+			for _, vmid := range rule.Members {
+				if node, ok := vmNode[vmid]; ok {
+					nodes[node] = true
+				}
+			}
+			if len(nodes) > 1 {
+				violations = append(violations, RuleViolation{
+					RuleID:   rule.ID,
+					RuleName: rule.Name,
+					RuleType: string(rule.Type),
+					Cluster:  clusterName,
+					Message:  fmt.Sprintf("Members are spread across %d nodes (should be co-located)", len(nodes)),
+				})
+			}
+
+		case RuleHostPin:
+			// Check if pinned VMs are on the right host
+			for _, vmid := range rule.Members {
+				if node, ok := vmNode[vmid]; ok && node != rule.HostNode {
+					violations = append(violations, RuleViolation{
+						RuleID:   rule.ID,
+						RuleName: rule.Name,
+						RuleType: string(rule.Type),
+						Cluster:  clusterName,
+						Message:  fmt.Sprintf("VM %d is on %s but should be pinned to %s", vmid, node, rule.HostNode),
+					})
+				}
+			}
+		}
+	}
+
+	return violations
 }
 
 func generateRecID(cluster string, n int) string {

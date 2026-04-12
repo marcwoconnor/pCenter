@@ -517,6 +517,26 @@ export interface NotificationChannel {
   enabled: boolean;
 }
 
+// DRS Rules types
+
+export interface DRSRule {
+  id: string;
+  cluster: string;
+  name: string;
+  type: 'affinity' | 'anti-affinity' | 'host-pin';
+  enabled: boolean;
+  members: number[];
+  host_node: string;
+}
+
+export interface DRSRuleViolation {
+  rule_id: string;
+  rule_name: string;
+  rule_type: string;
+  cluster: string;
+  message: string;
+}
+
 // Configuration types for VM/Container settings
 
 export interface VMConfig {

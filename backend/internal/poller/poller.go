@@ -54,6 +54,18 @@ func New(store *state.Store, interval time.Duration, drsCfg config.DRSConfig) *P
 	return p
 }
 
+// SetDRSRulesDB sets the rules database on the DRS scheduler
+func (p *Poller) SetDRSRulesDB(db *drs.RulesDB) {
+	if p.drsScheduler != nil {
+		p.drsScheduler.SetRulesDB(db)
+	}
+}
+
+// GetDRSScheduler returns the DRS scheduler (for violation checking)
+func (p *Poller) GetDRSScheduler() *drs.Scheduler {
+	return p.drsScheduler
+}
+
 // AddCluster adds a cluster to poll
 func (p *Poller) AddCluster(cfg config.ClusterConfig) *ClusterPoller {
 	clusterStore := p.store.GetOrCreateCluster(cfg.Name)

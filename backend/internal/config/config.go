@@ -37,8 +37,16 @@ type Config struct {
 	// Alarms settings
 	Alarms AlarmsConfig `yaml:"alarms"`
 
+	// DRS Rules settings
+	DRSRules DRSRulesConfig `yaml:"drs_rules"`
+
 	// Legacy: flat nodes array (auto-converted to single cluster)
 	Nodes []NodeConfig `yaml:"nodes,omitempty"`
+}
+
+// DRSRulesConfig holds DRS rule settings
+type DRSRulesConfig struct {
+	DatabasePath string `yaml:"database_path"`
 }
 
 // AlarmsConfig holds alerting settings
@@ -304,6 +312,11 @@ func Load(path string) (*Config, error) {
 	// Tags defaults
 	if cfg.Tags.DatabasePath == "" {
 		cfg.Tags.DatabasePath = "data/tags.db"
+	}
+
+	// DRS Rules defaults
+	if cfg.DRSRules.DatabasePath == "" {
+		cfg.DRSRules.DatabasePath = "data/drs_rules.db"
 	}
 
 	// Alarms defaults

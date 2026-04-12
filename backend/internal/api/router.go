@@ -211,6 +211,13 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/drs/apply/{id}", h.ApplyDRSRecommendation)
 	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/drs/recommendations/{id}", h.DismissDRSRecommendation)
 
+	// DRS Rules (affinity/anti-affinity)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/drs/rules", h.GetDRSRules)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/drs/rules", h.CreateDRSRule)
+	protectedMux.HandleFunc("PUT /api/clusters/{cluster}/drs/rules/{id}", h.UpdateDRSRule)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/drs/rules/{id}", h.DeleteDRSRule)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/drs/violations", h.GetDRSViolations)
+
 	// Cluster HA management
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/ha/groups", h.GetHAGroups)
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/ha/{type}/{vmid}/enable", h.EnableHA)

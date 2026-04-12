@@ -44,6 +44,8 @@ import type {
   TagAssignment,
   CreateTagRequest,
   AssignTagRequest,
+  DRSRule,
+  DRSRuleViolation,
   AlarmInstance,
   AlarmDefinition,
   NotificationChannel,
@@ -382,6 +384,18 @@ export const api = {
     fetchAPI<void>('/tags/assign', { method: 'DELETE', body: JSON.stringify(req) }),
   bulkAssignTags: (tagIds: string[], objects: Array<{ object_type: string; object_id: string; cluster: string }>) =>
     fetchAPI<void>('/tags/bulk-assign', { method: 'POST', body: JSON.stringify({ tag_ids: tagIds, objects }) }),
+
+  // DRS Rules
+  getDRSRules: (cluster: string) =>
+    fetchAPI<DRSRule[]>(`/clusters/${cluster}/drs/rules`),
+  createDRSRule: (cluster: string, req: { name: string; type: string; members: number[]; host_node?: string }) =>
+    fetchAPI<DRSRule>(`/clusters/${cluster}/drs/rules`, { method: 'POST', body: JSON.stringify(req) }),
+  updateDRSRule: (cluster: string, id: string, rule: Partial<DRSRule>) =>
+    fetchAPI<void>(`/clusters/${cluster}/drs/rules/${id}`, { method: 'PUT', body: JSON.stringify(rule) }),
+  deleteDRSRule: (cluster: string, id: string) =>
+    fetchAPI<void>(`/clusters/${cluster}/drs/rules/${id}`, { method: 'DELETE' }),
+  getDRSViolations: (cluster: string) =>
+    fetchAPI<DRSRuleViolation[]>(`/clusters/${cluster}/drs/violations`),
 
   // Alarms
   getActiveAlarms: () => fetchAPI<AlarmInstance[]>('/alarms'),
