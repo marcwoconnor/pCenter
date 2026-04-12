@@ -168,6 +168,15 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 
 	// Cluster nodes
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes", h.GetClusterNodes)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes/{node}/config", h.GetNodeConfig)
+	protectedMux.HandleFunc("PUT /api/clusters/{cluster}/nodes/{node}/dns", h.UpdateNodeDNS)
+	protectedMux.HandleFunc("PUT /api/clusters/{cluster}/nodes/{node}/time", h.UpdateNodeTimezone)
+	protectedMux.HandleFunc("PUT /api/clusters/{cluster}/nodes/{node}/hosts", h.UpdateNodeHosts)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/network", h.CreateNodeNetworkInterface)
+	protectedMux.HandleFunc("PUT /api/clusters/{cluster}/nodes/{node}/network/{iface}", h.UpdateNodeNetworkInterface)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/nodes/{node}/network/{iface}", h.DeleteNodeNetworkInterface)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/network-apply", h.ApplyNodeNetwork)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/network-revert", h.RevertNodeNetwork)
 
 	// Cluster guests
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/guests", h.GetClusterGuests)
@@ -312,6 +321,17 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("POST /api/tags/assign", h.AssignTag)
 	protectedMux.HandleFunc("DELETE /api/tags/assign", h.UnassignTag)
 	protectedMux.HandleFunc("POST /api/tags/bulk-assign", h.BulkAssignTags)
+
+	// --- RBAC endpoints ---
+	protectedMux.HandleFunc("GET /api/rbac/roles", h.GetRoles)
+	protectedMux.HandleFunc("POST /api/rbac/roles", h.CreateRole)
+	protectedMux.HandleFunc("PUT /api/rbac/roles/{id}", h.UpdateRole)
+	protectedMux.HandleFunc("DELETE /api/rbac/roles/{id}", h.DeleteRole)
+	protectedMux.HandleFunc("GET /api/rbac/assignments", h.GetRoleAssignments)
+	protectedMux.HandleFunc("POST /api/rbac/assignments", h.CreateRoleAssignment)
+	protectedMux.HandleFunc("DELETE /api/rbac/assignments/{id}", h.DeleteRoleAssignment)
+	protectedMux.HandleFunc("GET /api/rbac/permissions", h.GetAllPermissions)
+	protectedMux.HandleFunc("GET /api/rbac/my-permissions", h.GetMyPermissions)
 
 	// --- Inventory endpoints (datacenter/cluster management) ---
 

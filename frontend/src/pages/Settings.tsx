@@ -5,9 +5,9 @@ import { api } from '../api/client';
 import { TOTPSetupWizard } from '../components/TOTPSetupWizard';
 import { Layout } from '../components/Layout';
 import type { Session } from '../types/auth';
-import type { AlarmDefinition, NotificationChannel } from '../types';
+import type { AlarmDefinition, NotificationChannel, RBACRole, RBACRoleAssignment } from '../types';
 
-type SettingsTab = 'security' | 'sessions' | 'alarms' | 'notifications';
+type SettingsTab = 'security' | 'sessions' | 'rbac' | 'alarms' | 'notifications';
 
 export function Settings() {
   const { user, refreshUser } = useAuth();
@@ -43,6 +43,18 @@ export function Settings() {
             >
               Sessions
             </button>
+            {user?.role === 'admin' && (
+              <button
+                onClick={() => setActiveTab('rbac')}
+                className={`pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${
+                  activeTab === 'rbac'
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'
+                }`}
+              >
+                Roles & Permissions
+              </button>
+            )}
             <button
               onClick={() => setActiveTab('alarms')}
               className={`pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${
@@ -67,6 +79,7 @@ export function Settings() {
 
           {activeTab === 'security' && <SecurityTab user={user} onUpdate={refreshUser} />}
           {activeTab === 'sessions' && <SessionsTab />}
+          {activeTab === 'rbac' && <RBACTab />}
           {activeTab === 'alarms' && <AlarmsTab />}
           {activeTab === 'notifications' && <NotificationsTab />}
         </div>
@@ -760,6 +773,277 @@ function NotificationsTab() {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+// RBAC Tab - Roles & Permission Assignments
+function RBACTab() {
+  const [roles, setRoles] = useState<RBACRole[]>([]);
+  const [assignments, setAssignments] = useState<RBACRoleAssignment[]>([]);
+  const [users, setUsers] = useState<{ id: string; username: string; role: string }[]>([]);
+  const [allPerms, setAllPerms] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreateRole, setShowCreateRole] = useState(false);
+  const [showAssign, setShowAssign] = useState(false);
+  const [err, setErr] = useState('');
+
+  // Create role form
+  const [newRoleName, setNewRoleName] = useState('');
+  const [newRoleDesc, setNewRoleDesc] = useState('');
+  const [newRolePerms, setNewRolePerms] = useState<string[]>([]);
+
+  // Assign role form
+  const [assignUserId, setAssignUserId] = useState('');
+  const [assignRoleId, setAssignRoleId] = useState('');
+  const [assignObjType, setAssignObjType] = useState('root');
+  const [assignObjId, setAssignObjId] = useState('');
+  const [assignPropagate, setAssignPropagate] = useState(true);
+
+  const reload = async () => {
+    setLoading(true);
+    try {
+      const [r, a, p] = await Promise.all([
+        api.getRoles(),
+        api.getRoleAssignments(),
+        api.getAllPermissions(),
+      ]);
+      setRoles(r);
+      setAssignments(a);
+      setAllPerms(p);
+      // Load users for assignment dropdown
+      try {
+        const u = await authApi.listUsers();
+        setUsers(u);
+      } catch {
+        // Non-admin may not be able to list users
+      }
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Failed to load RBAC data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { reload(); }, []);
+
+  const createRole = async () => {
+    setErr('');
+    try {
+      await api.createRole({ name: newRoleName, description: newRoleDesc, permissions: newRolePerms });
+      setShowCreateRole(false);
+      setNewRoleName(''); setNewRoleDesc(''); setNewRolePerms([]);
+      reload();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Failed to create role');
+    }
+  };
+
+  const deleteRole = async (id: string) => {
+    if (!confirm('Delete this custom role? All assignments using it will be removed.')) return;
+    try {
+      await api.deleteRole(id);
+      reload();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Failed to delete role');
+    }
+  };
+
+  const assignRole = async () => {
+    setErr('');
+    try {
+      await api.createRoleAssignment({
+        user_id: assignUserId,
+        role_id: assignRoleId,
+        object_type: assignObjType,
+        object_id: assignObjId,
+        propagate: assignPropagate,
+      });
+      setShowAssign(false);
+      reload();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Failed to assign role');
+    }
+  };
+
+  const deleteAssignment = async (id: string) => {
+    try {
+      await api.deleteRoleAssignment(id);
+      reload();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Failed to remove assignment');
+    }
+  };
+
+  const togglePerm = (perm: string) => {
+    setNewRolePerms(prev => prev.includes(perm) ? prev.filter(p => p !== perm) : [...prev, perm]);
+  };
+
+  if (loading) return <div className="text-gray-500 py-4">Loading...</div>;
+
+  const OBJ_TYPES = ['root', 'datacenter', 'cluster', 'node', 'vm', 'ct', 'storage'];
+
+  return (
+    <div className="space-y-6">
+      {err && <div className="text-red-500 text-sm bg-red-50 dark:bg-red-900/20 p-3 rounded">{err}</div>}
+
+      {/* Roles */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Roles</h2>
+          <button onClick={() => setShowCreateRole(!showCreateRole)}
+            className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
+            + New Role
+          </button>
+        </div>
+
+        {showCreateRole && (
+          <div className="mb-4 p-4 border border-blue-200 dark:border-blue-800 rounded bg-blue-50/50 dark:bg-blue-900/20">
+            <div className="space-y-3">
+              <input value={newRoleName} onChange={e => setNewRoleName(e.target.value)}
+                placeholder="Role name" className="block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-3 py-2 text-sm text-gray-900 dark:text-white" />
+              <input value={newRoleDesc} onChange={e => setNewRoleDesc(e.target.value)}
+                placeholder="Description" className="block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-3 py-2 text-sm text-gray-900 dark:text-white" />
+              <div>
+                <span className="text-sm text-gray-500 mb-1 block">Permissions</span>
+                <div className="flex flex-wrap gap-1">
+                  {allPerms.map(p => (
+                    <button key={p} onClick={() => togglePerm(p)}
+                      className={`px-2 py-0.5 text-xs rounded border ${
+                        newRolePerms.includes(p)
+                          ? 'bg-blue-100 dark:bg-blue-900 border-blue-400 text-blue-800 dark:text-blue-200'
+                          : 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400'
+                      }`}>
+                      {p}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={createRole} disabled={!newRoleName || newRolePerms.length === 0}
+                  className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">Create</button>
+                <button onClick={() => setShowCreateRole(false)}
+                  className="px-3 py-1 text-sm text-gray-600 dark:text-gray-400">Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          {roles.map(role => (
+            <div key={role.id} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="font-medium text-gray-900 dark:text-white">{role.name}</span>
+                  {role.builtin && <span className="ml-2 text-xs bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 px-1.5 py-0.5 rounded">built-in</span>}
+                  <p className="text-xs text-gray-500 mt-0.5">{role.description}</p>
+                </div>
+                {!role.builtin && (
+                  <button onClick={() => deleteRole(role.id)} className="text-xs text-red-600 hover:text-red-700">Delete</button>
+                )}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {role.permissions.map(p => (
+                  <span key={p} className="px-1.5 py-0.5 text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded">
+                    {p}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Assignments */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Role Assignments</h2>
+          <button onClick={() => { setShowAssign(!showAssign); if (roles.length > 0) setAssignRoleId(roles[0].id); if (users.length > 0) setAssignUserId(users[0].id); }}
+            className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
+            + Assign Role
+          </button>
+        </div>
+
+        {showAssign && (
+          <div className="mb-4 p-4 border border-blue-200 dark:border-blue-800 rounded bg-blue-50/50 dark:bg-blue-900/20">
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <label className="block">
+                <span className="text-gray-500 text-xs">User</span>
+                <select value={assignUserId} onChange={e => setAssignUserId(e.target.value)}
+                  className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm text-gray-900 dark:text-white">
+                  {users.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-gray-500 text-xs">Role</span>
+                <select value={assignRoleId} onChange={e => setAssignRoleId(e.target.value)}
+                  className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm text-gray-900 dark:text-white">
+                  {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-gray-500 text-xs">Object Type</span>
+                <select value={assignObjType} onChange={e => setAssignObjType(e.target.value)}
+                  className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm text-gray-900 dark:text-white">
+                  {OBJ_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-gray-500 text-xs">Object ID {assignObjType === 'root' ? '(leave empty)' : ''}</span>
+                <input value={assignObjId} onChange={e => setAssignObjId(e.target.value)}
+                  disabled={assignObjType === 'root'}
+                  placeholder={assignObjType === 'root' ? '' : 'e.g. cluster name, vmid'}
+                  className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm text-gray-900 dark:text-white disabled:opacity-50" />
+              </label>
+              <label className="flex items-center gap-2 col-span-2">
+                <input type="checkbox" checked={assignPropagate} onChange={e => setAssignPropagate(e.target.checked)} />
+                <span className="text-gray-500 text-xs">Propagate to child objects</span>
+              </label>
+            </div>
+            <div className="flex gap-2 mt-3">
+              <button onClick={assignRole} disabled={!assignUserId || !assignRoleId}
+                className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">Assign</button>
+              <button onClick={() => setShowAssign(false)}
+                className="px-3 py-1 text-sm text-gray-600 dark:text-gray-400">Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {assignments.length === 0 ? (
+          <div className="text-sm text-gray-500 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+            No role assignments yet. Admin users bypass RBAC. Assign roles to non-admin users to grant access.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-gray-500 border-b border-gray-200 dark:border-gray-700">
+                  <th className="pb-2 pr-4">User</th>
+                  <th className="pb-2 pr-4">Role</th>
+                  <th className="pb-2 pr-4">Scope</th>
+                  <th className="pb-2 pr-4">Propagate</th>
+                  <th className="pb-2"></th>
+                </tr>
+              </thead>
+              <tbody className="text-gray-900 dark:text-white">
+                {assignments.map(a => (
+                  <tr key={a.id} className="border-b border-gray-100 dark:border-gray-700/50">
+                    <td className="py-2 pr-4">{a.username || a.user_id}</td>
+                    <td className="py-2 pr-4">{a.role_name || a.role_id}</td>
+                    <td className="py-2 pr-4 font-mono text-xs">
+                      {a.object_type}{a.object_id ? `:${a.object_id}` : ''}
+                    </td>
+                    <td className="py-2 pr-4">{a.propagate ? 'Yes' : 'No'}</td>
+                    <td className="py-2 text-right">
+                      <button onClick={() => deleteAssignment(a.id)} className="text-xs text-red-600 hover:text-red-700">Remove</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

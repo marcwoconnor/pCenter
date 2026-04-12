@@ -651,3 +651,70 @@ type CreateContainerRequest struct {
 	Start        bool   `json:"start,omitempty"`
 	Unprivileged bool   `json:"unprivileged"`
 }
+
+// NodeDNS represents DNS configuration from /nodes/{node}/dns
+type NodeDNS struct {
+	Search string `json:"search"` // search domain
+	DNS1   string `json:"dns1"`
+	DNS2   string `json:"dns2,omitempty"`
+	DNS3   string `json:"dns3,omitempty"`
+}
+
+// NodeTime represents time/timezone from /nodes/{node}/time
+type NodeTime struct {
+	Timezone  string `json:"timezone"`
+	Localtime int64  `json:"localtime"`
+	UTCTime   int64  `json:"time"` // UTC epoch
+}
+
+// NodeHosts represents /etc/hosts content from /nodes/{node}/hosts
+type NodeHosts struct {
+	Data   string `json:"data"`   // raw /etc/hosts content
+	Digest string `json:"digest"` // config digest
+}
+
+// NodeSubscription represents subscription info from /nodes/{node}/subscription
+type NodeSubscription struct {
+	Status     string `json:"status"`               // active, notfound, new, invalid
+	ServerID   string `json:"serverid,omitempty"`
+	ProductName string `json:"productname,omitempty"`
+	Level      string `json:"level,omitempty"`       // community, basic, standard, premium
+	NextDue    string `json:"nextduedate,omitempty"`
+}
+
+// APTRepository represents a single APT repository entry
+type APTRepository struct {
+	Path      string   `json:"Path"`
+	Index     int      `json:"Number"`
+	FileType  string   `json:"FileType"`
+	Enabled   bool     `json:"Enabled"`
+	Types     []string `json:"Types"`
+	URIs      []string `json:"URIs"`
+	Suites    []string `json:"Suites"`
+	Components []string `json:"Components"`
+	Comment   string   `json:"Comment,omitempty"`
+}
+
+// APTRepositoryFile represents a file containing APT repos
+type APTRepositoryFile struct {
+	Path         string          `json:"path"`
+	FileType     string          `json:"file-type"`
+	Repositories []APTRepository `json:"repositories"`
+}
+
+// APTRepositoryInfo is the response from /nodes/{node}/apt/repositories
+type APTRepositoryInfo struct {
+	Files   []APTRepositoryFile `json:"files"`
+	Digest  string              `json:"digest"`
+}
+
+// NodeConfig is the combined host-level configuration
+type NodeConfig struct {
+	DNS          *NodeDNS            `json:"dns"`
+	Time         *NodeTime           `json:"time"`
+	Hosts        string              `json:"hosts"`         // raw /etc/hosts
+	Network      []NetworkInterface  `json:"network"`
+	Subscription *NodeSubscription   `json:"subscription"`
+	APTRepos     *APTRepositoryInfo  `json:"apt_repos"`
+	Status       *NodeStatus         `json:"status"`        // PVE version, kernel, CPU info
+}

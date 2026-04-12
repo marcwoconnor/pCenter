@@ -4,7 +4,7 @@ import { formatBytes, formatUptime, api } from '../api/client';
 import { useMetrics } from '../hooks/useMetrics';
 import { useConfigEditor, type UseConfigEditorReturn } from '../hooks/useConfigEditor';
 import { MetricsChart } from './MetricsChart';
-import type { MetricSeries, VMConfig, ContainerConfig, NetworkInterface, Node, Guest, Storage, StorageVolume, Tag, TagAssignment } from '../types';
+import type { MetricSeries, VMConfig, ContainerConfig, NetworkInterface, Node, Guest, Storage, StorageVolume, Tag, TagAssignment, NodeConfig } from '../types';
 import { NetworkTopology } from './NetworkTopology';
 import { SnapshotsTab } from './SnapshotsTab';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -36,6 +36,7 @@ interface Tab {
 const nodeTabs: Tab[] = [
   { id: 'summary', label: 'Summary' },
   { id: 'vms', label: 'Virtual Machines' },
+  { id: 'configure', label: 'Configure' },
   { id: 'monitor', label: 'Monitor' },
 ];
 
@@ -238,6 +239,9 @@ export function ObjectDetail() {
         )}
         {activeTab === 'vms' && node && <NodeVMs nodeId={node.node} />}
         {activeTab === 'vms' && storageItem && <StorageVMs storage={storageItem} />}
+        {activeTab === 'configure' && node && (
+          <NodeConfigureTab node={node.node} cluster={node.cluster} />
+        )}
         {activeTab === 'monitor' && node && <NodeMonitorTab node={node.node} />}
         {activeTab === 'monitor' && guest && (
           <GuestMonitorTab
@@ -311,6 +315,623 @@ function NodeSummary({ node }: { node: Node }) {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function NodeConfigureTab({ node, cluster }: { node: string; cluster: string }) {
+  const [config, setConfig] = useState<NodeConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const reload = () => {
+    setLoading(true);
+    setError(null);
+    api.getNodeConfig(cluster, node)
+      .then(setConfig)
+      .catch((err) => setError(err.message || 'Failed to load config'))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    api.getNodeConfig(cluster, node)
+      .then((data) => { if (!cancelled) setConfig(data); })
+      .catch((err) => { if (!cancelled) setError(err.message || 'Failed to load config'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [node, cluster]);
+
+  if (loading) {
+    return <div className="text-center py-8 text-gray-500">Loading configuration...</div>;
+  }
+  if (error) {
+    return <div className="text-center py-8 text-red-500">Error: {error}</div>;
+  }
+  if (!config) return null;
+
+  return (
+    <div className="space-y-4">
+      {/* System Info (read-only) */}
+      {config.status && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <h3 className="font-medium mb-3 text-gray-900 dark:text-white">System</h3>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-gray-500">PVE Version</span>
+              <span className="text-gray-900 dark:text-white">{config.status.pveversion}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">Kernel</span>
+              <span className="text-gray-900 dark:text-white">{config.status.kversion}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">CPU Model</span>
+              <span className="text-gray-900 dark:text-white">{config.status.cpu_model}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">CPU Topology</span>
+              <span className="text-gray-900 dark:text-white">{config.status.cpu_sockets}s / {config.status.cpu_cores}c</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">Boot Mode</span>
+              <span className="text-gray-900 dark:text-white">{config.status.boot_mode}</span>
+            </div>
+            {config.status.loadavg && (
+              <div className="flex justify-between">
+                <span className="text-gray-500">Load Average</span>
+                <span className="text-gray-900 dark:text-white">{config.status.loadavg.join(', ')}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <NodeDNSCard dns={config.dns} cluster={cluster} node={node} onSaved={reload} />
+        <NodeTimeCard time={config.time} cluster={cluster} node={node} onSaved={reload} />
+      </div>
+
+      {/* Subscription (read-only) */}
+      {config.subscription && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <h3 className="font-medium mb-3 text-gray-900 dark:text-white">Subscription</h3>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-gray-500">Status</span>
+              <span className={config.subscription.status === 'active' ? 'text-green-600' : 'text-yellow-600'}>
+                {config.subscription.status}
+              </span>
+            </div>
+            {config.subscription.level && (
+              <div className="flex justify-between">
+                <span className="text-gray-500">Level</span>
+                <span className="text-gray-900 dark:text-white">{config.subscription.level}</span>
+              </div>
+            )}
+            {config.subscription.serverid && (
+              <div className="flex justify-between">
+                <span className="text-gray-500">Server ID</span>
+                <span className="text-gray-900 dark:text-white font-mono text-xs">{config.subscription.serverid}</span>
+              </div>
+            )}
+            {config.subscription.nextduedate && (
+              <div className="flex justify-between">
+                <span className="text-gray-500">Next Due</span>
+                <span className="text-gray-900 dark:text-white">{config.subscription.nextduedate}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <NodeNetworkCard network={config.network} cluster={cluster} node={node} onSaved={reload} />
+      <NodeHostsCard hosts={config.hosts} cluster={cluster} node={node} onSaved={reload} />
+
+      {/* APT Repositories (read-only) */}
+      {config.apt_repos && config.apt_repos.files && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <h3 className="font-medium mb-3 text-gray-900 dark:text-white">APT Repositories</h3>
+          <div className="space-y-3">
+            {config.apt_repos.files.map((file) =>
+              file.repositories.map((repo, idx) => (
+                <div
+                  key={`${file.path}-${idx}`}
+                  className={`text-sm rounded p-3 border ${
+                    repo.Enabled
+                      ? 'bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700'
+                      : 'bg-gray-100 dark:bg-gray-900/50 border-gray-300 dark:border-gray-600 opacity-60'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`inline-block w-2 h-2 rounded-full ${repo.Enabled ? 'bg-green-500' : 'bg-gray-400'}`} />
+                    <span className="font-mono text-xs text-gray-500">{file.path}</span>
+                  </div>
+                  <div className="font-mono text-xs text-gray-900 dark:text-gray-300">
+                    {repo.Types?.join(' ')} {repo.URIs?.join(' ')} {repo.Suites?.join(' ')} {repo.Components?.join(' ')}
+                  </div>
+                  {repo.Comment && (
+                    <div className="text-xs text-gray-500 mt-1">{repo.Comment}</div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Editable sub-components for NodeConfigureTab ---
+
+function NodeDNSCard({ dns, cluster, node, onSaved }: {
+  dns: NodeConfig['dns']; cluster: string; node: string; onSaved: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const [form, setForm] = useState({ search: '', dns1: '', dns2: '', dns3: '' });
+
+  const startEdit = () => {
+    if (dns) setForm({ search: dns.search, dns1: dns.dns1, dns2: dns.dns2 || '', dns3: dns.dns3 || '' });
+    setErr('');
+    setEditing(true);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setErr('');
+    try {
+      await api.updateNodeDNS(cluster, node, form);
+      setEditing(false);
+      onSaved();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!dns && !editing) return null;
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-medium text-gray-900 dark:text-white">DNS</h3>
+        {!editing && (
+          <button onClick={startEdit} className="text-xs text-blue-600 hover:text-blue-700">Edit</button>
+        )}
+      </div>
+      {editing ? (
+        <div className="space-y-2">
+          <label className="block text-sm">
+            <span className="text-gray-500">Search Domain</span>
+            <input value={form.search} onChange={e => setForm(f => ({ ...f, search: e.target.value }))}
+              className="mt-1 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm text-gray-900 dark:text-white" />
+          </label>
+          <label className="block text-sm">
+            <span className="text-gray-500">DNS Server 1</span>
+            <input value={form.dns1} onChange={e => setForm(f => ({ ...f, dns1: e.target.value }))}
+              className="mt-1 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm font-mono text-gray-900 dark:text-white" />
+          </label>
+          <label className="block text-sm">
+            <span className="text-gray-500">DNS Server 2</span>
+            <input value={form.dns2} onChange={e => setForm(f => ({ ...f, dns2: e.target.value }))}
+              className="mt-1 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm font-mono text-gray-900 dark:text-white" />
+          </label>
+          <label className="block text-sm">
+            <span className="text-gray-500">DNS Server 3</span>
+            <input value={form.dns3} onChange={e => setForm(f => ({ ...f, dns3: e.target.value }))}
+              className="mt-1 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm font-mono text-gray-900 dark:text-white" />
+          </label>
+          {err && <div className="text-red-500 text-xs">{err}</div>}
+          <div className="flex gap-2 pt-1">
+            <button onClick={save} disabled={saving}
+              className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+            <button onClick={() => setEditing(false)} className="px-3 py-1 text-xs text-gray-600 dark:text-gray-400 hover:text-gray-900">
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-2 text-sm">
+          <div className="flex justify-between">
+            <span className="text-gray-500">Search Domain</span>
+            <span className="text-gray-900 dark:text-white">{dns!.search}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-500">DNS Server 1</span>
+            <span className="text-gray-900 dark:text-white font-mono">{dns!.dns1}</span>
+          </div>
+          {dns!.dns2 && (
+            <div className="flex justify-between">
+              <span className="text-gray-500">DNS Server 2</span>
+              <span className="text-gray-900 dark:text-white font-mono">{dns!.dns2}</span>
+            </div>
+          )}
+          {dns!.dns3 && (
+            <div className="flex justify-between">
+              <span className="text-gray-500">DNS Server 3</span>
+              <span className="text-gray-900 dark:text-white font-mono">{dns!.dns3}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NodeTimeCard({ time, cluster, node, onSaved }: {
+  time: NodeConfig['time']; cluster: string; node: string; onSaved: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const [timezone, setTimezone] = useState('');
+
+  const startEdit = () => {
+    if (time) setTimezone(time.timezone);
+    setErr('');
+    setEditing(true);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setErr('');
+    try {
+      await api.updateNodeTimezone(cluster, node, timezone);
+      setEditing(false);
+      onSaved();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!time && !editing) return null;
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-medium text-gray-900 dark:text-white">Time</h3>
+        {!editing && (
+          <button onClick={startEdit} className="text-xs text-blue-600 hover:text-blue-700">Edit</button>
+        )}
+      </div>
+      {editing ? (
+        <div className="space-y-2">
+          <label className="block text-sm">
+            <span className="text-gray-500">Timezone</span>
+            <input value={timezone} onChange={e => setTimezone(e.target.value)}
+              placeholder="e.g. America/New_York"
+              className="mt-1 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm text-gray-900 dark:text-white" />
+          </label>
+          {err && <div className="text-red-500 text-xs">{err}</div>}
+          <div className="flex gap-2 pt-1">
+            <button onClick={save} disabled={saving}
+              className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+            <button onClick={() => setEditing(false)} className="px-3 py-1 text-xs text-gray-600 dark:text-gray-400 hover:text-gray-900">
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-2 text-sm">
+          <div className="flex justify-between">
+            <span className="text-gray-500">Timezone</span>
+            <span className="text-gray-900 dark:text-white">{time!.timezone}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-500">Local Time</span>
+            <span className="text-gray-900 dark:text-white">{new Date(time!.localtime * 1000).toLocaleString()}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NodeHostsCard({ hosts, cluster, node, onSaved }: {
+  hosts: string; cluster: string; node: string; onSaved: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const [content, setContent] = useState('');
+
+  const startEdit = () => {
+    setContent(hosts);
+    setErr('');
+    setEditing(true);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setErr('');
+    try {
+      await api.updateNodeHosts(cluster, node, content, '');
+      setEditing(false);
+      onSaved();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-medium text-gray-900 dark:text-white">/etc/hosts</h3>
+        {!editing && (
+          <button onClick={startEdit} className="text-xs text-blue-600 hover:text-blue-700">Edit</button>
+        )}
+      </div>
+      {editing ? (
+        <div className="space-y-2">
+          <textarea value={content} onChange={e => setContent(e.target.value)} rows={10}
+            className="block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-3 py-2 text-sm font-mono text-gray-900 dark:text-white" />
+          {err && <div className="text-red-500 text-xs">{err}</div>}
+          <div className="flex gap-2">
+            <button onClick={save} disabled={saving}
+              className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+            <button onClick={() => setEditing(false)} className="px-3 py-1 text-xs text-gray-600 dark:text-gray-400 hover:text-gray-900">
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        hosts ? (
+          <pre className="text-sm font-mono bg-gray-50 dark:bg-gray-900 rounded p-3 overflow-x-auto text-gray-900 dark:text-gray-300 whitespace-pre">
+            {hosts}
+          </pre>
+        ) : (
+          <div className="text-sm text-gray-500">No hosts data available</div>
+        )
+      )}
+    </div>
+  );
+}
+
+function NodeNetworkCard({ network, cluster, node, onSaved }: {
+  network: NetworkInterface[]; cluster: string; node: string; onSaved: () => void;
+}) {
+  const [editIface, setEditIface] = useState<NetworkInterface | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [err, setErr] = useState('');
+  const [form, setForm] = useState<Record<string, string>>({});
+
+  const IFACE_TYPES = ['bridge', 'bond', 'vlan', 'OVSBridge', 'OVSBond', 'OVSPort', 'OVSIntPort'];
+
+  const openEdit = (iface: NetworkInterface) => {
+    setEditIface(iface);
+    setCreating(false);
+    setForm({
+      type: iface.type || '',
+      address: iface.address || '',
+      netmask: iface.netmask || '',
+      gateway: iface.gateway || '',
+      cidr: iface.cidr || '',
+      bridge_ports: iface.bridge_ports || '',
+      slaves: iface.slaves || '',
+      bond_mode: iface.bond_mode || '',
+      mtu: iface.mtu ? String(iface.mtu) : '',
+      autostart: iface.autostart ? '1' : '0',
+      comments: iface.comments || '',
+      'vlan-raw-device': iface['vlan-raw-device'] || '',
+    });
+    setErr('');
+  };
+
+  const openCreate = () => {
+    setEditIface(null);
+    setCreating(true);
+    setForm({ iface: '', type: 'bridge', address: '', netmask: '', gateway: '', bridge_ports: '', autostart: '1', comments: '' });
+    setErr('');
+  };
+
+  const saveEdit = async () => {
+    setSaving(true);
+    setErr('');
+    try {
+      // Filter out empty values
+      const params: Record<string, string> = {};
+      for (const [k, v] of Object.entries(form)) {
+        if (v !== '') params[k] = v;
+      }
+      if (creating) {
+        await api.createNodeNetworkInterface(cluster, node, params);
+      } else if (editIface) {
+        await api.updateNodeNetworkInterface(cluster, node, editIface.iface, params);
+      }
+      setEditIface(null);
+      setCreating(false);
+      onSaved();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteIface = async (iface: string) => {
+    if (!confirm(`Delete interface ${iface}? Changes won't take effect until applied.`)) return;
+    try {
+      await api.deleteNodeNetworkInterface(cluster, node, iface);
+      onSaved();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Delete failed');
+    }
+  };
+
+  const applyChanges = async () => {
+    if (!confirm('Apply network changes? This will restart networking and may briefly interrupt connectivity.')) return;
+    setApplying(true);
+    try {
+      await api.applyNodeNetwork(cluster, node);
+      onSaved();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Apply failed');
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const revertChanges = async () => {
+    if (!confirm('Revert all pending network changes?')) return;
+    try {
+      await api.revertNodeNetwork(cluster, node);
+      onSaved();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Revert failed');
+    }
+  };
+
+  const isEditing = editIface !== null || creating;
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-medium text-gray-900 dark:text-white">Network Interfaces</h3>
+        <div className="flex gap-2">
+          <button onClick={revertChanges} className="text-xs text-yellow-600 hover:text-yellow-700">Revert</button>
+          <button onClick={applyChanges} disabled={applying}
+            className="text-xs text-green-600 hover:text-green-700 disabled:opacity-50">
+            {applying ? 'Applying...' : 'Apply'}
+          </button>
+          <button onClick={openCreate} className="text-xs text-blue-600 hover:text-blue-700">+ Add</button>
+        </div>
+      </div>
+
+      {err && <div className="text-red-500 text-xs mb-2">{err}</div>}
+
+      {/* Edit/Create form */}
+      {isEditing && (
+        <div className="mb-4 p-3 border border-blue-200 dark:border-blue-800 rounded bg-blue-50/50 dark:bg-blue-900/20">
+          <h4 className="text-sm font-medium mb-2 text-gray-900 dark:text-white">
+            {creating ? 'Create Interface' : `Edit ${editIface!.iface}`}
+          </h4>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            {creating && (
+              <label className="block">
+                <span className="text-gray-500 text-xs">Interface Name</span>
+                <input value={form.iface || ''} onChange={e => setForm(f => ({ ...f, iface: e.target.value }))}
+                  placeholder="e.g. vmbr1" className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm font-mono text-gray-900 dark:text-white" />
+              </label>
+            )}
+            <label className="block">
+              <span className="text-gray-500 text-xs">Type</span>
+              <select value={form.type || ''} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}
+                className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm text-gray-900 dark:text-white">
+                {IFACE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </label>
+            <label className="block">
+              <span className="text-gray-500 text-xs">IPv4/CIDR</span>
+              <input value={form.cidr || ''} onChange={e => setForm(f => ({ ...f, cidr: e.target.value }))}
+                placeholder="e.g. 10.0.0.1/24" className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm font-mono text-gray-900 dark:text-white" />
+            </label>
+            <label className="block">
+              <span className="text-gray-500 text-xs">Gateway</span>
+              <input value={form.gateway || ''} onChange={e => setForm(f => ({ ...f, gateway: e.target.value }))}
+                className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm font-mono text-gray-900 dark:text-white" />
+            </label>
+            <label className="block">
+              <span className="text-gray-500 text-xs">Bridge Ports</span>
+              <input value={form.bridge_ports || ''} onChange={e => setForm(f => ({ ...f, bridge_ports: e.target.value }))}
+                placeholder="e.g. eno1" className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm font-mono text-gray-900 dark:text-white" />
+            </label>
+            <label className="block">
+              <span className="text-gray-500 text-xs">Bond Slaves</span>
+              <input value={form.slaves || ''} onChange={e => setForm(f => ({ ...f, slaves: e.target.value }))}
+                className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm font-mono text-gray-900 dark:text-white" />
+            </label>
+            <label className="block">
+              <span className="text-gray-500 text-xs">Bond Mode</span>
+              <input value={form.bond_mode || ''} onChange={e => setForm(f => ({ ...f, bond_mode: e.target.value }))}
+                className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm text-gray-900 dark:text-white" />
+            </label>
+            <label className="block">
+              <span className="text-gray-500 text-xs">VLAN Raw Device</span>
+              <input value={form['vlan-raw-device'] || ''} onChange={e => setForm(f => ({ ...f, 'vlan-raw-device': e.target.value }))}
+                className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm font-mono text-gray-900 dark:text-white" />
+            </label>
+            <label className="block">
+              <span className="text-gray-500 text-xs">MTU</span>
+              <input value={form.mtu || ''} onChange={e => setForm(f => ({ ...f, mtu: e.target.value }))}
+                className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm font-mono text-gray-900 dark:text-white" />
+            </label>
+            <label className="flex items-center gap-2 text-sm pt-4">
+              <input type="checkbox" checked={form.autostart === '1'} onChange={e => setForm(f => ({ ...f, autostart: e.target.checked ? '1' : '0' }))} />
+              <span className="text-gray-500">Autostart</span>
+            </label>
+            <label className="block col-span-2">
+              <span className="text-gray-500 text-xs">Comments</span>
+              <input value={form.comments || ''} onChange={e => setForm(f => ({ ...f, comments: e.target.value }))}
+                className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm text-gray-900 dark:text-white" />
+            </label>
+          </div>
+          <div className="flex gap-2 mt-3">
+            <button onClick={saveEdit} disabled={saving}
+              className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+            <button onClick={() => { setEditIface(null); setCreating(false); }}
+              className="px-3 py-1 text-xs text-gray-600 dark:text-gray-400 hover:text-gray-900">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Interface table */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-gray-500 border-b border-gray-200 dark:border-gray-700">
+              <th className="pb-2 pr-4">Interface</th>
+              <th className="pb-2 pr-4">Type</th>
+              <th className="pb-2 pr-4">CIDR / Address</th>
+              <th className="pb-2 pr-4">Gateway</th>
+              <th className="pb-2 pr-4">Ports / Slaves</th>
+              <th className="pb-2 pr-4">Active</th>
+              <th className="pb-2 pr-4">Comments</th>
+              <th className="pb-2"></th>
+            </tr>
+          </thead>
+          <tbody className="text-gray-900 dark:text-white">
+            {[...network].sort((a, b) => a.iface.localeCompare(b.iface)).map((iface) => (
+              <tr key={iface.iface} className="border-b border-gray-100 dark:border-gray-700/50 group">
+                <td className="py-2 pr-4 font-mono">{iface.iface}</td>
+                <td className="py-2 pr-4">{iface.type}</td>
+                <td className="py-2 pr-4 font-mono">{iface.cidr || iface.address || '-'}</td>
+                <td className="py-2 pr-4 font-mono">{iface.gateway || '-'}</td>
+                <td className="py-2 pr-4 font-mono text-xs">{iface.bridge_ports || iface.slaves || '-'}</td>
+                <td className="py-2 pr-4">
+                  <span className={`inline-block w-2 h-2 rounded-full ${iface.active ? 'bg-green-500' : 'bg-gray-400'}`} />
+                </td>
+                <td className="py-2 pr-4 text-gray-500 text-xs">{iface.comments || ''}</td>
+                <td className="py-2 text-right opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button onClick={() => openEdit(iface)} className="text-xs text-blue-600 hover:text-blue-700 mr-2">Edit</button>
+                  <button onClick={() => deleteIface(iface.iface)} className="text-xs text-red-600 hover:text-red-700">Del</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );

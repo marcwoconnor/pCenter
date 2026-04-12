@@ -859,3 +859,105 @@ export interface DeployLibraryItemRequest {
   new_vmid?: number;
   full: boolean;
 }
+
+// Node (host) configuration types
+
+export interface NodeDNS {
+  search: string;
+  dns1: string;
+  dns2?: string;
+  dns3?: string;
+}
+
+export interface NodeTime {
+  timezone: string;
+  localtime: number;
+  time: number;
+}
+
+export interface NodeSubscription {
+  status: string;
+  serverid?: string;
+  productname?: string;
+  level?: string;
+  nextduedate?: string;
+}
+
+export interface APTRepository {
+  Path: string;
+  Number: number;
+  FileType: string;
+  Enabled: boolean;
+  Types: string[];
+  URIs: string[];
+  Suites: string[];
+  Components: string[];
+  Comment?: string;
+}
+
+export interface APTRepositoryFile {
+  path: string;
+  'file-type': string;
+  repositories: APTRepository[];
+}
+
+export interface APTRepositoryInfo {
+  files: APTRepositoryFile[];
+  digest: string;
+}
+
+export interface NodeConfig {
+  dns: NodeDNS | null;
+  time: NodeTime | null;
+  hosts: string;
+  network: NetworkInterface[];
+  subscription: NodeSubscription | null;
+  apt_repos: APTRepositoryInfo | null;
+  status: {
+    pveversion: string;
+    kversion: string;
+    cpu_model: string;
+    cpu_cores: number;
+    cpu_sockets: number;
+    boot_mode: string;
+    loadavg: string[];
+  } | null;
+}
+
+// RBAC types
+
+export interface RBACRole {
+  id: string;
+  name: string;
+  description: string;
+  builtin: boolean;
+  permissions: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RBACRoleAssignment {
+  id: string;
+  user_id: string;
+  username?: string;
+  role_id: string;
+  role_name?: string;
+  object_type: string;
+  object_id: string;
+  propagate: boolean;
+  created_at: string;
+}
+
+export interface CreateRoleRequest {
+  name: string;
+  description: string;
+  permissions: string[];
+}
+
+export interface AssignRoleRequest {
+  user_id: string;
+  role_id: string;
+  object_type: string;
+  object_id: string;
+  propagate: boolean;
+}

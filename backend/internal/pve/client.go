@@ -2088,6 +2088,195 @@ func (c *Client) GetNetworkInterfaces(ctx context.Context) ([]NetworkInterface, 
 	return ifaces, nil
 }
 
+// --- Node configuration operations ---
+
+// GetNodeDNS returns DNS configuration for this node
+func (c *Client) GetNodeDNS(ctx context.Context) (*NodeDNS, error) {
+	dns, err := get[NodeDNS](c, ctx, fmt.Sprintf("/nodes/%s/dns", c.nodeName))
+	if err != nil {
+		return nil, err
+	}
+	return &dns, nil
+}
+
+// GetNodeTime returns timezone/time info for this node
+func (c *Client) GetNodeTime(ctx context.Context) (*NodeTime, error) {
+	t, err := get[NodeTime](c, ctx, fmt.Sprintf("/nodes/%s/time", c.nodeName))
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+// GetNodeHosts returns /etc/hosts content for this node
+func (c *Client) GetNodeHosts(ctx context.Context) (string, error) {
+	hosts, err := get[NodeHosts](c, ctx, fmt.Sprintf("/nodes/%s/hosts", c.nodeName))
+	if err != nil {
+		return "", err
+	}
+	return hosts.Data, nil
+}
+
+// GetNodeSubscription returns subscription info for this node
+func (c *Client) GetNodeSubscription(ctx context.Context) (*NodeSubscription, error) {
+	sub, err := get[NodeSubscription](c, ctx, fmt.Sprintf("/nodes/%s/subscription", c.nodeName))
+	if err != nil {
+		return nil, err
+	}
+	return &sub, nil
+}
+
+// GetNodeAPTRepositories returns APT repository configuration for this node
+func (c *Client) GetNodeAPTRepositories(ctx context.Context) (*APTRepositoryInfo, error) {
+	info, err := get[APTRepositoryInfo](c, ctx, fmt.Sprintf("/nodes/%s/apt/repositories", c.nodeName))
+	if err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
+// GetNodeConfig returns combined host-level configuration
+func (c *Client) GetNodeConfig(ctx context.Context) (*NodeConfig, error) {
+	cfg := &NodeConfig{}
+
+	// Fetch all config in parallel
+	type result struct {
+		field string
+		err   error
+	}
+	ch := make(chan result, 6)
+
+	go func() {
+		dns, err := c.GetNodeDNS(ctx)
+		cfg.DNS = dns
+		ch <- result{"dns", err}
+	}()
+	go func() {
+		t, err := c.GetNodeTime(ctx)
+		cfg.Time = t
+		ch <- result{"time", err}
+	}()
+	go func() {
+		hosts, err := c.GetNodeHosts(ctx)
+		cfg.Hosts = hosts
+		ch <- result{"hosts", err}
+	}()
+	go func() {
+		ifaces, err := c.GetNetworkInterfaces(ctx)
+		cfg.Network = ifaces
+		ch <- result{"network", err}
+	}()
+	go func() {
+		sub, err := c.GetNodeSubscription(ctx)
+		cfg.Subscription = sub
+		ch <- result{"subscription", err}
+	}()
+	go func() {
+		status, err := c.GetNodeDetails(ctx)
+		cfg.Status = status
+		ch <- result{"status", err}
+	}()
+
+	// Collect results - log errors but don't fail completely
+	for i := 0; i < 6; i++ {
+		r := <-ch
+		if r.err != nil {
+			slog.Warn("node config: failed to fetch", "field", r.field, "node", c.nodeName, "error", r.err)
+		}
+	}
+
+	// APT repos can be slow and may require elevated perms - fetch separately
+	repos, err := c.GetNodeAPTRepositories(ctx)
+	if err != nil {
+		slog.Warn("node config: failed to fetch apt repos", "node", c.nodeName, "error", err)
+	} else {
+		cfg.APTRepos = repos
+	}
+
+	if cfg.Network == nil {
+		cfg.Network = []NetworkInterface{}
+	}
+
+	return cfg, nil
+}
+
+// --- Node configuration update operations ---
+
+// UpdateNodeDNS updates DNS configuration for this node
+func (c *Client) UpdateNodeDNS(ctx context.Context, search, dns1, dns2, dns3 string) error {
+	data := url.Values{}
+	data.Set("search", search)
+	data.Set("dns1", dns1)
+	if dns2 != "" {
+		data.Set("dns2", dns2)
+	}
+	if dns3 != "" {
+		data.Set("dns3", dns3)
+	}
+	return c.putForm(ctx, fmt.Sprintf("/nodes/%s/dns", c.nodeName), data)
+}
+
+// UpdateNodeTimezone updates the timezone for this node
+func (c *Client) UpdateNodeTimezone(ctx context.Context, timezone string) error {
+	data := url.Values{}
+	data.Set("timezone", timezone)
+	return c.putForm(ctx, fmt.Sprintf("/nodes/%s/time", c.nodeName), data)
+}
+
+// UpdateNodeHosts updates /etc/hosts content for this node
+func (c *Client) UpdateNodeHosts(ctx context.Context, hostsContent, digest string) error {
+	data := url.Values{}
+	data.Set("data", hostsContent)
+	if digest != "" {
+		data.Set("digest", digest)
+	}
+	_, err := c.post(ctx, fmt.Sprintf("/nodes/%s/hosts", c.nodeName), map[string]string{
+		"data":   hostsContent,
+		"digest": digest,
+	})
+	return err
+}
+
+// CreateNetworkInterface creates a new network interface on this node
+func (c *Client) CreateNetworkInterface(ctx context.Context, iface string, params map[string]string) error {
+	data := url.Values{}
+	data.Set("iface", iface)
+	for k, v := range params {
+		if v != "" {
+			data.Set(k, v)
+		}
+	}
+	_, err := c.post(ctx, fmt.Sprintf("/nodes/%s/network", c.nodeName), params)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// UpdateNetworkInterface updates a network interface on this node
+func (c *Client) UpdateNetworkInterface(ctx context.Context, iface string, params map[string]string) error {
+	data := url.Values{}
+	for k, v := range params {
+		data.Set(k, v)
+	}
+	return c.putForm(ctx, fmt.Sprintf("/nodes/%s/network/%s", c.nodeName, iface), data)
+}
+
+// DeleteNetworkInterface deletes a network interface on this node
+func (c *Client) DeleteNetworkInterface(ctx context.Context, iface string) error {
+	return c.delete(ctx, fmt.Sprintf("/nodes/%s/network/%s", c.nodeName, iface))
+}
+
+// ApplyNetworkConfig applies pending network changes (reloads networking)
+func (c *Client) ApplyNetworkConfig(ctx context.Context) error {
+	return c.putForm(ctx, fmt.Sprintf("/nodes/%s/network", c.nodeName), url.Values{})
+}
+
+// RevertNetworkConfig reverts pending network changes
+func (c *Client) RevertNetworkConfig(ctx context.Context) error {
+	return c.delete(ctx, fmt.Sprintf("/nodes/%s/network", c.nodeName))
+}
+
 // --- SDN operations (cluster-wide) ---
 
 // GetSDNZones returns all SDN zones in the cluster

@@ -27,6 +27,7 @@ import (
 	"github.com/moconnor/pcenter/internal/state"
 	"github.com/moconnor/pcenter/internal/alarms"
 	"github.com/moconnor/pcenter/internal/drs"
+	"github.com/moconnor/pcenter/internal/rbac"
 	"github.com/moconnor/pcenter/internal/tags"
 )
 
@@ -42,6 +43,7 @@ type Handler struct {
 	tags            *tags.Service
 	alarms          *alarms.Service
 	drsRulesDB      *drs.RulesDB
+	rbac            *rbac.Service
 	agentHub        *agent.Hub
 	clusters        []config.ClusterConfig // For on-demand client creation
 	secrets         map[string]string      // Token secrets keyed by cluster/agent name
@@ -105,6 +107,11 @@ func (h *Handler) SetInventoryService(inv *inventory.Service) {
 // SetOnChange sets a callback for state changes (broadcasts to WebSocket)
 func (h *Handler) SetOnChange(fn func()) {
 	h.onChange = fn
+}
+
+// SetRBACService sets the RBAC service for permission checking
+func (h *Handler) SetRBACService(r *rbac.Service) {
+	h.rbac = r
 }
 
 // SetAgentHub sets the agent hub for command execution
@@ -1242,6 +1249,10 @@ func (h *Handler) ClusterVMAction(w http.ResponseWriter, r *http.Request) {
 	vmidStr := r.PathValue("vmid")
 	action := r.PathValue("action")
 
+	if !h.requirePermission(w, r, rbac.PermVMPower, rbac.ObjectVM, vmidStr) {
+		return
+	}
+
 	vmid, err := strconv.Atoi(vmidStr)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid vmid")
@@ -1292,6 +1303,10 @@ func (h *Handler) ClusterContainerAction(w http.ResponseWriter, r *http.Request)
 	clusterName := r.PathValue("cluster")
 	vmidStr := r.PathValue("vmid")
 	action := r.PathValue("action")
+
+	if !h.requirePermission(w, r, rbac.PermCTPower, rbac.ObjectCT, vmidStr) {
+		return
+	}
 
 	vmid, err := strconv.Atoi(vmidStr)
 	if err != nil {
@@ -1376,6 +1391,10 @@ func (h *Handler) CreateClusterVM(w http.ResponseWriter, r *http.Request) {
 	clusterName := r.PathValue("cluster")
 	nodeName := r.PathValue("node")
 
+	if !h.requirePermission(w, r, rbac.PermVMCreate, rbac.ObjectNode, nodeName) {
+		return
+	}
+
 	_, ok := h.store.GetCluster(clusterName)
 	if !ok {
 		writeError(w, http.StatusNotFound, "cluster not found")
@@ -1445,6 +1464,10 @@ func (h *Handler) CreateClusterVM(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CreateClusterContainer(w http.ResponseWriter, r *http.Request) {
 	clusterName := r.PathValue("cluster")
 	nodeName := r.PathValue("node")
+
+	if !h.requirePermission(w, r, rbac.PermCTCreate, rbac.ObjectNode, nodeName) {
+		return
+	}
 
 	_, ok := h.store.GetCluster(clusterName)
 	if !ok {
@@ -1521,6 +1544,10 @@ func (h *Handler) DeleteClusterVM(w http.ResponseWriter, r *http.Request) {
 	clusterName := r.PathValue("cluster")
 	vmidStr := r.PathValue("vmid")
 
+	if !h.requirePermission(w, r, rbac.PermVMDelete, rbac.ObjectVM, vmidStr) {
+		return
+	}
+
 	vmid, err := strconv.Atoi(vmidStr)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid vmid")
@@ -1592,6 +1619,10 @@ func (h *Handler) DeleteClusterVM(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) DeleteClusterContainer(w http.ResponseWriter, r *http.Request) {
 	clusterName := r.PathValue("cluster")
 	vmidStr := r.PathValue("vmid")
+
+	if !h.requirePermission(w, r, rbac.PermCTDelete, rbac.ObjectCT, vmidStr) {
+		return
+	}
 
 	vmid, err := strconv.Atoi(vmidStr)
 	if err != nil {
@@ -1926,6 +1957,9 @@ func (h *Handler) MigrateContainer(w http.ResponseWriter, r *http.Request) {
 
 // ClusterMigrateVM initiates a VM migration in a specific cluster
 func (h *Handler) ClusterMigrateVM(w http.ResponseWriter, r *http.Request) {
+	if !h.requirePermission(w, r, rbac.PermVMMigrate, rbac.ObjectVM, r.PathValue("vmid")) {
+		return
+	}
 	clusterName := r.PathValue("cluster")
 	vmidStr := r.PathValue("vmid")
 	vmid, err := strconv.Atoi(vmidStr)
@@ -2017,6 +2051,9 @@ func (h *Handler) ClusterMigrateVM(w http.ResponseWriter, r *http.Request) {
 
 // ClusterMigrateContainer initiates a container migration in a specific cluster
 func (h *Handler) ClusterMigrateContainer(w http.ResponseWriter, r *http.Request) {
+	if !h.requirePermission(w, r, rbac.PermCTMigrate, rbac.ObjectCT, r.PathValue("vmid")) {
+		return
+	}
 	clusterName := r.PathValue("cluster")
 	vmidStr := r.PathValue("vmid")
 	vmid, err := strconv.Atoi(vmidStr)
@@ -3164,6 +3201,9 @@ func (h *Handler) GetClusterContainerConfig(w http.ResponseWriter, r *http.Reque
 
 // UpdateClusterVMConfig updates VM configuration with optimistic locking
 func (h *Handler) UpdateClusterVMConfig(w http.ResponseWriter, r *http.Request) {
+	if !h.requirePermission(w, r, rbac.PermVMConfig, rbac.ObjectVM, r.PathValue("vmid")) {
+		return
+	}
 	clusterName := r.PathValue("cluster")
 	vmidStr := r.PathValue("vmid")
 
@@ -3237,6 +3277,9 @@ func (h *Handler) UpdateClusterVMConfig(w http.ResponseWriter, r *http.Request) 
 
 // UpdateClusterContainerConfig updates container configuration with optimistic locking
 func (h *Handler) UpdateClusterContainerConfig(w http.ResponseWriter, r *http.Request) {
+	if !h.requirePermission(w, r, rbac.PermCTConfig, rbac.ObjectCT, r.PathValue("vmid")) {
+		return
+	}
 	clusterName := r.PathValue("cluster")
 	vmidStr := r.PathValue("vmid")
 
@@ -5132,4 +5175,354 @@ func (h *Handler) DeleteContainerSnapshot(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// --- Node configuration handlers ---
+
+// GetNodeConfig returns combined host-level configuration for a node
+func (h *Handler) GetNodeConfig(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	node := r.PathValue("node")
+
+	client, ok := h.getClient(cluster, node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	cfg, err := client.GetNodeConfig(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, cfg)
+}
+
+// UpdateNodeDNS updates DNS configuration for a node
+func (h *Handler) UpdateNodeDNS(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	node := r.PathValue("node")
+
+	if !h.requirePermission(w, r, rbac.PermHostConfig, rbac.ObjectNode, node) {
+		return
+	}
+
+	client, ok := h.getClient(cluster, node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	var req struct {
+		Search string `json:"search"`
+		DNS1   string `json:"dns1"`
+		DNS2   string `json:"dns2"`
+		DNS3   string `json:"dns3"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Search == "" || req.DNS1 == "" {
+		writeError(w, http.StatusBadRequest, "search and dns1 are required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	if err := client.UpdateNodeDNS(ctx, req.Search, req.DNS1, req.DNS2, req.DNS3); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "node_dns_update",
+			ResourceType: "node",
+			ResourceID:   node,
+			Cluster:      cluster,
+		})
+	}
+
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// UpdateNodeTimezone updates timezone for a node
+func (h *Handler) UpdateNodeTimezone(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	node := r.PathValue("node")
+
+	if !h.requirePermission(w, r, rbac.PermHostConfig, rbac.ObjectNode, node) {
+		return
+	}
+
+	client, ok := h.getClient(cluster, node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	var req struct {
+		Timezone string `json:"timezone"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Timezone == "" {
+		writeError(w, http.StatusBadRequest, "timezone is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	if err := client.UpdateNodeTimezone(ctx, req.Timezone); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "node_timezone_update",
+			ResourceType: "node",
+			ResourceID:   node,
+			Cluster:      cluster,
+			Details:      fmt.Sprintf(`{"timezone":"%s"}`, req.Timezone),
+		})
+	}
+
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// UpdateNodeHosts updates /etc/hosts content for a node
+func (h *Handler) UpdateNodeHosts(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	node := r.PathValue("node")
+
+	if !h.requirePermission(w, r, rbac.PermHostConfig, rbac.ObjectNode, node) {
+		return
+	}
+
+	client, ok := h.getClient(cluster, node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	var req struct {
+		Data   string `json:"data"`
+		Digest string `json:"digest"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Data == "" {
+		writeError(w, http.StatusBadRequest, "data is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	if err := client.UpdateNodeHosts(ctx, req.Data, req.Digest); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "node_hosts_update",
+			ResourceType: "node",
+			ResourceID:   node,
+			Cluster:      cluster,
+		})
+	}
+
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// CreateNodeNetworkInterface creates a new network interface on a node
+func (h *Handler) CreateNodeNetworkInterface(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	node := r.PathValue("node")
+
+	client, ok := h.getClient(cluster, node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	var req map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	iface := req["iface"]
+	ifaceType := req["type"]
+	if iface == "" || ifaceType == "" {
+		writeError(w, http.StatusBadRequest, "iface and type are required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	if err := client.CreateNetworkInterface(ctx, iface, req); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "network_iface_create",
+			ResourceType: "node",
+			ResourceID:   node,
+			Cluster:      cluster,
+			Details:      fmt.Sprintf(`{"iface":"%s","type":"%s"}`, iface, ifaceType),
+		})
+	}
+
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// UpdateNodeNetworkInterface updates a network interface on a node
+func (h *Handler) UpdateNodeNetworkInterface(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	node := r.PathValue("node")
+	iface := r.PathValue("iface")
+
+	client, ok := h.getClient(cluster, node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	var req map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	if err := client.UpdateNetworkInterface(ctx, iface, req); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "network_iface_update",
+			ResourceType: "node",
+			ResourceID:   node,
+			Cluster:      cluster,
+			Details:      fmt.Sprintf(`{"iface":"%s"}`, iface),
+		})
+	}
+
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// DeleteNodeNetworkInterface deletes a network interface on a node
+func (h *Handler) DeleteNodeNetworkInterface(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	node := r.PathValue("node")
+	iface := r.PathValue("iface")
+
+	client, ok := h.getClient(cluster, node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	if err := client.DeleteNetworkInterface(ctx, iface); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "network_iface_delete",
+			ResourceType: "node",
+			ResourceID:   node,
+			Cluster:      cluster,
+			Details:      fmt.Sprintf(`{"iface":"%s"}`, iface),
+		})
+	}
+
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// ApplyNodeNetwork applies pending network changes on a node
+func (h *Handler) ApplyNodeNetwork(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	node := r.PathValue("node")
+
+	client, ok := h.getClient(cluster, node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	if err := client.ApplyNetworkConfig(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "network_apply",
+			ResourceType: "node",
+			ResourceID:   node,
+			Cluster:      cluster,
+		})
+	}
+
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// RevertNodeNetwork reverts pending network changes on a node
+func (h *Handler) RevertNodeNetwork(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	node := r.PathValue("node")
+
+	client, ok := h.getClient(cluster, node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	if err := client.RevertNetworkConfig(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "network_revert",
+			ResourceType: "node",
+			ResourceID:   node,
+			Cluster:      cluster,
+		})
+	}
+
+	writeJSON(w, map[string]string{"status": "ok"})
 }

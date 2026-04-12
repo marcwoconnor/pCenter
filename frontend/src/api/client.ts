@@ -49,6 +49,11 @@ import type {
   AlarmInstance,
   AlarmDefinition,
   NotificationChannel,
+  NodeConfig,
+  RBACRole,
+  RBACRoleAssignment,
+  CreateRoleRequest,
+  AssignRoleRequest,
 } from '../types';
 
 import { getCSRFToken } from './auth';
@@ -138,6 +143,24 @@ export const api = {
     fetchAPI<Summary>(`/clusters/${cluster}/summary`),
   getClusterNodes: (cluster: string) =>
     fetchAPI<Node[]>(`/clusters/${cluster}/nodes`),
+  getNodeConfig: (cluster: string, node: string) =>
+    fetchAPI<NodeConfig>(`/clusters/${cluster}/nodes/${node}/config`),
+  updateNodeDNS: (cluster: string, node: string, dns: { search: string; dns1: string; dns2?: string; dns3?: string }) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/nodes/${node}/dns`, { method: 'PUT', body: JSON.stringify(dns) }),
+  updateNodeTimezone: (cluster: string, node: string, timezone: string) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/nodes/${node}/time`, { method: 'PUT', body: JSON.stringify({ timezone }) }),
+  updateNodeHosts: (cluster: string, node: string, data: string, digest: string) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/nodes/${node}/hosts`, { method: 'PUT', body: JSON.stringify({ data, digest }) }),
+  createNodeNetworkInterface: (cluster: string, node: string, params: Record<string, string>) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/nodes/${node}/network`, { method: 'POST', body: JSON.stringify(params) }),
+  updateNodeNetworkInterface: (cluster: string, node: string, iface: string, params: Record<string, string>) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/nodes/${node}/network/${iface}`, { method: 'PUT', body: JSON.stringify(params) }),
+  deleteNodeNetworkInterface: (cluster: string, node: string, iface: string) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/nodes/${node}/network/${iface}`, { method: 'DELETE' }),
+  applyNodeNetwork: (cluster: string, node: string) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/nodes/${node}/network-apply`, { method: 'POST' }),
+  revertNodeNetwork: (cluster: string, node: string) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/nodes/${node}/network-revert`, { method: 'POST' }),
   getClusterGuests: (cluster: string) =>
     fetchAPI<Guest[]>(`/clusters/${cluster}/guests`),
   getClusterHA: (cluster: string) =>
@@ -497,6 +520,37 @@ export const api = {
     fetchAPI<{ message: string }>(`/library/${id}`, { method: 'DELETE' }),
   deployLibraryItem: (id: string, req: DeployLibraryItemRequest) =>
     fetchAPI<{ upid: string; message: string }>(`/library/${id}/deploy`, { method: 'POST', body: JSON.stringify(req) }),
+
+  // RBAC
+  getRoles: () =>
+    fetchAPI<RBACRole[]>('/rbac/roles'),
+  createRole: (req: CreateRoleRequest) =>
+    fetchAPI<RBACRole>('/rbac/roles', { method: 'POST', body: JSON.stringify(req) }),
+  updateRole: (id: string, req: CreateRoleRequest) =>
+    fetchAPI<{ status: string }>(`/rbac/roles/${id}`, { method: 'PUT', body: JSON.stringify(req) }),
+  deleteRole: (id: string) =>
+    fetchAPI<{ status: string }>(`/rbac/roles/${id}`, { method: 'DELETE' }),
+  getRoleAssignments: (params?: { user_id?: string; object_type?: string; object_id?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.user_id) qs.set('user_id', params.user_id);
+    if (params?.object_type) qs.set('object_type', params.object_type);
+    if (params?.object_id) qs.set('object_id', params.object_id);
+    const q = qs.toString();
+    return fetchAPI<RBACRoleAssignment[]>(`/rbac/assignments${q ? '?' + q : ''}`);
+  },
+  createRoleAssignment: (req: AssignRoleRequest) =>
+    fetchAPI<RBACRoleAssignment>('/rbac/assignments', { method: 'POST', body: JSON.stringify(req) }),
+  deleteRoleAssignment: (id: string) =>
+    fetchAPI<{ status: string }>(`/rbac/assignments/${id}`, { method: 'DELETE' }),
+  getMyPermissions: (objectType?: string, objectId?: string) => {
+    const qs = new URLSearchParams();
+    if (objectType) qs.set('object_type', objectType);
+    if (objectId) qs.set('object_id', objectId);
+    const q = qs.toString();
+    return fetchAPI<string[]>(`/rbac/my-permissions${q ? '?' + q : ''}`);
+  },
+  getAllPermissions: () =>
+    fetchAPI<string[]>('/rbac/permissions'),
 };
 
 // Helper functions

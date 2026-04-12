@@ -26,6 +26,7 @@ import (
 	"github.com/moconnor/pcenter/internal/metrics"
 	"github.com/moconnor/pcenter/internal/migration"
 	"github.com/moconnor/pcenter/internal/poller"
+	"github.com/moconnor/pcenter/internal/rbac"
 	"github.com/moconnor/pcenter/internal/state"
 	"github.com/moconnor/pcenter/internal/tags"
 )
@@ -259,6 +260,20 @@ func main() {
 	}
 
 	slog.Info("inventory enabled", "database", cfg.Inventory.DatabasePath)
+
+	// Initialize RBAC
+	rbacDBPath := "data/rbac.db"
+	rbacDB, err := rbac.OpenDB(rbacDBPath)
+	if err != nil {
+		slog.Error("failed to open RBAC database", "error", err)
+		os.Exit(1)
+	}
+	defer rbacDB.Close()
+
+	rbacResolver := rbac.NewStateResolver(store, inventoryService)
+	rbacService := rbac.NewService(rbacDB, rbacResolver)
+	handler.SetRBACService(rbacService)
+	slog.Info("RBAC enabled", "database", rbacDBPath)
 
 	// Initialize content library
 	if cfg.Library.Enabled {
