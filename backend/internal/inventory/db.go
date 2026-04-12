@@ -623,6 +623,26 @@ func (db *DB) ListClusters(ctx context.Context) ([]Cluster, error) {
 	return db.scanClusters(rows)
 }
 
+// ListClustersByDatacenter returns clusters belonging to a datacenter
+func (db *DB) ListClustersByDatacenter(ctx context.Context, datacenterID string) ([]Cluster, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	rows, err := db.conn.QueryContext(ctx,
+		`SELECT c.id, c.name, c.agent_name, c.datacenter_id, c.status, c.enabled, c.created_at, c.updated_at,
+			d.name as datacenter_name
+		FROM clusters c
+		LEFT JOIN datacenters d ON c.datacenter_id = d.id
+		WHERE c.datacenter_id = ?
+		ORDER BY c.name`, datacenterID)
+	if err != nil {
+		return nil, fmt.Errorf("query clusters by datacenter: %w", err)
+	}
+	defer rows.Close()
+
+	return db.scanClusters(rows)
+}
+
 func (db *DB) scanClusters(rows *sql.Rows) ([]Cluster, error) {
 	var clusters []Cluster
 	for rows.Next() {

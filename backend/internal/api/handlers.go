@@ -3396,6 +3396,12 @@ func (h *Handler) GetDatacenter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Populate clusters and hosts for this datacenter
+	clusters, _ := h.inventory.ListClustersByDatacenter(ctx, id)
+	dc.Clusters = clusters
+	hosts, _ := h.inventory.ListHostsByDatacenter(ctx, id)
+	dc.Hosts = hosts
+
 	writeJSON(w, dc)
 }
 

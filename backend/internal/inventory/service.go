@@ -31,6 +31,16 @@ func (s *Service) GetDatacenter(ctx context.Context, id string) (*Datacenter, er
 	return s.db.GetDatacenter(ctx, id)
 }
 
+// ListClustersByDatacenter returns clusters belonging to a datacenter
+func (s *Service) ListClustersByDatacenter(ctx context.Context, datacenterID string) ([]Cluster, error) {
+	return s.db.ListClustersByDatacenter(ctx, datacenterID)
+}
+
+// ListHostsByDatacenter returns standalone hosts belonging to a datacenter
+func (s *Service) ListHostsByDatacenter(ctx context.Context, datacenterID string) ([]InventoryHost, error) {
+	return s.db.ListHostsByDatacenter(ctx, datacenterID)
+}
+
 // GetDatacenterByName retrieves a datacenter by name
 func (s *Service) GetDatacenterByName(ctx context.Context, name string) (*Datacenter, error) {
 	return s.db.GetDatacenterByName(ctx, name)
