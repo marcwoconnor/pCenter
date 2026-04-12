@@ -279,6 +279,17 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("DELETE /api/library/{id}", h.DeleteLibraryItem)
 	protectedMux.HandleFunc("POST /api/library/{id}/deploy", h.DeployLibraryItem)
 
+	// --- Tags endpoints ---
+	protectedMux.HandleFunc("GET /api/tags", h.GetTags)
+	protectedMux.HandleFunc("GET /api/tags/categories", h.GetTagCategories)
+	protectedMux.HandleFunc("POST /api/tags", h.CreateTag)
+	protectedMux.HandleFunc("PUT /api/tags/{id}", h.UpdateTag)
+	protectedMux.HandleFunc("DELETE /api/tags/{id}", h.DeleteTag)
+	protectedMux.HandleFunc("GET /api/tags/assignments", h.GetAllTagAssignments)
+	protectedMux.HandleFunc("POST /api/tags/assign", h.AssignTag)
+	protectedMux.HandleFunc("DELETE /api/tags/assign", h.UnassignTag)
+	protectedMux.HandleFunc("POST /api/tags/bulk-assign", h.BulkAssignTags)
+
 	// --- Inventory endpoints (datacenter/cluster management) ---
 
 	// Datacenters

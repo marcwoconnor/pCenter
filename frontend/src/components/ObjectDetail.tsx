@@ -4,10 +4,11 @@ import { formatBytes, formatUptime, api } from '../api/client';
 import { useMetrics } from '../hooks/useMetrics';
 import { useConfigEditor, type UseConfigEditorReturn } from '../hooks/useConfigEditor';
 import { MetricsChart } from './MetricsChart';
-import type { MetricSeries, VMConfig, ContainerConfig, NetworkInterface, Node, Guest, Storage, StorageVolume } from '../types';
+import type { MetricSeries, VMConfig, ContainerConfig, NetworkInterface, Node, Guest, Storage, StorageVolume, Tag, TagAssignment } from '../types';
 import { NetworkTopology } from './NetworkTopology';
 import { SnapshotsTab } from './SnapshotsTab';
 import { ErrorBoundary } from './ErrorBoundary';
+import { TagPicker } from './TagPicker';
 
 type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d';
 
@@ -54,7 +55,7 @@ const networkTabs: Tab[] = [
 ];
 
 export function ObjectDetail() {
-  const { selectedObject, nodes, guests, storage, performAction } = useCluster();
+  const { selectedObject, nodes, guests, storage, performAction, tags, tagAssignments, refreshTags } = useCluster();
   const [activeTab, setActiveTab] = useState('summary');
 
   // Handle defaultTab from context menu navigation
@@ -189,7 +190,14 @@ export function ObjectDetail() {
       {/* Tab Content */}
       <div className="flex-1 overflow-auto p-4 bg-gray-50 dark:bg-gray-900">
         {activeTab === 'summary' && node && <NodeSummary node={node} />}
-        {activeTab === 'summary' && guest && <GuestSummary guest={guest} />}
+        {activeTab === 'summary' && guest && (
+          <GuestSummary
+            guest={guest}
+            tags={tags}
+            tagAssignments={tagAssignments}
+            onTagsChanged={refreshTags}
+          />
+        )}
         {activeTab === 'summary' && storageItem && <StorageSummary storage={storageItem} />}
         {activeTab === 'summary' && selectedObject.type === 'network' && (
           <NetworkSummary ifaceName={selectedObject.name} node={selectedObject.node || ''} cluster={selectedObject.cluster || ''} />
@@ -294,11 +302,55 @@ function NodeSummary({ node }: { node: Node }) {
   );
 }
 
-function GuestSummary({ guest }: { guest: Guest }) {
+function GuestSummary({ guest, tags, tagAssignments, onTagsChanged }: {
+  guest: Guest;
+  tags: Tag[];
+  tagAssignments: TagAssignment[];
+  onTagsChanged: () => void;
+}) {
   const cpuPercent = (guest.cpu * 100).toFixed(1);
   const memPercent = guest.maxmem > 0 ? ((guest.mem / guest.maxmem) * 100).toFixed(1) : '0';
 
+  const objectType = guest.type === 'qemu' ? 'vm' : 'ct';
+  const objectId = String(guest.vmid);
+
+  // Find assigned tags for this guest
+  const assignedTagIds = tagAssignments
+    .filter(a => a.object_type === objectType && a.object_id === objectId && a.cluster === guest.cluster)
+    .map(a => a.tag_id);
+  const assignedTags = tags.filter(t => assignedTagIds.includes(t.id));
+
+  const handleAssign = async (tagId: string) => {
+    try {
+      await api.assignTag({ tag_id: tagId, object_type: objectType, object_id: objectId, cluster: guest.cluster });
+      onTagsChanged();
+    } catch {}
+  };
+
+  const handleUnassign = async (tagId: string) => {
+    try {
+      await api.unassignTag({ tag_id: tagId, object_type: objectType, object_id: objectId, cluster: guest.cluster });
+      onTagsChanged();
+    } catch {}
+  };
+
   return (
+    <div className="space-y-4">
+      {/* Tags */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+        <h3 className="font-medium mb-3 text-gray-900 dark:text-white">Tags</h3>
+        <TagPicker
+          objectType={objectType}
+          objectId={objectId}
+          cluster={guest.cluster}
+          tags={assignedTags}
+          allTags={tags}
+          onAssign={handleAssign}
+          onUnassign={handleUnassign}
+          onTagCreated={() => onTagsChanged()}
+        />
+      </div>
+
     <div className="grid md:grid-cols-2 gap-4">
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
         <h3 className="font-medium mb-3 text-gray-900 dark:text-white">Status</h3>
@@ -355,6 +407,7 @@ function GuestSummary({ guest }: { guest: Guest }) {
           </div>
         </div>
       </div>
+    </div>
     </div>
   );
 }

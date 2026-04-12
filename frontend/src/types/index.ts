@@ -442,6 +442,36 @@ export interface MoveResourceRequest {
   to_folder_id?: string;
 }
 
+// Tag types
+
+export interface Tag {
+  id: string;
+  category: string;
+  name: string;
+  color: string;
+  created_at: string;
+}
+
+export interface TagAssignment {
+  tag_id: string;
+  object_type: string; // vm, ct, node, storage
+  object_id: string;
+  cluster: string;
+}
+
+export interface CreateTagRequest {
+  category: string;
+  name: string;
+  color: string;
+}
+
+export interface AssignTagRequest {
+  tag_id: string;
+  object_type: string;
+  object_id: string;
+  cluster: string;
+}
+
 // Configuration types for VM/Container settings
 
 export interface VMConfig {

@@ -40,6 +40,10 @@ import type {
   CreateLibraryItemRequest,
   UpdateLibraryItemRequest,
   DeployLibraryItemRequest,
+  Tag,
+  TagAssignment,
+  CreateTagRequest,
+  AssignTagRequest,
 } from '../types';
 
 import { getCSRFToken } from './auth';
@@ -358,6 +362,23 @@ export const api = {
     const qs = query.toString();
     return fetchAPI<ActivityEntry[]>(`/activity${qs ? `?${qs}` : ''}`);
   },
+
+  // Tags
+  getTags: () => fetchAPI<Tag[]>('/tags'),
+  getTagCategories: () => fetchAPI<string[]>('/tags/categories'),
+  createTag: (req: CreateTagRequest) =>
+    fetchAPI<Tag>('/tags', { method: 'POST', body: JSON.stringify(req) }),
+  updateTag: (id: string, req: Partial<CreateTagRequest>) =>
+    fetchAPI<void>(`/tags/${id}`, { method: 'PUT', body: JSON.stringify(req) }),
+  deleteTag: (id: string) =>
+    fetchAPI<void>(`/tags/${id}`, { method: 'DELETE' }),
+  getTagAssignments: () => fetchAPI<TagAssignment[]>('/tags/assignments'),
+  assignTag: (req: AssignTagRequest) =>
+    fetchAPI<void>('/tags/assign', { method: 'POST', body: JSON.stringify(req) }),
+  unassignTag: (req: AssignTagRequest) =>
+    fetchAPI<void>('/tags/assign', { method: 'DELETE', body: JSON.stringify(req) }),
+  bulkAssignTags: (tagIds: string[], objects: Array<{ object_type: string; object_id: string; cluster: string }>) =>
+    fetchAPI<void>('/tags/bulk-assign', { method: 'POST', body: JSON.stringify({ tag_ids: tagIds, objects }) }),
 
   // Datacenters
   getDatacenters: () => fetchAPI<Datacenter[]>('/datacenters'),

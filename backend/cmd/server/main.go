@@ -25,6 +25,7 @@ import (
 	"github.com/moconnor/pcenter/internal/migration"
 	"github.com/moconnor/pcenter/internal/poller"
 	"github.com/moconnor/pcenter/internal/state"
+	"github.com/moconnor/pcenter/internal/tags"
 )
 
 func main() {
@@ -270,6 +271,17 @@ func main() {
 		handler.SetLibraryService(libraryService)
 		slog.Info("content library enabled", "database", cfg.Library.DatabasePath)
 	}
+
+	// Tags
+	tagsDB, err := tags.Open(cfg.Tags.DatabasePath)
+	if err != nil {
+		slog.Error("failed to open tags database", "error", err)
+		os.Exit(1)
+	}
+	defer tagsDB.Close()
+	tagsService := tags.NewService(tagsDB)
+	handler.SetTagsService(tagsService)
+	slog.Info("tags enabled", "database", cfg.Tags.DatabasePath)
 
 	// Load clusters from inventory and start poller
 	if cfg.Poller.Enabled && p != nil {

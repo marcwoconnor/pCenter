@@ -31,8 +31,16 @@ type Config struct {
 	// Content library settings
 	Library LibraryConfig `yaml:"library"`
 
+	// Tags settings
+	Tags TagsConfig `yaml:"tags"`
+
 	// Legacy: flat nodes array (auto-converted to single cluster)
 	Nodes []NodeConfig `yaml:"nodes,omitempty"`
+}
+
+// TagsConfig holds tag settings
+type TagsConfig struct {
+	DatabasePath string `yaml:"database_path"`
 }
 
 // AgentConfig holds pve-agent deployment settings
@@ -281,6 +289,11 @@ func Load(path string) (*Config, error) {
 	// Library defaults
 	if cfg.Library.DatabasePath == "" {
 		cfg.Library.DatabasePath = "data/library.db"
+	}
+
+	// Tags defaults
+	if cfg.Tags.DatabasePath == "" {
+		cfg.Tags.DatabasePath = "data/tags.db"
 	}
 
 	// Agent defaults
