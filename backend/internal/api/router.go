@@ -279,6 +279,9 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("DELETE /api/library/{id}", h.DeleteLibraryItem)
 	protectedMux.HandleFunc("POST /api/library/{id}/deploy", h.DeployLibraryItem)
 
+	// --- Config endpoint ---
+	protectedMux.HandleFunc("GET /api/config", h.GetRunningConfig)
+
 	// --- Alarms endpoints ---
 	protectedMux.HandleFunc("GET /api/alarms", h.GetActiveAlarms)
 	protectedMux.HandleFunc("GET /api/alarms/definitions", h.GetAlarmDefinitions)

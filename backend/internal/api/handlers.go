@@ -125,6 +125,72 @@ func (h *Handler) SetConfig(cfg *config.Config) {
 	h.cfg = cfg
 }
 
+// GetRunningConfig returns the current config (secrets redacted)
+func (h *Handler) GetRunningConfig(w http.ResponseWriter, r *http.Request) {
+	if h.cfg == nil {
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+	cfg := h.cfg
+
+	// Build safe config response
+	resp := map[string]interface{}{
+		"server": map[string]interface{}{
+			"port":         cfg.Server.Port,
+			"cors_origins": cfg.Server.CORSOrigins,
+		},
+		"drs": map[string]interface{}{
+			"enabled":        cfg.DRS.Enabled,
+			"mode":           cfg.DRS.Mode,
+			"check_interval": cfg.DRS.CheckInterval,
+			"cpu_threshold":  cfg.DRS.CPUThreshold,
+			"mem_threshold":  cfg.DRS.MemThreshold,
+			"migration_rate": cfg.DRS.MigrationRate,
+		},
+		"metrics": map[string]interface{}{
+			"enabled":             cfg.Metrics.Enabled,
+			"collection_interval": cfg.Metrics.CollectionInterval,
+			"retention": map[string]interface{}{
+				"raw_hours":     cfg.Metrics.Retention.RawHours,
+				"hourly_days":   cfg.Metrics.Retention.HourlyDays,
+				"daily_days":    cfg.Metrics.Retention.DailyDays,
+				"weekly_months": cfg.Metrics.Retention.WeeklyMonths,
+			},
+		},
+		"auth": map[string]interface{}{
+			"enabled": cfg.Auth.Enabled,
+			"session": map[string]interface{}{
+				"duration_hours":     cfg.Auth.Session.DurationHours,
+				"idle_timeout_hours": cfg.Auth.Session.IdleTimeoutHours,
+			},
+			"lockout": map[string]interface{}{
+				"max_attempts":    cfg.Auth.Lockout.MaxAttempts,
+				"lockout_minutes": cfg.Auth.Lockout.LockoutMinutes,
+				"progressive":     cfg.Auth.Lockout.Progressive,
+			},
+			"totp": map[string]interface{}{
+				"enabled":        cfg.Auth.TOTP.Enabled,
+				"required":       cfg.Auth.TOTP.Required,
+				"trust_ip_hours": cfg.Auth.TOTP.TrustIPHours,
+			},
+			"rate_limit": map[string]interface{}{
+				"requests_per_minute": cfg.Auth.RateLimit.RequestsPerMinute,
+			},
+		},
+		"activity": map[string]interface{}{
+			"retention_days": cfg.Activity.RetentionDays,
+		},
+		"alarms": map[string]interface{}{
+			"enabled":       cfg.Alarms.Enabled,
+			"eval_interval": cfg.Alarms.EvalInterval,
+		},
+		"poller": map[string]interface{}{
+			"enabled": cfg.Poller.Enabled,
+		},
+	}
+	writeJSON(w, resp)
+}
+
 // getClient returns the PVE client for a cluster/node combination
 func (h *Handler) getClient(cluster, node string) (*pve.Client, bool) {
 	// Try poller first

@@ -9,6 +9,7 @@ import { NetworkTopology } from './NetworkTopology';
 import { SnapshotsTab } from './SnapshotsTab';
 import { ErrorBoundary } from './ErrorBoundary';
 import { TagPicker } from './TagPicker';
+import { PCenterRootDetail } from './PCenterRootDetail';
 
 type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d';
 
@@ -73,6 +74,11 @@ export function ObjectDetail() {
         Select an object from the inventory tree
       </div>
     );
+  }
+
+  // Delegate to PCenterRootDetail when clicking the root node
+  if (selectedObject.type === 'datacenter' && selectedObject.id === 'root') {
+    return <PCenterRootDetail defaultTab={selectedObject.defaultTab} />;
   }
 
   const tabs = selectedObject.type === 'node' ? nodeTabs :
