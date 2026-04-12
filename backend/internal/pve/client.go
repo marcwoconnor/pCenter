@@ -1807,32 +1807,35 @@ type HAGroupResponse struct {
 
 // GetHAStatus returns the cluster's HA status
 func (c *Client) GetHAStatus(ctx context.Context) (*HAStatus, error) {
-	// Try to get HA manager status
-	managerStatus, err := get[[]map[string]interface{}](c, ctx, "/cluster/ha/status/manager_status")
+	// Use /cluster/ha/status/current which returns an array of status items
+	haItems, err := get[[]map[string]interface{}](c, ctx, "/cluster/ha/status/current")
 	if err != nil {
 		// HA might not be configured
 		return &HAStatus{Enabled: false}, nil
 	}
 
 	status := &HAStatus{
-		Enabled: len(managerStatus) > 0,
+		Enabled: len(haItems) > 0,
 	}
 
-	// Parse manager info
-	for _, item := range managerStatus {
-		if itemType, ok := item["type"].(string); ok {
-			if itemType == "manager" {
-				if node, ok := item["node"].(string); ok {
-					status.Manager.Node = node
-				}
-				if s, ok := item["status"].(string); ok {
-					status.Manager.Status = s
-				}
+	// Parse status items
+	for _, item := range haItems {
+		itemType, _ := item["type"].(string)
+		switch itemType {
+		case "quorum":
+			// quorate can be float64 (1) or string ("1")
+			switch v := item["quorate"].(type) {
+			case float64:
+				status.Quorum = v == 1
+			case string:
+				status.Quorum = v == "1"
 			}
-			if itemType == "quorum" {
-				if quorum, ok := item["quorate"].(float64); ok {
-					status.Quorum = quorum == 1
-				}
+		case "master":
+			if node, ok := item["node"].(string); ok {
+				status.Manager.Node = node
+			}
+			if s, ok := item["status"].(string); ok {
+				status.Manager.Status = s
 			}
 		}
 	}
