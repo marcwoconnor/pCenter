@@ -222,3 +222,12 @@ func (h *Handler) GetMyPermissions(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetAllPermissions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, rbac.AllPermissions)
 }
+
+// GetVersion returns current version and update availability
+func (h *Handler) GetVersion(w http.ResponseWriter, r *http.Request) {
+	if h.updater == nil {
+		writeJSON(w, map[string]string{"current_version": "unknown"})
+		return
+	}
+	writeJSON(w, h.updater.GetUpdateInfo())
+}

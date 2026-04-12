@@ -29,6 +29,7 @@ import (
 	"github.com/moconnor/pcenter/internal/drs"
 	"github.com/moconnor/pcenter/internal/rbac"
 	"github.com/moconnor/pcenter/internal/tags"
+	"github.com/moconnor/pcenter/internal/updater"
 )
 
 // Handler holds dependencies for API handlers
@@ -44,6 +45,7 @@ type Handler struct {
 	alarms          *alarms.Service
 	drsRulesDB      *drs.RulesDB
 	rbac            *rbac.Service
+	updater         *updater.Checker
 	agentHub        *agent.Hub
 	clusters        []config.ClusterConfig // For on-demand client creation
 	secrets         map[string]string      // Token secrets keyed by cluster/agent name
@@ -107,6 +109,11 @@ func (h *Handler) SetInventoryService(inv *inventory.Service) {
 // SetOnChange sets a callback for state changes (broadcasts to WebSocket)
 func (h *Handler) SetOnChange(fn func()) {
 	h.onChange = fn
+}
+
+// SetUpdateChecker sets the update checker
+func (h *Handler) SetUpdateChecker(u *updater.Checker) {
+	h.updater = u
 }
 
 // SetRBACService sets the RBAC service for permission checking

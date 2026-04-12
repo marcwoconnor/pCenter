@@ -39,7 +39,10 @@ jobs:
       - name: Build backend
         working-directory: backend
         run: |
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o pcenter ./cmd/server
+          VERSION=${{ steps.version.outputs.VERSION }}
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
+            -ldflags "-s -w -X github.com/moconnor/pcenter/internal/updater.Version=${VERSION}" \
+            -o pcenter ./cmd/server
 
       - name: Build .deb package
         run: |

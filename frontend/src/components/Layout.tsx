@@ -2,10 +2,21 @@ import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useCluster } from '../context/ClusterContext';
 import { useAuth } from '../context/AuthContext';
+import { api } from '../api/client';
 import { TasksBar } from './TasksBar';
 import { AlarmBadge } from './AlarmBadge';
 import { Console } from './Console';
 import { ActivityPanel } from './ActivityPanel';
+
+interface UpdateInfo {
+  current_version: string;
+  latest_version?: string;
+  update_available: boolean;
+  release_notes?: string;
+  release_url?: string;
+  release_name?: string;
+  published_at?: string;
+}
 
 const navItems = [
   { path: '/', label: 'Home', icon: '⌂' },
@@ -29,6 +40,18 @@ export function Layout({ children, sidebar }: LayoutProps) {
   const { isConnected, summary, error, consoles, closeConsole, focusConsole, updateConsole } = useCluster();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [showUpdatePanel, setShowUpdatePanel] = useState(false);
+
+  useEffect(() => {
+    api.getVersion().then(setUpdateInfo).catch(() => {});
+    // Re-check every 30 minutes client-side
+    const interval = setInterval(() => {
+      api.getVersion().then(setUpdateInfo).catch(() => {});
+    }, 30 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleLogout = async () => {
     await logout();
@@ -102,9 +125,65 @@ export function Layout({ children, sidebar }: LayoutProps) {
       <header className="bg-gray-800 text-white shadow-lg flex-shrink-0">
         <div className="flex items-center h-12">
           {/* Logo */}
-          <div className="px-4 border-r border-gray-700">
+          <div className="px-4 border-r border-gray-700 relative">
             <div className="font-bold text-lg leading-tight">pCenter</div>
-            <div className="text-[10px] text-gray-500 leading-none">{__APP_VERSION__}</div>
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] text-gray-500 leading-none">{__APP_VERSION__}</span>
+              {updateInfo?.update_available && (
+                <button
+                  onClick={() => setShowUpdatePanel(!showUpdatePanel)}
+                  className="text-[9px] bg-green-600 text-white px-1 rounded leading-tight hover:bg-green-700"
+                  title={`Update available: v${updateInfo.latest_version}`}
+                >
+                  NEW
+                </button>
+              )}
+            </div>
+            {/* Update panel dropdown */}
+            {showUpdatePanel && updateInfo?.update_available && (
+              <div className="absolute top-full left-0 mt-1 w-96 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl z-50 p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-semibold text-gray-900 dark:text-white text-sm">Update Available</h3>
+                  <button onClick={() => setShowUpdatePanel(false)} className="text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>
+                </div>
+                <div className="text-sm space-y-2">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-gray-500">Current</span>
+                    <span className="text-gray-900 dark:text-white font-mono">v{updateInfo.current_version}</span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-gray-500">Latest</span>
+                    <span className="text-green-600 font-mono font-semibold">v{updateInfo.latest_version}</span>
+                  </div>
+                  {updateInfo.release_name && (
+                    <div className="flex justify-between text-xs">
+                      <span className="text-gray-500">Release</span>
+                      <span className="text-gray-900 dark:text-white">{updateInfo.release_name}</span>
+                    </div>
+                  )}
+                  {updateInfo.published_at && (
+                    <div className="flex justify-between text-xs">
+                      <span className="text-gray-500">Published</span>
+                      <span className="text-gray-900 dark:text-white">{new Date(updateInfo.published_at).toLocaleDateString()}</span>
+                    </div>
+                  )}
+                  {updateInfo.release_notes && (
+                    <div className="mt-3 border-t border-gray-200 dark:border-gray-700 pt-2">
+                      <div className="text-xs text-gray-500 mb-1">Release Notes</div>
+                      <pre className="text-xs text-gray-900 dark:text-gray-300 whitespace-pre-wrap font-mono bg-gray-50 dark:bg-gray-900 p-2 rounded max-h-48 overflow-y-auto">
+                        {updateInfo.release_notes}
+                      </pre>
+                    </div>
+                  )}
+                  {updateInfo.release_url && (
+                    <a href={updateInfo.release_url} target="_blank" rel="noopener noreferrer"
+                      className="block text-center mt-2 px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700">
+                      View on GitHub
+                    </a>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Main Navigation */}

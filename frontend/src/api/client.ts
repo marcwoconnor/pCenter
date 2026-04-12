@@ -521,6 +521,10 @@ export const api = {
   deployLibraryItem: (id: string, req: DeployLibraryItemRequest) =>
     fetchAPI<{ upid: string; message: string }>(`/library/${id}/deploy`, { method: 'POST', body: JSON.stringify(req) }),
 
+  // Version/update check
+  getVersion: () =>
+    fetchAPI<any>('/version'),
+
   // RBAC
   getRoles: () =>
     fetchAPI<RBACRole[]>('/rbac/roles'),

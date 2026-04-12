@@ -322,6 +322,9 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("DELETE /api/tags/assign", h.UnassignTag)
 	protectedMux.HandleFunc("POST /api/tags/bulk-assign", h.BulkAssignTags)
 
+	// --- Version/update check ---
+	protectedMux.HandleFunc("GET /api/version", h.GetVersion)
+
 	// --- RBAC endpoints ---
 	protectedMux.HandleFunc("GET /api/rbac/roles", h.GetRoles)
 	protectedMux.HandleFunc("POST /api/rbac/roles", h.CreateRole)

@@ -29,6 +29,7 @@ import (
 	"github.com/moconnor/pcenter/internal/rbac"
 	"github.com/moconnor/pcenter/internal/state"
 	"github.com/moconnor/pcenter/internal/tags"
+	"github.com/moconnor/pcenter/internal/updater"
 )
 
 func main() {
@@ -274,6 +275,12 @@ func main() {
 	rbacService := rbac.NewService(rbacDB, rbacResolver)
 	handler.SetRBACService(rbacService)
 	slog.Info("RBAC enabled", "database", rbacDBPath)
+
+	// Initialize update checker
+	updateChecker := updater.NewChecker("marcwoconnor/pCenter", 6*time.Hour)
+	go updateChecker.Start(ctx)
+	handler.SetUpdateChecker(updateChecker)
+	slog.Info("update checker enabled", "version", updater.Version)
 
 	// Initialize content library
 	if cfg.Library.Enabled {
