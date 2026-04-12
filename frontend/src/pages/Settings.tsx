@@ -1,13 +1,17 @@
 import { useState, useEffect, type FormEvent } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { authApi } from '../api/auth';
+import { api } from '../api/client';
 import { TOTPSetupWizard } from '../components/TOTPSetupWizard';
 import { Layout } from '../components/Layout';
 import type { Session } from '../types/auth';
+import type { AlarmDefinition, NotificationChannel } from '../types';
+
+type SettingsTab = 'security' | 'sessions' | 'alarms' | 'notifications';
 
 export function Settings() {
   const { user, refreshUser } = useAuth();
-  const [activeTab, setActiveTab] = useState<'security' | 'sessions'>('security');
+  const [activeTab, setActiveTab] = useState<SettingsTab>('security');
 
   return (
     <Layout>
@@ -39,10 +43,32 @@ export function Settings() {
             >
               Sessions
             </button>
+            <button
+              onClick={() => setActiveTab('alarms')}
+              className={`pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'alarms'
+                  ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'
+              }`}
+            >
+              Alarms
+            </button>
+            <button
+              onClick={() => setActiveTab('notifications')}
+              className={`pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'notifications'
+                  ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'
+              }`}
+            >
+              Notifications
+            </button>
           </div>
 
           {activeTab === 'security' && <SecurityTab user={user} onUpdate={refreshUser} />}
           {activeTab === 'sessions' && <SessionsTab />}
+          {activeTab === 'alarms' && <AlarmsTab />}
+          {activeTab === 'notifications' && <NotificationsTab />}
         </div>
       </div>
     </Layout>
@@ -375,6 +401,365 @@ function SessionsTab() {
             No active sessions found
           </p>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Alarms Tab - Manage alarm definitions
+function AlarmsTab() {
+  const [definitions, setDefinitions] = useState<AlarmDefinition[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+
+  // Create form state
+  const [name, setName] = useState('');
+  const [metricType, setMetricType] = useState('cpu');
+  const [resourceType, setResourceType] = useState('node');
+  const [warningThreshold, setWarningThreshold] = useState(90);
+  const [criticalThreshold, setCriticalThreshold] = useState(95);
+  const [clearThreshold, setClearThreshold] = useState(85);
+  const [durationSamples, setDurationSamples] = useState(3);
+  const [creating, setCreating] = useState(false);
+
+  const loadDefinitions = async () => {
+    try {
+      const defs = await api.getAlarmDefinitions();
+      setDefinitions(defs || []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadDefinitions(); }, []);
+
+  const handleCreate = async (e: FormEvent) => {
+    e.preventDefault();
+    setCreating(true);
+    setError(null);
+    try {
+      await api.createAlarmDefinition({
+        name, metric_type: metricType, resource_type: resourceType,
+        scope: 'global', condition: 'above',
+        warning_threshold: warningThreshold,
+        critical_threshold: criticalThreshold,
+        clear_threshold: clearThreshold,
+        duration_samples: durationSamples,
+        notify_channels: [],
+      } as Partial<AlarmDefinition>);
+      setShowCreate(false);
+      setName('');
+      loadDefinitions();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Create failed');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await api.deleteAlarmDefinition(id);
+      loadDefinitions();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Delete failed');
+    }
+  };
+
+  const handleToggle = async (def: AlarmDefinition) => {
+    try {
+      await api.updateAlarmDefinition(def.id, { ...def, enabled: !def.enabled });
+      loadDefinitions();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Update failed');
+    }
+  };
+
+  if (loading) return <div className="text-gray-500">Loading...</div>;
+
+  return (
+    <div className="space-y-6">
+      {error && (
+        <div className="p-3 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded text-sm">
+          {error}
+        </div>
+      )}
+
+      <div className="flex justify-between items-center">
+        <h2 className="text-lg font-medium text-gray-900 dark:text-white">Alarm Definitions</h2>
+        <button
+          onClick={() => setShowCreate(!showCreate)}
+          className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+        >
+          {showCreate ? 'Cancel' : '+ New Alarm'}
+        </button>
+      </div>
+
+      {showCreate && (
+        <form onSubmit={handleCreate} className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm text-gray-500 mb-1">Name</label>
+              <input
+                type="text" value={name} onChange={e => setName(e.target.value)} required
+                className="w-full px-3 py-2 text-sm border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                placeholder="e.g. Node CPU High"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-500 mb-1">Metric</label>
+              <select value={metricType} onChange={e => setMetricType(e.target.value)}
+                className="w-full px-3 py-2 text-sm border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                <option value="cpu">CPU %</option>
+                <option value="mem_percent">Memory %</option>
+                <option value="disk_percent">Disk %</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-500 mb-1">Resource Type</label>
+              <select value={resourceType} onChange={e => setResourceType(e.target.value)}
+                className="w-full px-3 py-2 text-sm border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                <option value="node">Node</option>
+                <option value="vm">VM</option>
+                <option value="ct">Container</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-500 mb-1">Duration (samples)</label>
+              <input
+                type="number" value={durationSamples} onChange={e => setDurationSamples(parseInt(e.target.value))}
+                min={1} max={20}
+                className="w-full px-3 py-2 text-sm border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              />
+              <span className="text-xs text-gray-400">{durationSamples * 30}s at 30s interval</span>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-500 mb-1">Warning Threshold (%)</label>
+              <input
+                type="number" value={warningThreshold} onChange={e => setWarningThreshold(parseFloat(e.target.value))}
+                className="w-full px-3 py-2 text-sm border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-500 mb-1">Critical Threshold (%)</label>
+              <input
+                type="number" value={criticalThreshold} onChange={e => setCriticalThreshold(parseFloat(e.target.value))}
+                className="w-full px-3 py-2 text-sm border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-500 mb-1">Clear Threshold (%)</label>
+              <input
+                type="number" value={clearThreshold} onChange={e => setClearThreshold(parseFloat(e.target.value))}
+                className="w-full px-3 py-2 text-sm border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              />
+              <span className="text-xs text-gray-400">Hysteresis — alarm clears below this</span>
+            </div>
+          </div>
+          <button type="submit" disabled={creating}
+            className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50">
+            {creating ? 'Creating...' : 'Create Alarm'}
+          </button>
+        </form>
+      )}
+
+      {/* Definitions list */}
+      <div className="space-y-2">
+        {definitions.length === 0 ? (
+          <p className="text-gray-500 text-sm text-center py-4">No alarm definitions configured</p>
+        ) : definitions.map(def => (
+          <div key={def.id} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => handleToggle(def)}
+                  className={`w-10 h-5 rounded-full relative transition-colors ${
+                    def.enabled ? 'bg-blue-600' : 'bg-gray-400'
+                  }`}
+                >
+                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                    def.enabled ? 'left-5' : 'left-0.5'
+                  }`} />
+                </button>
+                <div>
+                  <span className="font-medium text-gray-900 dark:text-white">{def.name}</span>
+                  <div className="text-xs text-gray-500">
+                    {def.resource_type} &middot; {def.metric_type} &middot;
+                    warn &gt; {def.warning_threshold}% &middot;
+                    crit &gt; {def.critical_threshold}% &middot;
+                    clear &lt; {def.clear_threshold}% &middot;
+                    {def.duration_samples} samples
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => handleDelete(def.id)}
+                className="text-xs text-red-500 hover:text-red-700"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Notifications Tab - Manage notification channels
+function NotificationsTab() {
+  const [channels, setChannels] = useState<NotificationChannel[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [testing, setTesting] = useState<string | null>(null);
+
+  // Create form
+  const [channelName, setChannelName] = useState('');
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const [creating, setCreating] = useState(false);
+
+  const loadChannels = async () => {
+    try {
+      const chs = await api.getAlarmChannels();
+      setChannels(chs || []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadChannels(); }, []);
+
+  const handleCreate = async (e: FormEvent) => {
+    e.preventDefault();
+    setCreating(true);
+    setError(null);
+    try {
+      await api.createAlarmChannel({
+        name: channelName,
+        type: 'webhook',
+        config: JSON.stringify({ url: webhookUrl }),
+      });
+      setShowCreate(false);
+      setChannelName('');
+      setWebhookUrl('');
+      loadChannels();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Create failed');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await api.deleteAlarmChannel(id);
+      loadChannels();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Delete failed');
+    }
+  };
+
+  const handleTest = async (id: string) => {
+    setTesting(id);
+    setError(null);
+    try {
+      await api.testAlarmChannel(id);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Test failed');
+    } finally {
+      setTesting(null);
+    }
+  };
+
+  if (loading) return <div className="text-gray-500">Loading...</div>;
+
+  return (
+    <div className="space-y-6">
+      {error && (
+        <div className="p-3 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded text-sm">
+          {error}
+        </div>
+      )}
+
+      <div className="flex justify-between items-center">
+        <h2 className="text-lg font-medium text-gray-900 dark:text-white">Notification Channels</h2>
+        <button
+          onClick={() => setShowCreate(!showCreate)}
+          className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+        >
+          {showCreate ? 'Cancel' : '+ New Channel'}
+        </button>
+      </div>
+
+      {showCreate && (
+        <form onSubmit={handleCreate} className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 space-y-4">
+          <div>
+            <label className="block text-sm text-gray-500 mb-1">Channel Name</label>
+            <input
+              type="text" value={channelName} onChange={e => setChannelName(e.target.value)} required
+              className="w-full px-3 py-2 text-sm border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              placeholder="e.g. Discord Alerts"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-500 mb-1">Webhook URL</label>
+            <input
+              type="url" value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} required
+              className="w-full px-3 py-2 text-sm border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              placeholder="https://hooks.slack.com/... or https://ntfy.sh/..."
+            />
+          </div>
+          <button type="submit" disabled={creating}
+            className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50">
+            {creating ? 'Creating...' : 'Create Channel'}
+          </button>
+        </form>
+      )}
+
+      {/* Channels list */}
+      <div className="space-y-2">
+        {channels.length === 0 ? (
+          <p className="text-gray-500 text-sm text-center py-4">
+            No notification channels configured. Alarms will still fire but no notifications will be sent.
+          </p>
+        ) : channels.map(ch => {
+          let url = '';
+          try { url = JSON.parse(ch.config)?.url || ''; } catch {}
+          return (
+            <div key={ch.id} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="font-medium text-gray-900 dark:text-white">{ch.name}</span>
+                  <div className="text-xs text-gray-500">
+                    {ch.type} &middot; {url.length > 50 ? url.slice(0, 50) + '...' : url}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleTest(ch.id)}
+                    disabled={testing === ch.id}
+                    className="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"
+                  >
+                    {testing === ch.id ? 'Testing...' : 'Test'}
+                  </button>
+                  <button
+                    onClick={() => handleDelete(ch.id)}
+                    className="text-xs text-red-500 hover:text-red-700"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
