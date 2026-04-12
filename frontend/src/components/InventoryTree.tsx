@@ -894,6 +894,12 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
   const getRootHostsMenuItems = (): MenuItem[] => {
     return [
       {
+        label: 'New Folder',
+        icon: '📁',
+        action: () => setFolderDialog({ mode: 'create', treeView: 'hosts' }),
+      },
+      { label: '', action: () => {}, divider: true },
+      {
         label: 'Add Datacenter',
         icon: '🏢',
         action: () => setDatacenterDialog({ mode: 'create-dc' }),
@@ -1308,13 +1314,20 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
     );
   };
 
+  // Background right-click handler for empty space in the tree
+  const handleTreeBackground = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const items = view === 'hosts' ? getRootHostsMenuItems() : getRootMenuItems(view as TreeView);
+    if (items.length > 0) showContextMenu(e, items);
+  };
+
   // Hosts & Clusters View - with datacenter hierarchy
   if (view === 'hosts') {
     const totalNodes = sortedNodes.length;
     const hasDatacenters = datacenters.length > 0 || orphanClusters.length > 0;
 
     return (
-      <div className="py-2">
+      <div className="py-2 min-h-full" onContextMenu={handleTreeBackground}>
         {contextMenu && (
           <ContextMenu
             x={contextMenu.x}
@@ -1516,7 +1529,7 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
       .filter(g => !isGuestInFolder(g, 'vms'));
 
     return (
-      <div className="py-2">
+      <div className="py-2 min-h-full" onContextMenu={handleTreeBackground}>
         {contextMenu && (
           <ContextMenu
             x={contextMenu.x}
@@ -1638,7 +1651,7 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
     }, [sortedStorage]);
 
     return (
-      <div className="py-2">
+      <div className="py-2 min-h-full" onContextMenu={(e) => e.preventDefault()}>
         {contextMenu && (
           <ContextMenu
             x={contextMenu.x}

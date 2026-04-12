@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, memo } from 'react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../api/client';
 import { TagChip } from './TagChip';
 import type { Tag } from '../types';
@@ -25,20 +26,36 @@ export const TagPicker = memo(function TagPicker({
   const [newCategory, setNewCategory] = useState('');
   const [newColor, setNewColor] = useState('#3b82f6');
   const [error, setError] = useState<string | null>(null);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const updatePosition = useCallback(() => {
+    if (!buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
+    setDropdownPos({ top: rect.bottom + 4, left: rect.left });
+  }, []);
 
   // Close on outside click
   useEffect(() => {
     if (!isOpen) return;
+    updatePosition();
     const handleClick = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+      if (
+        dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
+        buttonRef.current && !buttonRef.current.contains(e.target as Node)
+      ) {
         setIsOpen(false);
         setCreating(false);
       }
     };
     document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [isOpen]);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [isOpen, updatePosition]);
 
   const assignedIds = new Set(assignedTags.map(t => t.id));
   const available = allTags.filter(t =>
@@ -74,13 +91,14 @@ export const TagPicker = memo(function TagPicker({
   const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316'];
 
   return (
-    <div className="relative" ref={dropdownRef}>
+    <div>
       {/* Assigned tags + add button */}
       <div className="flex flex-wrap items-center gap-1.5">
         {assignedTags.map(tag => (
           <TagChip key={tag.id} tag={tag} onRemove={() => onUnassign(tag.id)} />
         ))}
         <button
+          ref={buttonRef}
           onClick={() => setIsOpen(!isOpen)}
           className="text-xs px-2 py-0.5 rounded-full border border-dashed border-gray-400 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:border-blue-500 hover:text-blue-500 transition-colors"
         >
@@ -88,9 +106,10 @@ export const TagPicker = memo(function TagPicker({
         </button>
       </div>
 
-      {/* Dropdown */}
-      {isOpen && (
-        <div className="absolute z-50 mt-1 w-64 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 max-h-80 overflow-hidden flex flex-col">
+      {/* Dropdown via portal */}
+      {isOpen && dropdownPos && createPortal(
+        <div ref={dropdownRef} className="fixed z-[9999] w-64 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 max-h-80 overflow-hidden flex flex-col"
+          style={{ top: dropdownPos.top, left: dropdownPos.left }}>
           {/* Search */}
           <div className="p-2 border-b border-gray-200 dark:border-gray-700">
             <input
@@ -183,7 +202,8 @@ export const TagPicker = memo(function TagPicker({
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
