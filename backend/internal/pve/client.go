@@ -236,6 +236,18 @@ func CreateAPIToken(ctx context.Context, address string, auth *AuthResult, token
 		return nil, fmt.Errorf("read response body: %w", err)
 	}
 	if resp.StatusCode >= 400 {
+		// If token already exists, delete and recreate
+		if strings.Contains(string(body), "already exists") {
+			slog.Info("API token already exists, recreating", "token", tokenName)
+			delURL := fmt.Sprintf("https://%s/api2/json/access/users/%s/token/%s",
+				address, url.PathEscape(auth.Username), tokenName)
+			delReq, _ := http.NewRequestWithContext(ctx, "DELETE", delURL, nil)
+			delReq.Header.Set("CSRFPreventionToken", auth.CSRFToken)
+			delReq.AddCookie(&http.Cookie{Name: "PVEAuthCookie", Value: auth.Ticket})
+			client.Do(delReq)
+			// Retry creation
+			return CreateAPIToken(ctx, address, auth, tokenName, insecure)
+		}
 		return nil, fmt.Errorf("create token failed: %s", string(body))
 	}
 
