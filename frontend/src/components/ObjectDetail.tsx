@@ -312,7 +312,7 @@ function NodeSummary({ node }: { node: Node }) {
             <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded">
               <div
                 className={`h-full rounded ${parseFloat(memPercent) > 80 ? 'bg-red-500' : 'bg-green-500'}`}
-                style={{ width: `${memPercent}%` }}
+                style={{ width: `${Math.min(parseFloat(memPercent), 100)}%` }}
               />
             </div>
           </div>
@@ -946,7 +946,8 @@ function GuestSummary({ guest, tags, tagAssignments, onTagsChanged }: {
   onTagsChanged: () => void;
 }) {
   const cpuPercent = (guest.cpu * 100).toFixed(1);
-  const memPercent = guest.maxmem > 0 ? ((guest.mem / guest.maxmem) * 100).toFixed(1) : '0';
+  const memPercentRaw = guest.maxmem > 0 ? (guest.mem / guest.maxmem) * 100 : 0;
+  const memPercent = memPercentRaw.toFixed(1);
 
   const objectType = guest.type === 'qemu' ? 'vm' : 'ct';
   const objectId = String(guest.vmid);
@@ -1018,12 +1019,12 @@ function GuestSummary({ guest, tags, tagAssignments, onTagsChanged }: {
           <div>
             <div className="flex justify-between text-sm mb-1">
               <span className="text-gray-500">Memory ({formatBytes(guest.maxmem)})</span>
-              <span className="text-gray-900 dark:text-white">{guest.status === 'running' ? `${memPercent}%` : '-'}</span>
+              <span className={`text-gray-900 dark:text-white ${memPercentRaw > 100 ? 'text-red-500 font-semibold' : ''}`}>{guest.status === 'running' ? `${memPercent}%` : '-'}</span>
             </div>
             <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded">
               <div
-                className="h-full rounded bg-green-500"
-                style={{ width: guest.status === 'running' ? `${memPercent}%` : '0%' }}
+                className={`h-full rounded ${memPercentRaw > 90 ? 'bg-red-500' : memPercentRaw > 70 ? 'bg-yellow-500' : 'bg-green-500'}`}
+                style={{ width: guest.status === 'running' ? `${Math.min(memPercentRaw, 100)}%` : '0%' }}
               />
             </div>
           </div>

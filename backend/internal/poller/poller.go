@@ -80,6 +80,16 @@ func (p *Poller) AddCluster(cfg config.ClusterConfig) *ClusterPoller {
 	}
 
 	p.clusters[cfg.Name] = cp
+
+	// If poller is already running, start this cluster's polling goroutine immediately
+	if p.ctx != nil {
+		p.wg.Add(1)
+		go func() {
+			defer p.wg.Done()
+			cp.run(p.ctx)
+		}()
+	}
+
 	return cp
 }
 

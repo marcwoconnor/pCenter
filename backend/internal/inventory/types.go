@@ -60,6 +60,7 @@ type InventoryHost struct {
 	DatacenterID string     `json:"datacenter_id,omitempty"` // set for standalone hosts
 	Address      string     `json:"address"`                 // host:port
 	TokenID      string     `json:"token_id"`                // API token ID
+	TokenSecret  string     `json:"-"`                       // persisted but never exposed in JSON
 	Insecure     bool       `json:"insecure"`                // skip TLS verification
 	Status       HostStatus `json:"status"`                  // staged, online, error, etc.
 	Error        string     `json:"error,omitempty"`         // last error message

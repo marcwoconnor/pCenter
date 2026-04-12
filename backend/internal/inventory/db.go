@@ -217,9 +217,20 @@ func (db *DB) migrate() error {
 	}
 	if !hasDatacenterID {
 		slog.Info("adding datacenter_id column to inventory_hosts for standalone hosts")
-		// Add datacenter_id column (nullable for hosts that belong to clusters)
 		db.conn.Exec("ALTER TABLE inventory_hosts ADD COLUMN datacenter_id TEXT REFERENCES datacenters(id) ON DELETE CASCADE")
 		db.conn.Exec("CREATE INDEX IF NOT EXISTS idx_hosts_datacenter ON inventory_hosts(datacenter_id)")
+	}
+
+	// Migration: add token_secret column to inventory_hosts
+	var hasTokenSecret bool
+	row = db.conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('inventory_hosts') WHERE name='token_secret'")
+	var tsCount int
+	if err := row.Scan(&tsCount); err == nil && tsCount > 0 {
+		hasTokenSecret = true
+	}
+	if !hasTokenSecret {
+		slog.Info("adding token_secret column to inventory_hosts")
+		db.conn.Exec("ALTER TABLE inventory_hosts ADD COLUMN token_secret TEXT DEFAULT ''")
 	}
 
 	return nil
@@ -365,7 +376,7 @@ func (db *DB) prepareStatements() error {
 	}
 
 	db.stmtGetHost, err = db.conn.Prepare(`
-		SELECT id, cluster_id, address, token_id, insecure, status, error, node_name, created_at, updated_at
+		SELECT id, cluster_id, address, token_id, COALESCE(token_secret, ''), insecure, status, error, node_name, created_at, updated_at
 		FROM inventory_hosts WHERE id = ?
 	`)
 	if err != nil {
@@ -796,6 +807,7 @@ func (db *DB) AddDatacenterHost(ctx context.Context, datacenterID string, req Ad
 		DatacenterID: datacenterID,
 		Address:      req.Address,
 		TokenID:      req.TokenID,
+		TokenSecret:  req.TokenSecret,
 		Insecure:     req.Insecure,
 		Status:       HostStatusStaged,
 		CreatedAt:    now,
@@ -803,9 +815,9 @@ func (db *DB) AddDatacenterHost(ctx context.Context, datacenterID string, req Ad
 	}
 
 	_, err := db.conn.ExecContext(ctx, `
-		INSERT INTO inventory_hosts (id, cluster_id, datacenter_id, address, token_id, insecure, status, error, node_name, created_at, updated_at)
-		VALUES (?, NULL, ?, ?, ?, ?, ?, '', '', ?, ?)
-	`, host.ID, host.DatacenterID, host.Address, host.TokenID,
+		INSERT INTO inventory_hosts (id, cluster_id, datacenter_id, address, token_id, token_secret, insecure, status, error, node_name, created_at, updated_at)
+		VALUES (?, NULL, ?, ?, ?, ?, ?, ?, '', '', ?, ?)
+	`, host.ID, host.DatacenterID, host.Address, host.TokenID, host.TokenSecret,
 		boolToInt(host.Insecure), string(host.Status),
 		host.CreatedAt.Unix(), host.UpdatedAt.Unix(),
 	)
@@ -822,7 +834,7 @@ func (db *DB) ListHostsByDatacenter(ctx context.Context, datacenterID string) ([
 	defer db.mu.Unlock()
 
 	rows, err := db.conn.QueryContext(ctx, `
-		SELECT id, COALESCE(cluster_id, ''), COALESCE(datacenter_id, ''), address, token_id, insecure, status, error, node_name, created_at, updated_at
+		SELECT id, COALESCE(cluster_id, ''), COALESCE(datacenter_id, ''), address, token_id, COALESCE(token_secret, ''), insecure, status, error, node_name, created_at, updated_at
 		FROM inventory_hosts
 		WHERE datacenter_id = ? AND (cluster_id IS NULL OR cluster_id = '')
 		ORDER BY created_at
@@ -840,7 +852,7 @@ func (db *DB) ListHostsByDatacenter(ctx context.Context, datacenterID string) ([
 		var errMsg, nodeName sql.NullString
 		var createdAt, updatedAt int64
 
-		if err := rows.Scan(&h.ID, &h.ClusterID, &h.DatacenterID, &h.Address, &h.TokenID, &insecure,
+		if err := rows.Scan(&h.ID, &h.ClusterID, &h.DatacenterID, &h.Address, &h.TokenID, &h.TokenSecret, &insecure,
 			&status, &errMsg, &nodeName, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan host: %w", err)
 		}
@@ -869,11 +881,12 @@ func (db *DB) GetHost(ctx context.Context, id string) (*InventoryHost, error) {
 	var h InventoryHost
 	var insecure int
 	var status string
+	var clusterID sql.NullString
 	var errMsg, nodeName sql.NullString
 	var createdAt, updatedAt int64
 
 	err := db.stmtGetHost.QueryRowContext(ctx, id).Scan(
-		&h.ID, &h.ClusterID, &h.Address, &h.TokenID, &insecure,
+		&h.ID, &clusterID, &h.Address, &h.TokenID, &h.TokenSecret, &insecure,
 		&status, &errMsg, &nodeName, &createdAt, &updatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -883,6 +896,9 @@ func (db *DB) GetHost(ctx context.Context, id string) (*InventoryHost, error) {
 		return nil, fmt.Errorf("get host: %w", err)
 	}
 
+	if clusterID.Valid {
+		h.ClusterID = clusterID.String
+	}
 	h.Insecure = insecure != 0
 	h.Status = HostStatus(status)
 	if errMsg.Valid {

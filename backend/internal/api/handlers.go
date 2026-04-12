@@ -3968,13 +3968,44 @@ func (h *Handler) AddDatacenterHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	host, err := h.inventory.AddDatacenterHost(ctx, datacenterID, req)
+	host, tokenSecret, err := h.inventory.AddDatacenterHost(ctx, datacenterID, req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	// For standalone hosts: store secret, test connection, auto-activate, start polling
+	if tokenSecret != "" && h.secrets != nil {
+		secretKey := "standalone:" + host.ID
+		h.secrets[secretKey] = tokenSecret
+
+		// Test connection and activate
+		result := h.testPVEConnection(ctx, host.Address, host.TokenID, tokenSecret, host.Insecure)
+		if result.Success {
+			h.inventory.SetHostStatus(ctx, host.ID, inventory.HostStatusOnline, "", result.NodeName)
+			host.Status = inventory.HostStatusOnline
+			host.NodeName = result.NodeName
+
+			// Start polling immediately
+			if h.poller != nil {
+				cfg := config.ClusterConfig{
+					Name:          secretKey,
+					DiscoveryNode: host.Address,
+					TokenID:       host.TokenID,
+					TokenSecret:   tokenSecret,
+					Insecure:      host.Insecure,
+				}
+				h.poller.AddCluster(cfg)
+				slog.Info("started polling standalone host", "address", host.Address, "node", result.NodeName)
+			}
+		} else {
+			h.inventory.SetHostStatus(ctx, host.ID, inventory.HostStatusError, result.Message, "")
+			host.Status = inventory.HostStatusError
+			host.Error = result.Message
+		}
 	}
 
 	// Log activity
@@ -4234,20 +4265,43 @@ func (h *Handler) ActivateHost(w http.ResponseWriter, r *http.Request) {
 
 	// Store the token secret for polling
 	if h.secrets != nil {
-		// Get cluster to find the agent name
-		cluster, err := h.inventory.GetCluster(ctx, host.ClusterID)
-		if err == nil && cluster != nil {
-			agentName := cluster.AgentName
-			if agentName == "" {
-				agentName = cluster.Name
+		if host.ClusterID != "" {
+			// Cluster host: key by cluster agent name
+			cluster, err := h.inventory.GetCluster(ctx, host.ClusterID)
+			if err == nil && cluster != nil {
+				agentName := cluster.AgentName
+				if agentName == "" {
+					agentName = cluster.Name
+				}
+				h.secrets[agentName] = req.TokenSecret
 			}
-			h.secrets[agentName] = req.TokenSecret
+		} else {
+			// Standalone host: key by "standalone:{hostID}"
+			h.secrets["standalone:"+host.ID] = req.TokenSecret
 		}
 	}
 
-	// Activate the cluster
-	if err := h.inventory.SetClusterStatus(ctx, host.ClusterID, inventory.ClusterStatusActive); err != nil {
-		slog.Error("failed to activate cluster", "cluster_id", host.ClusterID, "error", err)
+	// Activate the cluster (if host belongs to one)
+	if host.ClusterID != "" {
+		if err := h.inventory.SetClusterStatus(ctx, host.ClusterID, inventory.ClusterStatusActive); err != nil {
+			slog.Error("failed to activate cluster", "cluster_id", host.ClusterID, "error", err)
+		}
+	}
+
+	// Start polling standalone host immediately
+	if host.ClusterID == "" && h.poller != nil && h.secrets != nil {
+		secret := h.secrets["standalone:"+host.ID]
+		if secret != "" {
+			cfg := config.ClusterConfig{
+				Name:          "standalone:" + host.ID,
+				DiscoveryNode: host.Address,
+				TokenID:       host.TokenID,
+				TokenSecret:   secret,
+				Insecure:      host.Insecure,
+			}
+			h.poller.AddCluster(cfg)
+			slog.Info("started polling standalone host", "address", host.Address, "id", host.ID)
+		}
 	}
 
 	// Log activity

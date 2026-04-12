@@ -462,20 +462,21 @@ func (s *Service) AddHostByClusterName(ctx context.Context, clusterName string, 
 }
 
 // AddDatacenterHost adds a standalone host directly to a datacenter (not in a cluster)
-func (s *Service) AddDatacenterHost(ctx context.Context, datacenterID string, req AddHostRequest) (*InventoryHost, error) {
+// Returns the host and the resolved token secret (needed for polling)
+func (s *Service) AddDatacenterHost(ctx context.Context, datacenterID string, req AddHostRequest) (*InventoryHost, string, error) {
 	// Validate datacenter exists
 	dc, err := s.db.GetDatacenter(ctx, datacenterID)
 	if err != nil {
-		return nil, fmt.Errorf("get datacenter: %w", err)
+		return nil, "", fmt.Errorf("get datacenter: %w", err)
 	}
 	if dc == nil {
-		return nil, fmt.Errorf("datacenter not found")
+		return nil, "", fmt.Errorf("datacenter not found")
 	}
 
 	// Resolve authentication (create token if using password)
 	tokenID, tokenSecret, err := s.resolveHostAuth(ctx, &req)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	req.TokenID = tokenID
 	req.TokenSecret = tokenSecret
@@ -483,10 +484,10 @@ func (s *Service) AddDatacenterHost(ctx context.Context, datacenterID string, re
 	// Add to database
 	host, err := s.db.AddDatacenterHost(ctx, datacenterID, req)
 	if err != nil {
-		return nil, fmt.Errorf("add host: %w", err)
+		return nil, "", fmt.Errorf("add host: %w", err)
 	}
 
-	return host, nil
+	return host, tokenSecret, nil
 }
 
 // GetHost retrieves a host by ID
@@ -597,6 +598,26 @@ func (s *Service) GetClusterConfigs(ctx context.Context, secrets map[string]stri
 			TokenSecret:   secret,
 			Insecure:      onlineHost.Insecure,
 		})
+	}
+
+	// Also include standalone hosts as pseudo-clusters
+	// Token secret is now persisted in DB, no need for in-memory secrets map
+	datacenters, _, err := s.GetDatacenterTree(ctx)
+	if err == nil {
+		for _, dc := range datacenters {
+			for _, host := range dc.Hosts {
+				if host.Status != HostStatusOnline || host.TokenSecret == "" {
+					continue
+				}
+				configs = append(configs, config.ClusterConfig{
+					Name:          "standalone:" + host.ID,
+					DiscoveryNode: host.Address,
+					TokenID:       host.TokenID,
+					TokenSecret:   host.TokenSecret,
+					Insecure:      host.Insecure,
+				})
+			}
+		}
 	}
 
 	return configs, nil
