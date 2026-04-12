@@ -87,6 +87,21 @@ export function AuthProvider({ children }: AuthProviderProps) {
     };
 
     checkAuth();
+
+    // Listen for session expiry from fetchAPI (avoids window.location.href)
+    const handleSessionExpired = () => {
+      setState({
+        user: null,
+        csrfToken: null,
+        isAuthenticated: false,
+        isLoading: false,
+        requiresTOTP: false,
+        needsFirstUser: null,
+        error: null,
+      });
+    };
+    window.addEventListener('auth:session-expired', handleSessionExpired);
+    return () => window.removeEventListener('auth:session-expired', handleSessionExpired);
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {

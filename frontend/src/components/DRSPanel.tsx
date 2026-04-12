@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, memo } from 'react';
 import { api } from '../api/client';
 import type { DRSRecommendation } from '../types';
 
@@ -7,7 +7,7 @@ interface DRSPanelProps {
   onRefresh: () => void;
 }
 
-export function DRSPanel({ recommendations, onRefresh }: DRSPanelProps) {
+export const DRSPanel = memo(function DRSPanel({ recommendations, onRefresh }: DRSPanelProps) {
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -166,4 +166,4 @@ export function DRSPanel({ recommendations, onRefresh }: DRSPanelProps) {
       </div>
     </div>
   );
-}
+});

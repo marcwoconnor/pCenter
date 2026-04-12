@@ -178,7 +178,12 @@ func (h *Handler) ConsoleWebsocket(w http.ResponseWriter, r *http.Request) {
 
 	pveConn, resp, err := dialer.Dial(pveWSURL, headers)
 	if err != nil {
-		slog.Error("failed to connect to PVE websocket", "error", err, "url", pveWSURL)
+		// Redact ticket from URL before logging
+		redactedURL := pveWSURL
+		if i := strings.Index(redactedURL, "vncticket="); i >= 0 {
+			redactedURL = redactedURL[:i] + "vncticket=REDACTED"
+		}
+		slog.Error("failed to connect to PVE websocket", "error", err, "url", redactedURL)
 		if resp != nil {
 			body, _ := io.ReadAll(resp.Body)
 			slog.Error("PVE response", "status", resp.StatusCode, "body", string(body))

@@ -121,6 +121,8 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
   // Without this, intervals leak if the provider unmounts mid-clone.
   const clonePollIntervals = useRef<Set<ReturnType<typeof setInterval>>>(new Set());
   const clonePollTimeouts = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  // Track active clone VMIDs to prevent duplicate polls
+  const activeCloneVMIDs = useRef<Set<number>>(new Set());
 
   // Cleanup all active clone polling on unmount
   useEffect(() => {
@@ -185,7 +187,9 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
 
   // Fetch initial activity entries
   useEffect(() => {
-    api.getActivity({ limit: 50 }).then(setActivityEntries).catch(console.error);
+    api.getActivity({ limit: 50 }).then(setActivityEntries).catch(() => {
+      // Activity is non-critical — silently degrade
+    });
   }, []);
 
   const addTask = useCallback((task: Task) => {
@@ -246,6 +250,10 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
     name: string,
     opts?: { targetNode?: string; full?: boolean; storage?: string }
   ) => {
+    // Prevent duplicate clone polls for same source VMID
+    if (activeCloneVMIDs.current.has(guest.vmid)) return;
+    activeCloneVMIDs.current.add(guest.vmid);
+
     const taskId = `clone-${Date.now()}-${guest.vmid}`;
     const isVM = guest.type === 'qemu';
 
@@ -283,6 +291,7 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
             if (task.status === 'stopped') {
               clearInterval(pollInterval);
               clonePollIntervals.current.delete(pollInterval);
+              activeCloneVMIDs.current.delete(guest.vmid);
               if (task.exitstatus === 'OK') {
                 updateTask(taskId, { status: 'completed', message: 'Clone completed' });
               } else {
@@ -308,6 +317,7 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
         clonePollTimeouts.current.add(safetyTimeout);
       })
       .catch((err) => {
+        activeCloneVMIDs.current.delete(guest.vmid);
         let errorMsg = err instanceof Error ? err.message : 'Clone failed';
         if (errorMsg.includes('cannot clone TPM state while VM is running')) {
           errorMsg = 'VM has TPM and must be stopped first';

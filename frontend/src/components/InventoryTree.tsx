@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, memo } from 'react';
 import { useCluster } from '../context/ClusterContext';
 import { useFolders } from '../context/FolderContext';
 import type { SelectedObject } from '../context/ClusterContext';
@@ -252,7 +252,7 @@ function SSHSetupDialog({ hostAddress, onSubmit, onClose }: {
   );
 }
 
-export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
+export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
   const { clusters, nodes, guests, storage, selectedObject, setSelectedObject, performAction, openConsole } = useCluster();
   const { hostsTree, vmsTree, createFolder, renameFolder, deleteFolder, moveFolder, moveResource } = useFolders();
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -1803,4 +1803,4 @@ export function InventoryTree({ view, filter = '' }: InventoryTreeProps) {
   }
 
   return null;
-}
+});

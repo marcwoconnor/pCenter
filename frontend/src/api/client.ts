@@ -51,6 +51,8 @@ const BASE_URL = '/api';
 // returning 401 cause N rapid window.location.href assignments.
 let redirecting = false;
 
+const DEFAULT_TIMEOUT_MS = 30000; // 30s fetch timeout
+
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -67,17 +69,27 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
     headers['X-CSRF-Token'] = csrfToken;
   }
 
+  // Add timeout via AbortSignal
+  const timeoutSignal = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
+  const signal = options?.signal
+    ? AbortSignal.any([options.signal, timeoutSignal])
+    : timeoutSignal;
+
   const res = await fetch(`${BASE_URL}${path}`, {
     ...options,
     headers,
+    signal,
     credentials: 'include', // Include cookies for session
   });
 
-  // Handle 401 - redirect to login (debounced)
+  // Handle 401 - notify auth context to redirect (preserves React state)
   if (res.status === 401) {
     if (!redirecting && !window.location.pathname.includes('/login')) {
       redirecting = true;
-      window.location.href = '/login';
+      // Dispatch custom event so AuthContext can handle via React Router
+      window.dispatchEvent(new CustomEvent('auth:session-expired'));
+      // Reset after short delay to allow re-trigger if needed
+      setTimeout(() => { redirecting = false; }, 2000);
     }
     throw new Error('Session expired');
   }

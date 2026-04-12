@@ -17,7 +17,9 @@ export function MigrateDialog({ guest, onClose, onSuccess }: MigrateDialogProps)
 
   useEffect(() => {
     // Fetch available nodes
-    api.getMigrationTargets(guest.cluster).then(setNodes).catch(console.error);
+    api.getMigrationTargets(guest.cluster).then(setNodes).catch(e => {
+      setError('Failed to load migration targets: ' + (e instanceof Error ? e.message : String(e)));
+    });
   }, [guest.cluster]);
 
   const handleMigrate = async () => {
