@@ -102,8 +102,9 @@ export function Layout({ children, sidebar }: LayoutProps) {
       <header className="bg-gray-800 text-white shadow-lg flex-shrink-0">
         <div className="flex items-center h-12">
           {/* Logo */}
-          <div className="px-4 font-bold text-lg border-r border-gray-700">
-            pCenter
+          <div className="px-4 border-r border-gray-700">
+            <div className="font-bold text-lg leading-tight">pCenter</div>
+            <div className="text-[10px] text-gray-500 leading-none">{__APP_VERSION__}</div>
           </div>
 
           {/* Main Navigation */}
