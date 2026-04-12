@@ -86,7 +86,7 @@ export function ObjectDetail() {
     return <DatacenterDetail datacenterId={String(selectedObject.id)} datacenterName={selectedObject.name} defaultTab={selectedObject.defaultTab} />;
   }
   if (selectedObject.type === 'cluster') {
-    return <ClusterDetail clusterName={selectedObject.cluster || String(selectedObject.id)} defaultTab={selectedObject.defaultTab} />;
+    return <ClusterDetail clusterName={selectedObject.cluster || String(selectedObject.id)} displayName={selectedObject.name} defaultTab={selectedObject.defaultTab} />;
   }
 
   const tabs = selectedObject.type === 'node' ? nodeTabs :

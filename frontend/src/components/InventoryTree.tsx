@@ -1234,8 +1234,8 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
           {getClusterStatusBadge()}
           <HABadge ha={runtimeCluster?.ha} />
         </>}
-        isSelected={isSelected({ type: 'cluster', id: clusterName, name: clusterName, cluster: clusterName })}
-        onClick={() => setSelectedObject({ type: 'cluster', id: clusterName, name: clusterName, cluster: clusterName })}
+        isSelected={isSelected({ type: 'cluster', id: clusterName, name: clusterName, cluster: lookupName })}
+        onClick={() => setSelectedObject({ type: 'cluster', id: clusterName, name: clusterName, cluster: lookupName })}
         onContextMenu={(e) => {
           // Show inventory menu if we have cluster config, otherwise runtime menu
           if (inventoryCluster) {

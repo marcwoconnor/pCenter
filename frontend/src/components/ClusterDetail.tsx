@@ -22,7 +22,7 @@ interface HAGroup {
   group: string; comment?: string; nodes: string[]; nofailback?: boolean; restricted?: boolean;
 }
 
-export function ClusterDetail({ clusterName, defaultTab }: { clusterName: string; defaultTab?: string }) {
+export function ClusterDetail({ clusterName, displayName, defaultTab }: { clusterName: string; displayName?: string; defaultTab?: string }) {
   const { nodes, guests, drsRecommendations, getCluster } = useCluster();
   const [activeTab, setActiveTab] = useState(defaultTab || 'summary');
 
@@ -39,7 +39,7 @@ export function ClusterDetail({ clusterName, defaultTab }: { clusterName: string
         <div className="flex items-center gap-3">
           <span className="text-2xl">🏢</span>
           <div>
-            <h1 className="text-lg font-semibold text-gray-900 dark:text-white">{clusterName}</h1>
+            <h1 className="text-lg font-semibold text-gray-900 dark:text-white">{displayName || clusterName}</h1>
             <div className="text-sm text-gray-500">
               Proxmox Cluster &middot; {cn.length} nodes &middot;{' '}
               {cg.filter(g => g.type === 'qemu').length} VMs &middot;{' '}
