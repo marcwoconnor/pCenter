@@ -435,7 +435,7 @@ const NODE_METRICS = ['cpu', 'pgpgin', 'pgpgout'] as const;
 const GUEST_METRICS = ['netin', 'netout', 'diskread', 'diskwrite'] as const;
 
 export function Home() {
-  const { summary, nodes, guests, ceph, drsRecommendations, isLoading } = useCluster();
+  const { summary, nodes, guests, ceph, drsRecommendations, alarms, isLoading } = useCluster();
   const [maintenanceNode, setMaintenanceNode] = useState<{ node: string; cluster: string } | null>(null);
   const [timeRange, setTimeRange] = useState<TimeRange>('1h');
 
@@ -625,6 +625,47 @@ export function Home() {
             </div>
           )}
         </div>
+
+        {/* Active Alarms */}
+        {alarms && alarms.length > 0 && (
+          <div className="mb-6 bg-gray-800 rounded-lg p-4">
+            <h3 className="text-sm font-medium text-gray-300 mb-3 flex items-center gap-2">
+              <span className="text-red-400">Active Alarms</span>
+              <span className="px-2 py-0.5 bg-red-600/20 text-red-400 text-xs rounded">
+                {alarms.length} active
+              </span>
+            </h3>
+            <div className="space-y-2">
+              {alarms.slice(0, 5).map(alarm => (
+                <div key={alarm.id} className="bg-gray-700/50 rounded p-3 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className={`w-2.5 h-2.5 rounded-full ${
+                      alarm.state === 'critical' ? 'bg-red-500' : 'bg-yellow-500'
+                    }`} />
+                    <div>
+                      <span className="text-sm text-gray-200">{alarm.definition_name}</span>
+                      <div className="text-xs text-gray-500">
+                        {alarm.resource_name || alarm.resource_id} &middot; {alarm.current_value.toFixed(1)}% (threshold: {alarm.threshold}%)
+                      </div>
+                    </div>
+                  </div>
+                  <span className={`px-2 py-0.5 text-xs rounded ${
+                    alarm.state === 'critical'
+                      ? 'bg-red-500/20 text-red-400'
+                      : 'bg-yellow-500/20 text-yellow-400'
+                  }`}>
+                    {alarm.state}
+                  </span>
+                </div>
+              ))}
+              {alarms.length > 5 && (
+                <div className="text-xs text-gray-500 text-center pt-1">
+                  and {alarms.length - 5} more...
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* DRS Recommendations */}
         <div className="mb-6">

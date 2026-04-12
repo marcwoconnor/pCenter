@@ -44,6 +44,9 @@ import type {
   TagAssignment,
   CreateTagRequest,
   AssignTagRequest,
+  AlarmInstance,
+  AlarmDefinition,
+  NotificationChannel,
 } from '../types';
 
 import { getCSRFToken } from './auth';
@@ -379,6 +382,27 @@ export const api = {
     fetchAPI<void>('/tags/assign', { method: 'DELETE', body: JSON.stringify(req) }),
   bulkAssignTags: (tagIds: string[], objects: Array<{ object_type: string; object_id: string; cluster: string }>) =>
     fetchAPI<void>('/tags/bulk-assign', { method: 'POST', body: JSON.stringify({ tag_ids: tagIds, objects }) }),
+
+  // Alarms
+  getActiveAlarms: () => fetchAPI<AlarmInstance[]>('/alarms'),
+  getAlarmDefinitions: () => fetchAPI<AlarmDefinition[]>('/alarms/definitions'),
+  createAlarmDefinition: (req: Partial<AlarmDefinition>) =>
+    fetchAPI<AlarmDefinition>('/alarms/definitions', { method: 'POST', body: JSON.stringify(req) }),
+  updateAlarmDefinition: (id: string, req: Partial<AlarmDefinition>) =>
+    fetchAPI<void>(`/alarms/definitions/${id}`, { method: 'PUT', body: JSON.stringify(req) }),
+  deleteAlarmDefinition: (id: string) =>
+    fetchAPI<void>(`/alarms/definitions/${id}`, { method: 'DELETE' }),
+  acknowledgeAlarm: (id: string, user: string) =>
+    fetchAPI<void>(`/alarms/${id}/acknowledge`, { method: 'POST', body: JSON.stringify({ user }) }),
+  getAlarmHistory: (limit?: number) =>
+    fetchAPI<Array<Record<string, unknown>>>(`/alarms/history${limit ? `?limit=${limit}` : ''}`),
+  getAlarmChannels: () => fetchAPI<NotificationChannel[]>('/alarms/channels'),
+  createAlarmChannel: (req: { name: string; type: string; config: string }) =>
+    fetchAPI<NotificationChannel>('/alarms/channels', { method: 'POST', body: JSON.stringify(req) }),
+  deleteAlarmChannel: (id: string) =>
+    fetchAPI<void>(`/alarms/channels/${id}`, { method: 'DELETE' }),
+  testAlarmChannel: (id: string) =>
+    fetchAPI<void>(`/alarms/channels/${id}/test`, { method: 'POST' }),
 
   // Datacenters
   getDatacenters: () => fetchAPI<Datacenter[]>('/datacenters'),

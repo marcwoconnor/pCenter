@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { api } from '../api/client';
-import type { Summary, Node, Guest, Storage, ClusterInfo, MigrationProgress, DRSRecommendation, ActivityEntry, Tag, TagAssignment } from '../types';
+import type { Summary, Node, Guest, Storage, ClusterInfo, MigrationProgress, DRSRecommendation, ActivityEntry, Tag, TagAssignment, AlarmInstance } from '../types';
 
 interface CephHealthCheck {
   severity: string;
@@ -70,6 +70,8 @@ interface ClusterState {
   tags: Tag[];
   tagAssignments: TagAssignment[];
   refreshTags: () => void;
+  // Alarms
+  alarms: AlarmInstance[];
   // Helpers
   getCluster: (name: string) => ClusterInfo | undefined;
   getGuestsByCluster: (cluster: string) => Guest[];
@@ -102,6 +104,7 @@ interface StatePayload {
   ceph?: CephStatus;
   migrations?: MigrationProgress[];
   drs_recommendations?: DRSRecommendation[];
+  alarms?: AlarmInstance[];
 }
 
 export function ClusterProvider({ children }: { children: ReactNode }) {
@@ -116,6 +119,7 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
   const [activityEntries, setActivityEntries] = useState<ActivityEntry[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [tagAssignments, setTagAssignments] = useState<TagAssignment[]>([]);
+  const [activeAlarms, setActiveAlarms] = useState<AlarmInstance[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -151,6 +155,7 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
       setCeph(state.ceph || null);
       setMigrations(state.migrations || []);
       setDRSRecommendations(state.drs_recommendations || []);
+      setActiveAlarms(state.alarms || []);
       setError(null);
       setIsLoading(false);
     } else if (msg.type === 'activity') {
@@ -425,6 +430,7 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
       tags,
       tagAssignments,
       refreshTags,
+      alarms: activeAlarms,
       getCluster,
       getGuestsByCluster,
       getNodesByCluster,

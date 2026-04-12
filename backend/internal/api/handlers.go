@@ -25,6 +25,7 @@ import (
 	"github.com/moconnor/pcenter/internal/poller"
 	"github.com/moconnor/pcenter/internal/pve"
 	"github.com/moconnor/pcenter/internal/state"
+	"github.com/moconnor/pcenter/internal/alarms"
 	"github.com/moconnor/pcenter/internal/tags"
 )
 
@@ -38,6 +39,7 @@ type Handler struct {
 	inventory       *inventory.Service
 	library         *library.Service
 	tags            *tags.Service
+	alarms          *alarms.Service
 	agentHub        *agent.Hub
 	clusters        []config.ClusterConfig // For on-demand client creation
 	secrets         map[string]string      // Token secrets keyed by cluster/agent name

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/moconnor/pcenter/internal/activity"
+	"github.com/moconnor/pcenter/internal/alarms"
 	"github.com/moconnor/pcenter/internal/agent"
 	"github.com/moconnor/pcenter/internal/api"
 	"github.com/moconnor/pcenter/internal/auth"
@@ -283,6 +284,28 @@ func main() {
 	handler.SetTagsService(tagsService)
 	slog.Info("tags enabled", "database", cfg.Tags.DatabasePath)
 
+	// Alarms
+	var alarmService *alarms.Service
+	if cfg.Alarms.Enabled {
+		alarmsDB, err := alarms.Open(cfg.Alarms.DatabasePath)
+		if err != nil {
+			slog.Error("failed to open alarms database", "error", err)
+			os.Exit(1)
+		}
+		defer alarmsDB.Close()
+
+		alarmService = alarms.NewService(alarmsDB, store, cfg.Alarms.EvalInterval, func() {
+			hub.BroadcastState()
+		})
+		handler.SetAlarmsService(alarmService)
+		hub.SetAlarmsService(alarmService)
+
+		// Seed defaults on first run
+		alarmsDB.SeedDefaults(ctx)
+
+		slog.Info("alarms enabled", "database", cfg.Alarms.DatabasePath, "interval", cfg.Alarms.EvalInterval)
+	}
+
 	// Load clusters from inventory and start poller
 	if cfg.Poller.Enabled && p != nil {
 		clusterConfigs, err := inventoryService.GetClusterConfigs(ctx, cfg.ClusterSecrets)
@@ -331,6 +354,11 @@ func main() {
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
+	}
+
+	// Start alarm evaluator
+	if alarmService != nil {
+		go alarmService.Evaluator.Run(ctx)
 	}
 
 	// Start server in goroutine

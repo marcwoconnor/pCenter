@@ -279,6 +279,19 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("DELETE /api/library/{id}", h.DeleteLibraryItem)
 	protectedMux.HandleFunc("POST /api/library/{id}/deploy", h.DeployLibraryItem)
 
+	// --- Alarms endpoints ---
+	protectedMux.HandleFunc("GET /api/alarms", h.GetActiveAlarms)
+	protectedMux.HandleFunc("GET /api/alarms/definitions", h.GetAlarmDefinitions)
+	protectedMux.HandleFunc("POST /api/alarms/definitions", h.CreateAlarmDefinition)
+	protectedMux.HandleFunc("PUT /api/alarms/definitions/{id}", h.UpdateAlarmDefinition)
+	protectedMux.HandleFunc("DELETE /api/alarms/definitions/{id}", h.DeleteAlarmDefinition)
+	protectedMux.HandleFunc("POST /api/alarms/{id}/acknowledge", h.AcknowledgeAlarm)
+	protectedMux.HandleFunc("GET /api/alarms/history", h.GetAlarmHistory)
+	protectedMux.HandleFunc("GET /api/alarms/channels", h.GetAlarmChannels)
+	protectedMux.HandleFunc("POST /api/alarms/channels", h.CreateAlarmChannel)
+	protectedMux.HandleFunc("DELETE /api/alarms/channels/{id}", h.DeleteAlarmChannel)
+	protectedMux.HandleFunc("POST /api/alarms/channels/{id}/test", h.TestAlarmChannel)
+
 	// --- Tags endpoints ---
 	protectedMux.HandleFunc("GET /api/tags", h.GetTags)
 	protectedMux.HandleFunc("GET /api/tags/categories", h.GetTagCategories)

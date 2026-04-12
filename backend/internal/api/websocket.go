@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/moconnor/pcenter/internal/activity"
+	"github.com/moconnor/pcenter/internal/alarms"
 	"github.com/moconnor/pcenter/internal/pve"
 	"github.com/moconnor/pcenter/internal/state"
 )
@@ -18,6 +20,7 @@ import (
 // Hub manages WebSocket connections and broadcasts
 type Hub struct {
 	store    *state.Store
+	alarms   *alarms.Service
 	clients  map[*Client]bool
 	mu       sync.RWMutex
 	upgrader websocket.Upgrader
@@ -26,6 +29,11 @@ type Hub struct {
 	register   chan *Client
 	unregister chan *Client
 	done       chan struct{} // closed to signal Run() to stop
+}
+
+// SetAlarmsService sets the alarms service on the hub for state broadcasts
+func (h *Hub) SetAlarmsService(s *alarms.Service) {
+	h.alarms = s
 }
 
 // Client represents a WebSocket connection
@@ -209,8 +217,9 @@ type StatePayload struct {
 	Guests        []Guest              `json:"guests"`
 	Storage       []StorageInfo        `json:"storage"`
 	CephStatus    *CephInfo            `json:"ceph,omitempty"`
-	Migrations    []pve.MigrationProgress `json:"migrations,omitempty"`
-	DRS           []pve.DRSRecommendation `json:"drs_recommendations,omitempty"`
+	Migrations    []pve.MigrationProgress  `json:"migrations,omitempty"`
+	DRS           []pve.DRSRecommendation  `json:"drs_recommendations,omitempty"`
+	Alarms        []alarms.AlarmInstance   `json:"alarms,omitempty"`
 }
 
 // ClusterInfo holds cluster summary
@@ -499,6 +508,15 @@ func (h *Hub) buildStateMessage() []byte {
 		drs = []pve.DRSRecommendation{}
 	}
 
+	// Get active alarms
+	var activeAlarms []alarms.AlarmInstance
+	if h.alarms != nil {
+		activeAlarms, _ = h.alarms.GetActiveAlarms(context.Background())
+	}
+	if activeAlarms == nil {
+		activeAlarms = []alarms.AlarmInstance{}
+	}
+
 	payload := StatePayload{
 		Clusters:   clusters,
 		Summary:    globalSummary.Total,
@@ -508,6 +526,7 @@ func (h *Hub) buildStateMessage() []byte {
 		CephStatus: cephInfo,
 		Migrations: migrations,
 		DRS:        drs,
+		Alarms:     activeAlarms,
 	}
 
 	msg := WSMessage{

@@ -472,6 +472,51 @@ export interface AssignTagRequest {
   cluster: string;
 }
 
+// Alarm types
+
+export interface AlarmInstance {
+  id: string;
+  definition_id: string;
+  definition_name: string;
+  cluster: string;
+  resource_type: string;
+  resource_id: string;
+  resource_name: string;
+  state: 'normal' | 'warning' | 'critical';
+  current_value: number;
+  threshold: number;
+  triggered_at?: number;
+  last_evaluated_at: number;
+  acknowledged_by?: string;
+  acknowledged_at?: number;
+  consecutive_count: number;
+}
+
+export interface AlarmDefinition {
+  id: string;
+  name: string;
+  enabled: boolean;
+  metric_type: string;
+  resource_type: string;
+  scope: string;
+  scope_target: string;
+  condition: string;
+  warning_threshold: number;
+  critical_threshold: number;
+  clear_threshold: number;
+  duration_samples: number;
+  notify_channels: string[];
+  created_at: number;
+}
+
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  type: string;
+  config: string;
+  enabled: boolean;
+}
+
 // Configuration types for VM/Container settings
 
 export interface VMConfig {

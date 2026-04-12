@@ -34,8 +34,18 @@ type Config struct {
 	// Tags settings
 	Tags TagsConfig `yaml:"tags"`
 
+	// Alarms settings
+	Alarms AlarmsConfig `yaml:"alarms"`
+
 	// Legacy: flat nodes array (auto-converted to single cluster)
 	Nodes []NodeConfig `yaml:"nodes,omitempty"`
+}
+
+// AlarmsConfig holds alerting settings
+type AlarmsConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	DatabasePath string `yaml:"database_path"`
+	EvalInterval int    `yaml:"eval_interval"` // seconds, default 30
 }
 
 // TagsConfig holds tag settings
@@ -294,6 +304,14 @@ func Load(path string) (*Config, error) {
 	// Tags defaults
 	if cfg.Tags.DatabasePath == "" {
 		cfg.Tags.DatabasePath = "data/tags.db"
+	}
+
+	// Alarms defaults
+	if cfg.Alarms.DatabasePath == "" {
+		cfg.Alarms.DatabasePath = "data/alarms.db"
+	}
+	if cfg.Alarms.EvalInterval == 0 {
+		cfg.Alarms.EvalInterval = 30
 	}
 
 	// Agent defaults

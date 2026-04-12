@@ -3,6 +3,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useCluster } from '../context/ClusterContext';
 import { useAuth } from '../context/AuthContext';
 import { TasksBar } from './TasksBar';
+import { AlarmBadge } from './AlarmBadge';
 import { Console } from './Console';
 import { ActivityPanel } from './ActivityPanel';
 
@@ -137,6 +138,9 @@ export function Layout({ children, sidebar }: LayoutProps) {
               <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-yellow-400 animate-pulse'}`} />
               {isConnected ? 'Connected' : 'Reconnecting...'}
             </div>
+
+            {/* Alarms */}
+            <AlarmBadge />
 
             {/* User menu */}
             {user && (
