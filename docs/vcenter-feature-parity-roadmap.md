@@ -2,7 +2,7 @@
 
 Comparison of VMware vCenter Server features vs pCenter current implementation, with prioritized roadmap for feature development.
 
-**Last Updated:** 2026-04-10
+**Last Updated:** 2026-04-12
 
 ---
 
@@ -98,9 +98,9 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 | Semi-automatic DRS | ✅ | Auto-place new VMs |
 | Fully automatic DRS | ✅ | Auto-execute migrations |
 | Configurable thresholds | ✅ | CPU/memory load thresholds |
-| VM-VM affinity rules | 🔴 | Keep VMs together on same host |
-| VM-VM anti-affinity rules | 🔴 | Keep VMs apart on different hosts |
-| VM-Host affinity rules | 🔴 | Pin VMs to specific hosts |
+| VM-VM affinity rules | ✅ | Keep VMs together on same host |
+| VM-VM anti-affinity rules | ✅ | Keep VMs apart on different hosts |
+| VM-Host affinity rules | ✅ | Pin VMs to specific hosts |
 | DRS groups | 🔴 | Group VMs/hosts for rule targeting |
 | DPM (Distributed Power Mgmt) | 🔴 | Power off idle hosts to save energy |
 
@@ -186,11 +186,11 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 | Real-time metrics | ✅ | 30s collection, WebSocket push |
 | Activity/audit log | ✅ | Filterable by resource, action, cluster |
 | SMART monitoring | ✅ | Disk health tracking |
-| Alarms (threshold alerts) | 🔴 | CPU > 90% for 5min → notification |
-| Alarm actions | 🔴 | Email/webhook/Slack on alarm |
-| Alarm acknowledgment | 🔴 | Track alarm handling workflow |
-| Custom alarm conditions | 🔴 | User-defined thresholds |
-| Active alerts dashboard | 🔴 | Triggered alarm overview |
+| Alarms (threshold alerts) | ✅ | Alarm definitions with thresholds |
+| Alarm actions | ✅ | Notification channels (email/webhook/Slack) |
+| Alarm acknowledgment | ✅ | Track alarm handling workflow |
+| Custom alarm conditions | ✅ | User-defined thresholds per metric |
+| Active alerts dashboard | ✅ | Triggered alarm overview with badge |
 
 ---
 
@@ -206,9 +206,9 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 | Account lockout | ✅ | Progressive brute-force protection |
 | Auth event logging | ✅ | Login/logout/failure audit trail |
 | Rate limiting | ✅ | Login attempt throttling |
-| Custom roles | 🔴 | Define named permission sets |
-| Object-level permissions | 🔴 | Per-VM/folder/cluster permissions |
-| Permission inheritance | 🔴 | Propagate through folder hierarchy |
+| Custom roles | ✅ | Built-in + custom roles with granular permissions |
+| Object-level permissions | ✅ | Per-VM/folder/cluster/datacenter scoping |
+| Permission inheritance | ✅ | Propagate through hierarchy (VM→Node→Cluster→DC→Root) |
 | LDAP/AD integration | 🔴 | Directory service authentication |
 | SSO | 🔴 | Single sign-on |
 
@@ -221,9 +221,9 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 | Folder trees | ✅ | Host tree + VM tree |
 | Drag-and-drop organization | ✅ | Move resources between folders |
 | Resource assignment to folders | ✅ | Add/remove folder members |
-| VM tags | 🔴 | Free-form tagging on any object |
-| Tag categories | 🔴 | Organize tags by type |
-| Tag-based search | 🔴 | Find resources by tag |
+| VM tags | ✅ | Free-form tagging on any object |
+| Tag categories | ✅ | Organize tags by type |
+| Tag-based search | ✅ | Find resources by tag |
 | Custom attributes | 🔴 | User-defined metadata |
 
 ---
@@ -248,7 +248,7 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 | CORS support | ✅ | Configurable origins |
 | Session auth | ✅ | Cookie-based sessions |
 | CSRF protection | ✅ | On state-changing operations |
-| Agent system | ✅ | Push-based pve-agent architecture |
+| Agent system | ✅ | Push-based pve-agent with 25 commands, agent-first routing |
 | OpenAPI spec | 🔴 | Published API documentation |
 | CLI tool | 🔴 | PowerCLI-equivalent scripting |
 | Webhooks | 🔴 | Event notifications to external systems |
@@ -260,50 +260,49 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 
 ### Phase 1 — High Value, Close the Biggest Gaps
 
-| # | Feature | Effort | Value | Dependencies |
-|---|---------|--------|-------|--------------|
-| 1 | **RBAC (roles + object permissions)** | High | Critical | Extends auth.db |
-| 2 | **Alerting & notifications** | Medium | High | Uses existing metrics |
-| 3 | **Tags & custom attributes** | Low | High | New SQLite table |
-| 4 | **Affinity/anti-affinity rules** | Medium | High | Extends DRS engine |
-| 5 | **Scheduled tasks** | Medium | High | New scheduler + SQLite |
+| # | Feature | Effort | Value | Status |
+|---|---------|--------|-------|--------|
+| 1 | **RBAC (roles + object permissions)** | High | Critical | ✅ Done |
+| 2 | **Alerting & notifications** | Medium | High | ✅ Done |
+| 3 | **Tags & custom attributes** | Low | High | ✅ Done |
+| 4 | **Affinity/anti-affinity rules** | Medium | High | ✅ Done |
+| 5 | **Scheduled tasks** | Medium | High | 🔴 TODO |
 
-#### 1. RBAC
-- [ ] `roles` table: name, description, permissions bitmask
-- [ ] `role_assignments` table: user_id, role_id, object_type, object_id
-- [ ] Built-in roles: Admin, Operator, VM-Admin, Read-Only
-- [ ] Custom role creation UI
-- [ ] Permission check middleware (replace simple admin check)
-- [ ] Permission inheritance through folder hierarchy
-- [ ] UI: permission editor on object detail panels
+#### 1. RBAC ✅
+- [x] `roles` table with permissions JSON array
+- [x] `role_assignments` table: user_id, role_id, object_type, object_id, propagate
+- [x] Built-in roles: Admin, Operator, VM-Admin, Read-Only
+- [x] Custom role creation UI (Settings → Roles & Permissions)
+- [x] Permission check middleware with hierarchy traversal
+- [x] Permission inheritance through object hierarchy (VM→Node→Cluster→DC→Root)
+- [x] Role assignment management in Settings UI
 
-#### 2. Alerting & Notifications
-- [ ] `alarm_definitions` table: metric, condition, threshold, duration, severity
-- [ ] `alarm_state` table: current state per alarm per resource
-- [ ] Alarm evaluator goroutine (runs every 30s against metrics)
-- [ ] States: Normal → Warning → Critical (with hysteresis)
-- [ ] Notification channels: email, webhook, Slack
-- [ ] Active alarms dashboard panel
-- [ ] Alarm acknowledgment workflow
-- [ ] Per-object alarm assignment (or global defaults)
+#### 2. Alerting & Notifications ✅
+- [x] `alarm_definitions` table with metric, condition, threshold, duration
+- [x] `alarm_instances` table with per-resource state tracking
+- [x] Alarm evaluator goroutine (configurable interval)
+- [x] States: Normal → Warning → Critical with hysteresis
+- [x] Notification channels: email, webhook, Slack
+- [x] Active alarms badge in nav + dashboard panel
+- [x] Alarm acknowledgment workflow
+- [x] Alarm management UI in Settings
 
-#### 3. Tags & Custom Attributes
-- [ ] `tags` table: id, category, name, color
-- [ ] `tag_assignments` table: tag_id, object_type, object_id
-- [ ] Tag CRUD API endpoints
-- [ ] Tag categories (Environment, Owner, Purpose, etc.)
-- [ ] Tag picker component in object detail panels
-- [ ] Tag-based search/filtering in all list views
-- [ ] Bulk tag operations
+#### 3. Tags & Custom Attributes ✅
+- [x] `tags` table: id, category, name, color
+- [x] `tag_assignments` table: tag_id, object_type, object_id
+- [x] Tag CRUD API endpoints + bulk assign
+- [x] Tag categories (user-defined)
+- [x] Tag picker component on VM/CT summary panels
+- [x] Tag dots on compact VM/CT grid tiles
+- [x] Bulk tag operations
 
-#### 4. Affinity/Anti-Affinity Rules
-- [ ] `drs_rules` table: type (affinity/anti-affinity/host-pin), members
-- [ ] `drs_groups` table: group VMs or hosts for rule targeting
-- [ ] Rule CRUD API endpoints
-- [ ] DRS engine respects rules when generating recommendations
-- [ ] Rule conflict detection (affinity + anti-affinity on same VMs)
-- [ ] Rules UI in cluster settings
-- [ ] Rule violations shown in DRS panel
+#### 4. Affinity/Anti-Affinity Rules ✅
+- [x] `drs_rules` table: type (affinity/anti-affinity/host-pin), members
+- [x] Rule CRUD API endpoints
+- [x] DRS engine respects rules when generating recommendations
+- [x] Rule conflict/violation detection
+- [x] Rules UI in cluster settings
+- [x] Rule violations shown in DRS panel
 
 #### 5. Scheduled Tasks
 - [ ] `scheduled_tasks` table: type, target, cron_expression, params, enabled

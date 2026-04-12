@@ -2296,26 +2296,39 @@ func (h *Handler) CloneVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get client for source node
-	client, ok := h.getClient(clusterName, vm.Node)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "source node client not found")
-		return
-	}
+	ctx := r.Context()
+	var upid string
 
-	opts := pve.CloneOptions{
-		NewID:       req.NewID,
-		Name:        req.Name,
-		TargetNode:  req.TargetNode,
-		Full:        req.Full,
-		Storage:     req.Storage,
-		Description: req.Description,
-	}
-
-	upid, err := client.CloneVM(r.Context(), vmid, opts)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "clone failed: "+err.Error())
+	// Try agent first
+	agentUpid, handled, agentErr := h.tryAgentAction(ctx, clusterName, vm.Node, "vm_clone", map[string]interface{}{
+		"vmid": vmid, "newid": req.NewID, "name": req.Name, "target": req.TargetNode, "full": req.Full,
+	})
+	if handled && agentErr != nil {
+		writeError(w, http.StatusInternalServerError, "clone failed: "+agentErr.Error())
 		return
+	} else if handled {
+		upid = agentUpid
+	} else {
+		client, ok := h.getClient(clusterName, vm.Node)
+		if !ok {
+			writeError(w, http.StatusInternalServerError, "source node client not found")
+			return
+		}
+
+		opts := pve.CloneOptions{
+			NewID:       req.NewID,
+			Name:        req.Name,
+			TargetNode:  req.TargetNode,
+			Full:        req.Full,
+			Storage:     req.Storage,
+			Description: req.Description,
+		}
+
+		upid, err = client.CloneVM(ctx, vmid, opts)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "clone failed: "+err.Error())
+			return
+		}
 	}
 
 	// Log activity
@@ -2375,26 +2388,38 @@ func (h *Handler) CloneContainer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get client for source node
-	client, ok := h.getClient(clusterName, ct.Node)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "source node client not found")
-		return
-	}
+	ctx := r.Context()
+	var upid string
 
-	opts := pve.CloneOptions{
-		NewID:       req.NewID,
-		Name:        req.Name,
-		TargetNode:  req.TargetNode,
-		Full:        req.Full,
-		Storage:     req.Storage,
-		Description: req.Description,
-	}
-
-	upid, err := client.CloneContainer(r.Context(), vmid, opts)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "clone failed: "+err.Error())
+	agentUpid, handled, agentErr := h.tryAgentAction(ctx, clusterName, ct.Node, "ct_clone", map[string]interface{}{
+		"vmid": vmid, "newid": req.NewID, "hostname": req.Name, "target": req.TargetNode, "full": req.Full,
+	})
+	if handled && agentErr != nil {
+		writeError(w, http.StatusInternalServerError, "clone failed: "+agentErr.Error())
 		return
+	} else if handled {
+		upid = agentUpid
+	} else {
+		client, ok := h.getClient(clusterName, ct.Node)
+		if !ok {
+			writeError(w, http.StatusInternalServerError, "source node client not found")
+			return
+		}
+
+		opts := pve.CloneOptions{
+			NewID:       req.NewID,
+			Name:        req.Name,
+			TargetNode:  req.TargetNode,
+			Full:        req.Full,
+			Storage:     req.Storage,
+			Description: req.Description,
+		}
+
+		upid, err = client.CloneContainer(ctx, vmid, opts)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "clone failed: "+err.Error())
+			return
+		}
 	}
 
 	// Log activity

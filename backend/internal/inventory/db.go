@@ -355,8 +355,8 @@ func (db *DB) prepareStatements() error {
 
 	// Host statements
 	db.stmtInsertHost, err = db.conn.Prepare(`
-		INSERT INTO inventory_hosts (id, cluster_id, address, token_id, insecure, status, error, node_name, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO inventory_hosts (id, cluster_id, address, token_id, token_secret, insecure, status, error, node_name, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare insert host: %w", err)
@@ -774,18 +774,19 @@ func (db *DB) AddHost(ctx context.Context, clusterID string, req AddHostRequest)
 
 	now := time.Now()
 	host := &InventoryHost{
-		ID:        uuid.New().String(),
-		ClusterID: clusterID,
-		Address:   req.Address,
-		TokenID:   req.TokenID,
-		Insecure:  req.Insecure,
-		Status:    HostStatusStaged,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:          uuid.New().String(),
+		ClusterID:   clusterID,
+		Address:     req.Address,
+		TokenID:     req.TokenID,
+		TokenSecret: req.TokenSecret,
+		Insecure:    req.Insecure,
+		Status:      HostStatusStaged,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	_, err := db.stmtInsertHost.ExecContext(ctx,
-		host.ID, host.ClusterID, host.Address, host.TokenID,
+		host.ID, host.ClusterID, host.Address, host.TokenID, host.TokenSecret,
 		boolToInt(host.Insecure), string(host.Status), "", "",
 		host.CreatedAt.Unix(), host.UpdatedAt.Unix(),
 	)
