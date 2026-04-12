@@ -12,17 +12,41 @@ import (
 
 // AllowedActions is the whitelist of executable actions
 var AllowedActions = map[string]bool{
-	// VM operations
+	// VM power operations
 	"vm_start":    true,
 	"vm_stop":     true,
 	"vm_shutdown": true,
 	"vm_reboot":   true,
 
-	// Container operations
+	// VM lifecycle
+	"vm_clone":      true,
+	"vm_delete":     true,
+	"vm_config_get": true,
+	"vm_config_set": true,
+
+	// VM snapshots
+	"vm_snapshot_list":     true,
+	"vm_snapshot_create":   true,
+	"vm_snapshot_delete":   true,
+	"vm_snapshot_rollback": true,
+
+	// Container power operations
 	"ct_start":    true,
 	"ct_stop":     true,
 	"ct_shutdown": true,
 	"ct_reboot":   true,
+
+	// Container lifecycle
+	"ct_clone":      true,
+	"ct_delete":     true,
+	"ct_config_get": true,
+	"ct_config_set": true,
+
+	// Container snapshots
+	"ct_snapshot_list":     true,
+	"ct_snapshot_create":   true,
+	"ct_snapshot_delete":   true,
+	"ct_snapshot_rollback": true,
 
 	// Migration
 	"vm_migrate": true,
@@ -63,17 +87,57 @@ func (e *Executor) Execute(ctx context.Context, cmd *types.CommandData) *types.C
 	slog.Info("executing command", "id", cmd.ID, "action", cmd.Action, "params", cmd.Params)
 
 	// Route to handler
-	switch {
-	case strings.HasPrefix(cmd.Action, "vm_"):
+	switch cmd.Action {
+	// VM power
+	case "vm_start", "vm_stop", "vm_shutdown", "vm_reboot", "vm_migrate":
 		e.executeVM(ctx, cmd, result)
-	case strings.HasPrefix(cmd.Action, "ct_"):
+	// VM lifecycle
+	case "vm_clone":
+		e.cloneVM(ctx, cmd, result)
+	case "vm_delete":
+		e.deleteVM(ctx, cmd, result)
+	case "vm_config_get":
+		e.vmConfigGet(ctx, cmd, result)
+	case "vm_config_set":
+		e.vmConfigSet(ctx, cmd, result)
+	// VM snapshots
+	case "vm_snapshot_list":
+		e.vmSnapshotList(ctx, cmd, result)
+	case "vm_snapshot_create":
+		e.vmSnapshotCreate(ctx, cmd, result)
+	case "vm_snapshot_delete":
+		e.vmSnapshotDelete(ctx, cmd, result)
+	case "vm_snapshot_rollback":
+		e.vmSnapshotRollback(ctx, cmd, result)
+	// CT power
+	case "ct_start", "ct_stop", "ct_shutdown", "ct_reboot", "ct_migrate":
 		e.executeCT(ctx, cmd, result)
-	case strings.HasPrefix(cmd.Action, "ceph_"):
+	// CT lifecycle
+	case "ct_clone":
+		e.cloneCT(ctx, cmd, result)
+	case "ct_delete":
+		e.deleteCT(ctx, cmd, result)
+	case "ct_config_get":
+		e.ctConfigGet(ctx, cmd, result)
+	case "ct_config_set":
+		e.ctConfigSet(ctx, cmd, result)
+	// CT snapshots
+	case "ct_snapshot_list":
+		e.ctSnapshotList(ctx, cmd, result)
+	case "ct_snapshot_create":
+		e.ctSnapshotCreate(ctx, cmd, result)
+	case "ct_snapshot_delete":
+		e.ctSnapshotDelete(ctx, cmd, result)
+	case "ct_snapshot_rollback":
+		e.ctSnapshotRollback(ctx, cmd, result)
+	// Ceph
+	case "ceph_pg_repair", "ceph_health_detail", "ceph_osd_tree", "ceph_status", "ceph_pg_query":
 		e.executeCeph(ctx, cmd, result)
-	case strings.HasPrefix(cmd.Action, "storage_"):
+	// Storage
+	case "storage_content":
 		e.executeStorage(ctx, cmd, result)
 	default:
-		result.Error = "unknown action type"
+		result.Error = "unknown action: " + cmd.Action
 	}
 
 	if result.Success {
@@ -117,6 +181,17 @@ func (e *Executor) validate(cmd *types.CommandData) error {
 			}
 		default:
 			return fmt.Errorf("vmid must be a number")
+		}
+
+	case cmd.Action == "vm_clone" || cmd.Action == "ct_clone":
+		if getParamInt(cmd.Params, "newid") == 0 {
+			return fmt.Errorf("newid required for clone")
+		}
+
+	case cmd.Action == "vm_snapshot_delete" || cmd.Action == "vm_snapshot_rollback" ||
+		cmd.Action == "ct_snapshot_delete" || cmd.Action == "ct_snapshot_rollback":
+		if _, ok := cmd.Params["snapname"].(string); !ok {
+			return fmt.Errorf("snapname required")
 		}
 
 	case cmd.Action == "ceph_pg_repair" || cmd.Action == "ceph_pg_query":

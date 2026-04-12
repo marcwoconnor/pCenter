@@ -159,6 +159,110 @@ func (c *PVEClient) PostWithParams(ctx context.Context, path string, params map[
 	return apiResp.Data, nil
 }
 
+// PutWithParams makes a PUT with form params
+func (c *PVEClient) PutWithParams(ctx context.Context, path string, params map[string]string) error {
+	form := make([]byte, 0)
+	for k, v := range params {
+		if len(form) > 0 {
+			form = append(form, '&')
+		}
+		form = append(form, []byte(k+"="+v)...)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "PUT", c.baseURL+path, bytes.NewReader(form))
+	if err != nil {
+		return err
+	}
+
+	if c.tokenID != "" && c.tokenSecret != "" {
+		req.Header.Set("Authorization", "PVEAPIToken="+c.tokenID+"="+c.tokenSecret)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(data))
+	}
+
+	return nil
+}
+
+// Delete makes a DELETE request and returns the UPID (if any)
+func (c *PVEClient) Delete(ctx context.Context, path string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "DELETE", c.baseURL+path, nil)
+	if err != nil {
+		return "", err
+	}
+
+	if c.tokenID != "" && c.tokenSecret != "" {
+		req.Header.Set("Authorization", "PVEAPIToken="+c.tokenID+"="+c.tokenSecret)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("API error %d: %s", resp.StatusCode, string(data))
+	}
+
+	var apiResp APIResponse[string]
+	if err := json.Unmarshal(data, &apiResp); err != nil {
+		return "", nil // DELETE may not return UPID
+	}
+
+	return apiResp.Data, nil
+}
+
+// GetRaw makes a GET request and returns the raw JSON data field
+func (c *PVEClient) GetRaw(ctx context.Context, path string) (json.RawMessage, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if c.tokenID != "" && c.tokenSecret != "" {
+		req.Header.Set("Authorization", "PVEAPIToken="+c.tokenID+"="+c.tokenSecret)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(data))
+	}
+
+	var apiResp struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(data, &apiResp); err != nil {
+		return nil, err
+	}
+
+	return apiResp.Data, nil
+}
+
 // NodeName returns the configured node name
 func (c *PVEClient) NodeName() string {
 	return c.nodeName

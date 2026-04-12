@@ -13,17 +13,41 @@ import (
 
 // AllowedAgentActions is the whitelist of actions that can be executed via agents
 var AllowedAgentActions = map[string]bool{
-	// VM operations
+	// VM power operations
 	"vm_start":    true,
 	"vm_stop":     true,
 	"vm_shutdown": true,
 	"vm_reboot":   true,
 
-	// Container operations
+	// VM lifecycle
+	"vm_clone":      true,
+	"vm_delete":     true,
+	"vm_config_get": true,
+	"vm_config_set": true,
+
+	// VM snapshots
+	"vm_snapshot_list":     true,
+	"vm_snapshot_create":   true,
+	"vm_snapshot_delete":   true,
+	"vm_snapshot_rollback": true,
+
+	// Container power operations
 	"ct_start":    true,
 	"ct_stop":     true,
 	"ct_shutdown": true,
 	"ct_reboot":   true,
+
+	// Container lifecycle
+	"ct_clone":      true,
+	"ct_delete":     true,
+	"ct_config_get": true,
+	"ct_config_set": true,
+
+	// Container snapshots
+	"ct_snapshot_list":     true,
+	"ct_snapshot_create":   true,
+	"ct_snapshot_delete":   true,
+	"ct_snapshot_rollback": true,
 
 	// Migration
 	"vm_migrate": true,
@@ -122,6 +146,62 @@ func (h *Handler) AgentCommand(w http.ResponseWriter, r *http.Request) {
 	case <-ctx.Done():
 		slog.Error("agent command timed out", "id", cmdID)
 		writeError(w, http.StatusGatewayTimeout, "command timed out")
+	}
+}
+
+// tryAgentAction attempts to execute an action via the agent.
+// Returns (upid, true, nil) if agent handled it successfully.
+// Returns ("", true, err) if agent handled it but failed.
+// Returns ("", false, nil) if no agent available — caller should fall back to poller.
+func (h *Handler) tryAgentAction(ctx context.Context, cluster, node, action string, params map[string]interface{}) (string, bool, error) {
+	if h.agentHub == nil {
+		return "", false, nil
+	}
+
+	// Check if action is agent-supported
+	if !AllowedAgentActions[action] {
+		return "", false, nil
+	}
+
+	// Check if agent is connected for this cluster/node
+	key := cluster + "/" + node
+	agents := h.agentHub.GetConnectedAgents()
+	connected := false
+	for _, a := range agents {
+		if a == key {
+			connected = true
+			break
+		}
+	}
+	if !connected {
+		return "", false, nil
+	}
+
+	cmdID := fmt.Sprintf("cmd-%d-%s", time.Now().UnixNano(), action)
+	cmd := &agent.CommandData{
+		ID:     cmdID,
+		Action: action,
+		Params: params,
+	}
+
+	slog.Info("routing action via agent", "id", cmdID, "cluster", cluster, "node", node, "action", action)
+
+	resultCh, err := h.agentHub.SendCommand(cluster, node, cmd)
+	if err != nil {
+		slog.Warn("agent command send failed, falling back to poller", "error", err)
+		return "", false, nil // fall back
+	}
+
+	// Wait for result
+	select {
+	case result := <-resultCh:
+		if !result.Success {
+			return "", true, fmt.Errorf("agent: %s", result.Error)
+		}
+		return result.UPID, true, nil
+
+	case <-ctx.Done():
+		return "", true, fmt.Errorf("agent command timed out")
 	}
 }
 

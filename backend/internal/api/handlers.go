@@ -1278,20 +1278,37 @@ func (h *Handler) ClusterVMAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Map HTTP action to agent action name
+	agentAction := "vm_" + action
+	ctx := r.Context()
+
+	// Try agent first
+	upid, handled, agentErr := h.tryAgentAction(ctx, clusterName, vm.Node, agentAction, map[string]interface{}{
+		"vmid": vmid,
+	})
+	if handled {
+		if agentErr != nil {
+			writeError(w, http.StatusInternalServerError, agentErr.Error())
+			return
+		}
+		writeJSON(w, map[string]string{"upid": upid})
+		return
+	}
+
+	// Fall back to poller/direct API
 	client, ok := h.getClient(clusterName, vm.Node)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "node client not found")
 		return
 	}
 
-	var upid string
 	switch action {
 	case "start":
-		upid, err = client.StartVM(r.Context(), vmid)
+		upid, err = client.StartVM(ctx, vmid)
 	case "stop":
-		upid, err = client.StopVM(r.Context(), vmid)
+		upid, err = client.StopVM(ctx, vmid)
 	case "shutdown":
-		upid, err = client.ShutdownVM(r.Context(), vmid)
+		upid, err = client.ShutdownVM(ctx, vmid)
 	default:
 		writeError(w, http.StatusBadRequest, "invalid action")
 		return
@@ -1333,20 +1350,36 @@ func (h *Handler) ClusterContainerAction(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	agentAction := "ct_" + action
+	ctx := r.Context()
+
+	// Try agent first
+	upid, handled, agentErr := h.tryAgentAction(ctx, clusterName, ct.Node, agentAction, map[string]interface{}{
+		"vmid": vmid,
+	})
+	if handled {
+		if agentErr != nil {
+			writeError(w, http.StatusInternalServerError, agentErr.Error())
+			return
+		}
+		writeJSON(w, map[string]string{"upid": upid})
+		return
+	}
+
+	// Fall back to poller
 	client, ok := h.getClient(clusterName, ct.Node)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "node client not found")
 		return
 	}
 
-	var upid string
 	switch action {
 	case "start":
-		upid, err = client.StartContainer(r.Context(), vmid)
+		upid, err = client.StartContainer(ctx, vmid)
 	case "stop":
-		upid, err = client.StopContainer(r.Context(), vmid)
+		upid, err = client.StopContainer(ctx, vmid)
 	case "shutdown":
-		upid, err = client.ShutdownContainer(r.Context(), vmid)
+		upid, err = client.ShutdownContainer(ctx, vmid)
 	default:
 		writeError(w, http.StatusBadRequest, "invalid action")
 		return
@@ -1579,19 +1612,28 @@ func (h *Handler) DeleteClusterVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, ok := h.getClient(clusterName, vm.Node)
-	if !ok {
-		writeError(w, http.StatusNotFound, "node not found in cluster")
-		return
-	}
-
-	// Parse purge option from query
+	ctx := r.Context()
 	purge := r.URL.Query().Get("purge") == "1"
 
-	upid, err := client.DeleteVM(r.Context(), vmid, purge)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	// Try agent first, fall back to poller
+	var upid string
+	agentUpid, handled, agentErr := h.tryAgentAction(ctx, clusterName, vm.Node, "vm_delete", map[string]interface{}{"vmid": vmid})
+	if handled && agentErr != nil {
+		writeError(w, http.StatusInternalServerError, agentErr.Error())
 		return
+	} else if handled {
+		upid = agentUpid
+	} else {
+		client, ok := h.getClient(clusterName, vm.Node)
+		if !ok {
+			writeError(w, http.StatusNotFound, "node not found in cluster")
+			return
+		}
+		upid, err = client.DeleteVM(ctx, vmid, purge)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
 	slog.Info("deleted VM", "cluster", clusterName, "node", vm.Node, "vmid", vmid, "name", vm.Name)
@@ -1655,19 +1697,27 @@ func (h *Handler) DeleteClusterContainer(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	client, ok := h.getClient(clusterName, ct.Node)
-	if !ok {
-		writeError(w, http.StatusNotFound, "node not found in cluster")
-		return
-	}
-
-	// Parse purge option from query
+	ctx := r.Context()
 	purge := r.URL.Query().Get("purge") == "1"
 
-	upid, err := client.DeleteContainer(r.Context(), vmid, purge)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	var upid string
+	agentUpid, handled, agentErr := h.tryAgentAction(ctx, clusterName, ct.Node, "ct_delete", map[string]interface{}{"vmid": vmid})
+	if handled && agentErr != nil {
+		writeError(w, http.StatusInternalServerError, agentErr.Error())
 		return
+	} else if handled {
+		upid = agentUpid
+	} else {
+		client, ok := h.getClient(clusterName, ct.Node)
+		if !ok {
+			writeError(w, http.StatusNotFound, "node not found in cluster")
+			return
+		}
+		upid, err = client.DeleteContainer(ctx, vmid, purge)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
 	slog.Info("deleted container", "cluster", clusterName, "node", ct.Node, "vmid", vmid, "name", ct.Name)
@@ -2003,16 +2053,28 @@ func (h *Handler) ClusterMigrateVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, ok := h.getClient(clusterName, vm.Node)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "source node client not found")
-		return
-	}
+	ctx := r.Context()
+	var upid string
 
-	upid, err := client.MigrateVM(r.Context(), vmid, req.TargetNode, req.Online)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "migration failed: "+err.Error())
+	agentUpid, handled, agentErr := h.tryAgentAction(ctx, clusterName, vm.Node, "vm_migrate", map[string]interface{}{
+		"vmid": vmid, "target": req.TargetNode, "online": req.Online,
+	})
+	if handled && agentErr != nil {
+		writeError(w, http.StatusInternalServerError, "migration failed: "+agentErr.Error())
 		return
+	} else if handled {
+		upid = agentUpid
+	} else {
+		client, ok := h.getClient(clusterName, vm.Node)
+		if !ok {
+			writeError(w, http.StatusInternalServerError, "source node client not found")
+			return
+		}
+		upid, err = client.MigrateVM(ctx, vmid, req.TargetNode, req.Online)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "migration failed: "+err.Error())
+			return
+		}
 	}
 
 	h.store.AddMigration(&pve.MigrationProgress{
@@ -2097,16 +2159,28 @@ func (h *Handler) ClusterMigrateContainer(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	client, ok := h.getClient(clusterName, ct.Node)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "source node client not found")
-		return
-	}
+	ctx := r.Context()
+	var upid string
 
-	upid, err := client.MigrateContainer(r.Context(), vmid, req.TargetNode, req.Online)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "migration failed: "+err.Error())
+	agentUpid, handled, agentErr := h.tryAgentAction(ctx, clusterName, ct.Node, "ct_migrate", map[string]interface{}{
+		"vmid": vmid, "target": req.TargetNode, "online": req.Online,
+	})
+	if handled && agentErr != nil {
+		writeError(w, http.StatusInternalServerError, "migration failed: "+agentErr.Error())
 		return
+	} else if handled {
+		upid = agentUpid
+	} else {
+		client, ok := h.getClient(clusterName, ct.Node)
+		if !ok {
+			writeError(w, http.StatusInternalServerError, "source node client not found")
+			return
+		}
+		upid, err = client.MigrateContainer(ctx, vmid, req.TargetNode, req.Online)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "migration failed: "+err.Error())
+			return
+		}
 	}
 
 	h.store.AddMigration(&pve.MigrationProgress{
