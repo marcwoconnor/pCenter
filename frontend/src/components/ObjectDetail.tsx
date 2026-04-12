@@ -10,6 +10,8 @@ import { SnapshotsTab } from './SnapshotsTab';
 import { ErrorBoundary } from './ErrorBoundary';
 import { TagPicker } from './TagPicker';
 import { PCenterRootDetail } from './PCenterRootDetail';
+import { DatacenterDetail } from './DatacenterDetail';
+import { ClusterDetail } from './ClusterDetail';
 
 type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d';
 
@@ -76,9 +78,15 @@ export function ObjectDetail() {
     );
   }
 
-  // Delegate to PCenterRootDetail when clicking the root node
-  if (selectedObject.type === 'datacenter' && selectedObject.id === 'root') {
-    return <PCenterRootDetail defaultTab={selectedObject.defaultTab} />;
+  // Delegate to specialized detail components for higher-level objects
+  if (selectedObject.type === 'datacenter') {
+    if (selectedObject.id === 'root') {
+      return <PCenterRootDetail defaultTab={selectedObject.defaultTab} />;
+    }
+    return <DatacenterDetail datacenterId={String(selectedObject.id)} datacenterName={selectedObject.name} defaultTab={selectedObject.defaultTab} />;
+  }
+  if (selectedObject.type === 'cluster') {
+    return <ClusterDetail clusterName={selectedObject.cluster || String(selectedObject.id)} defaultTab={selectedObject.defaultTab} />;
   }
 
   const tabs = selectedObject.type === 'node' ? nodeTabs :
