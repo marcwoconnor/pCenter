@@ -325,6 +325,13 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	// --- Version/update check ---
 	protectedMux.HandleFunc("GET /api/version", h.GetVersion)
 
+	// --- Scheduled Tasks endpoints ---
+	protectedMux.HandleFunc("GET /api/scheduler/tasks", h.GetScheduledTasks)
+	protectedMux.HandleFunc("POST /api/scheduler/tasks", h.CreateScheduledTask)
+	protectedMux.HandleFunc("PUT /api/scheduler/tasks/{id}", h.UpdateScheduledTask)
+	protectedMux.HandleFunc("DELETE /api/scheduler/tasks/{id}", h.DeleteScheduledTask)
+	protectedMux.HandleFunc("GET /api/scheduler/runs", h.GetTaskRuns)
+
 	// --- RBAC endpoints ---
 	protectedMux.HandleFunc("GET /api/rbac/roles", h.GetRoles)
 	protectedMux.HandleFunc("POST /api/rbac/roles", h.CreateRole)

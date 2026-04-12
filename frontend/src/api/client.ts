@@ -50,6 +50,9 @@ import type {
   AlarmDefinition,
   NotificationChannel,
   NodeConfig,
+  ScheduledTask,
+  TaskRun,
+  CreateScheduledTaskRequest,
   RBACRole,
   RBACRoleAssignment,
   CreateRoleRequest,
@@ -522,6 +525,23 @@ export const api = {
     fetchAPI<{ message: string }>(`/library/${id}`, { method: 'DELETE' }),
   deployLibraryItem: (id: string, req: DeployLibraryItemRequest) =>
     fetchAPI<{ upid: string; message: string }>(`/library/${id}/deploy`, { method: 'POST', body: JSON.stringify(req) }),
+
+  // Scheduler
+  getScheduledTasks: () =>
+    fetchAPI<ScheduledTask[]>('/scheduler/tasks'),
+  createScheduledTask: (req: CreateScheduledTaskRequest) =>
+    fetchAPI<ScheduledTask>('/scheduler/tasks', { method: 'POST', body: JSON.stringify(req) }),
+  updateScheduledTask: (id: string, req: { name: string; cron_expr: string; params?: string; enabled: boolean }) =>
+    fetchAPI<{ status: string }>(`/scheduler/tasks/${id}`, { method: 'PUT', body: JSON.stringify(req) }),
+  deleteScheduledTask: (id: string) =>
+    fetchAPI<{ status: string }>(`/scheduler/tasks/${id}`, { method: 'DELETE' }),
+  getTaskRuns: (taskId?: string, limit?: number) => {
+    const qs = new URLSearchParams();
+    if (taskId) qs.set('task_id', taskId);
+    if (limit) qs.set('limit', String(limit));
+    const q = qs.toString();
+    return fetchAPI<TaskRun[]>(`/scheduler/runs${q ? '?' + q : ''}`);
+  },
 
   // Version/update check
   getVersion: () =>

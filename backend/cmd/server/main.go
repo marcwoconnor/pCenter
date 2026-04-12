@@ -27,6 +27,7 @@ import (
 	"github.com/moconnor/pcenter/internal/migration"
 	"github.com/moconnor/pcenter/internal/poller"
 	"github.com/moconnor/pcenter/internal/rbac"
+	"github.com/moconnor/pcenter/internal/scheduler"
 	"github.com/moconnor/pcenter/internal/state"
 	"github.com/moconnor/pcenter/internal/tags"
 	"github.com/moconnor/pcenter/internal/updater"
@@ -396,6 +397,94 @@ func main() {
 	if alarmService != nil {
 		go alarmService.Evaluator.Run(ctx)
 	}
+
+	// Initialize scheduler
+	schedulerDB, err := scheduler.Open("data/scheduler.db")
+	if err != nil {
+		slog.Error("failed to open scheduler database", "error", err)
+		os.Exit(1)
+	}
+	defer schedulerDB.Close()
+
+	// Action function: tries agent first, falls back to poller
+	scheduleAction := func(sctx context.Context, cluster, node, action string, params map[string]interface{}) (string, error) {
+		// Try agent
+		if agentHub != nil {
+			agents := agentHub.GetConnectedAgents()
+			key := cluster + "/" + node
+			for _, a := range agents {
+				if a == key {
+					cmdID := fmt.Sprintf("sched-%d-%s", time.Now().UnixNano(), action)
+					cmd := &agent.CommandData{ID: cmdID, Action: action, Params: params}
+					resultCh, err := agentHub.SendCommand(cluster, node, cmd)
+					if err == nil {
+						select {
+						case result := <-resultCh:
+							if result.Success {
+								return result.UPID, nil
+							}
+							return "", fmt.Errorf("agent: %s", result.Error)
+						case <-sctx.Done():
+							return "", fmt.Errorf("timeout")
+						}
+					}
+					break
+				}
+			}
+		}
+		// Fallback: use poller client directly
+		if p != nil {
+			clients := p.GetClusterClients(cluster)
+			if client, ok := clients[node]; ok {
+				vmid := 0
+				if v, ok := params["vmid"].(int); ok {
+					vmid = v
+				} else if v, ok := params["vmid"].(float64); ok {
+					vmid = int(v)
+				}
+				switch action {
+				case "vm_start":
+					return client.StartVM(sctx, vmid)
+				case "vm_stop":
+					return client.StopVM(sctx, vmid)
+				case "vm_shutdown":
+					return client.ShutdownVM(sctx, vmid)
+				case "ct_start":
+					return client.StartContainer(sctx, vmid)
+				case "ct_stop":
+					return client.StopContainer(sctx, vmid)
+				case "ct_shutdown":
+					return client.ShutdownContainer(sctx, vmid)
+				default:
+					return "", fmt.Errorf("unsupported action for poller fallback: %s", action)
+				}
+			}
+		}
+		return "", fmt.Errorf("no agent or poller client for %s/%s", cluster, node)
+	}
+
+	// Node resolver: finds which node a VM/CT is on
+	nodeResolver := func(cluster string, targetType scheduler.TargetType, targetID int) string {
+		cs, ok := store.GetCluster(cluster)
+		if !ok {
+			return ""
+		}
+		if targetType == scheduler.TargetVM {
+			if vm, ok := cs.GetVM(targetID); ok {
+				return vm.Node
+			}
+		} else {
+			if ct, ok := cs.GetContainer(targetID); ok {
+				return ct.Node
+			}
+		}
+		return ""
+	}
+
+	schedulerService := scheduler.NewService(schedulerDB, scheduleAction, nodeResolver)
+	handler.SetSchedulerService(schedulerService)
+	go schedulerService.Start(ctx)
+	slog.Info("scheduler enabled", "database", "data/scheduler.db")
 
 	// Start server in goroutine
 	go func() {

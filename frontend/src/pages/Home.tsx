@@ -23,17 +23,21 @@ function ProgressBar({ value, color = 'blue' }: { value: number; color?: string 
   );
 }
 
-// QDevice Status Banner
+// QDevice Status Banner - polls every 30s, preserves last known state on error
 function QDeviceBanner({ cluster }: { cluster: string }) {
   const [qdevice, setQdevice] = useState<QDeviceStatus | null>(null);
 
   useEffect(() => {
-    const controller = new AbortController();
-    fetch(`/api/clusters/${cluster}/qdevice`, { signal: controller.signal })
-      .then(r => r.json())
-      .then(setQdevice)
-      .catch((e) => { if (e.name !== 'AbortError') setQdevice(null); });
-    return () => controller.abort();
+    let cancelled = false;
+    const doFetch = () => {
+      fetch(`/api/clusters/${cluster}/qdevice`)
+        .then(r => r.ok ? r.json() : null)
+        .then(data => { if (!cancelled && data) setQdevice(data); })
+        .catch(() => {}); // keep last known state on error
+    };
+    doFetch();
+    const interval = setInterval(doFetch, 30000);
+    return () => { cancelled = true; clearInterval(interval); };
   }, [cluster]);
 
   if (!qdevice || !qdevice.configured) return null;

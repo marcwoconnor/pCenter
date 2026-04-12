@@ -961,3 +961,43 @@ export interface AssignRoleRequest {
   object_id: string;
   propagate: boolean;
 }
+
+// Scheduler types
+
+export interface ScheduledTask {
+  id: string;
+  name: string;
+  enabled: boolean;
+  task_type: string;
+  target_type: string;
+  target_id: number;
+  cluster: string;
+  cron_expr: string;
+  params?: string;
+  last_run?: string;
+  next_run?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskRun {
+  id: string;
+  task_id: string;
+  task_name?: string;
+  started_at: string;
+  duration_ms: number;
+  success: boolean;
+  upid?: string;
+  error?: string;
+}
+
+export interface CreateScheduledTaskRequest {
+  name: string;
+  task_type: string;
+  target_type: string;
+  target_id: number;
+  cluster: string;
+  cron_expr: string;
+  params?: string;
+  enabled: boolean;
+}

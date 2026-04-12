@@ -189,11 +189,12 @@ func (db *DB) UpsertInstance(ctx context.Context, inst *AlarmInstance) error {
 func (db *DB) GetActiveAlarms(ctx context.Context) ([]AlarmInstance, error) {
 	rows, err := db.conn.QueryContext(ctx,
 		`SELECT ai.id, ai.definition_id, ad.name, ai.cluster, ai.resource_type, ai.resource_id,
-			ai.state, ai.current_value, ai.threshold, ai.triggered_at, ai.last_evaluated_at,
+			COALESCE(ai.resource_name, ai.resource_id), ai.state, ai.current_value, ai.threshold,
+			ai.triggered_at, ai.last_evaluated_at,
 			ai.acknowledged_by, ai.acknowledged_at, ai.consecutive_count
 		FROM alarm_instances ai
 		JOIN alarm_definitions ad ON ai.definition_id = ad.id
-		WHERE ai.state != 'normal'
+		WHERE ai.state != 'normal' AND (ai.acknowledged_by IS NULL OR ai.acknowledged_by = '')
 		ORDER BY CASE ai.state WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, ai.triggered_at DESC`)
 	if err != nil {
 		return nil, err
@@ -335,7 +336,7 @@ func scanInstances(rows *sql.Rows) ([]AlarmInstance, error) {
 		var ackAt sql.NullInt64
 		var trigAt sql.NullInt64
 		err := rows.Scan(&a.ID, &a.DefinitionID, &a.DefinitionName,
-			&a.Cluster, &a.ResourceType, &a.ResourceID,
+			&a.Cluster, &a.ResourceType, &a.ResourceID, &a.ResourceName,
 			&a.State, &a.CurrentValue, &a.Threshold, &trigAt, &a.LastEvaluatedAt,
 			&ackBy, &ackAt, &a.ConsecutiveCount)
 		if err != nil {

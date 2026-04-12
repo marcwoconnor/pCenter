@@ -5,9 +5,9 @@ import { api } from '../api/client';
 import { TOTPSetupWizard } from '../components/TOTPSetupWizard';
 import { Layout } from '../components/Layout';
 import type { Session } from '../types/auth';
-import type { AlarmDefinition, NotificationChannel, RBACRole, RBACRoleAssignment } from '../types';
+import type { AlarmDefinition, NotificationChannel, RBACRole, RBACRoleAssignment, ScheduledTask, TaskRun } from '../types';
 
-type SettingsTab = 'security' | 'sessions' | 'rbac' | 'alarms' | 'notifications';
+type SettingsTab = 'security' | 'sessions' | 'rbac' | 'scheduler' | 'alarms' | 'notifications';
 
 export function Settings() {
   const { user, refreshUser } = useAuth();
@@ -56,6 +56,16 @@ export function Settings() {
               </button>
             )}
             <button
+              onClick={() => setActiveTab('scheduler')}
+              className={`pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'scheduler'
+                  ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'
+              }`}
+            >
+              Scheduled Tasks
+            </button>
+            <button
               onClick={() => setActiveTab('alarms')}
               className={`pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${
                 activeTab === 'alarms'
@@ -80,6 +90,7 @@ export function Settings() {
           {activeTab === 'security' && <SecurityTab user={user} onUpdate={refreshUser} />}
           {activeTab === 'sessions' && <SessionsTab />}
           {activeTab === 'rbac' && <RBACTab />}
+          {activeTab === 'scheduler' && <SchedulerTab />}
           {activeTab === 'alarms' && <AlarmsTab />}
           {activeTab === 'notifications' && <NotificationsTab />}
         </div>
@@ -1038,6 +1049,240 @@ function RBACTab() {
                     <td className="py-2 text-right">
                       <button onClick={() => deleteAssignment(a.id)} className="text-xs text-red-600 hover:text-red-700">Remove</button>
                     </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Scheduler Tab
+function SchedulerTab() {
+  const [tasks, setTasks] = useState<ScheduledTask[]>([]);
+  const [runs, setRuns] = useState<TaskRun[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+  const [err, setErr] = useState('');
+
+  // Create form
+  const [name, setName] = useState('');
+  const [taskType, setTaskType] = useState('power_off');
+  const [targetType, setTargetType] = useState('vm');
+  const [targetId, setTargetId] = useState('');
+  const [cluster, setCluster] = useState('default');
+  const [cronExpr, setCronExpr] = useState('0 2 * * *');
+  const [enabled, setEnabled] = useState(true);
+
+  const reload = async () => {
+    setLoading(true);
+    try {
+      const [t, r] = await Promise.all([
+        api.getScheduledTasks(),
+        api.getTaskRuns(undefined, 20),
+      ]);
+      setTasks(t);
+      setRuns(r);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Failed to load');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { reload(); }, []);
+
+  const createTask = async () => {
+    setErr('');
+    try {
+      await api.createScheduledTask({
+        name, task_type: taskType, target_type: targetType,
+        target_id: parseInt(targetId), cluster, cron_expr: cronExpr, enabled,
+      });
+      setShowCreate(false);
+      setName(''); setTargetId('');
+      reload();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Create failed');
+    }
+  };
+
+  const deleteTask = async (id: string) => {
+    if (!confirm('Delete this scheduled task?')) return;
+    try { await api.deleteScheduledTask(id); reload(); }
+    catch (e: unknown) { setErr(e instanceof Error ? e.message : 'Delete failed'); }
+  };
+
+  const toggleTask = async (task: ScheduledTask) => {
+    try {
+      await api.updateScheduledTask(task.id, {
+        name: task.name, cron_expr: task.cron_expr,
+        params: task.params, enabled: !task.enabled,
+      });
+      reload();
+    } catch (e: unknown) { setErr(e instanceof Error ? e.message : 'Update failed'); }
+  };
+
+  const TASK_TYPES = ['power_on', 'power_off', 'shutdown', 'snapshot_create', 'snapshot_cleanup', 'migrate'];
+  const CRON_PRESETS = [
+    { label: 'Every hour', value: '0 * * * *' },
+    { label: 'Daily 2am', value: '0 2 * * *' },
+    { label: 'Daily 6pm', value: '0 18 * * *' },
+    { label: 'Weekdays 8am', value: '0 8 * * 1-5' },
+    { label: 'Weekdays 6pm', value: '0 18 * * 1-5' },
+    { label: 'Weekly Sun 3am', value: '0 3 * * 0' },
+  ];
+
+  if (loading) return <div className="text-gray-500 py-4">Loading...</div>;
+
+  return (
+    <div className="space-y-6">
+      {err && <div className="text-red-500 text-sm bg-red-50 dark:bg-red-900/20 p-3 rounded">{err}</div>}
+
+      {/* Tasks */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Scheduled Tasks</h2>
+          <button onClick={() => setShowCreate(!showCreate)}
+            className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
+            + New Task
+          </button>
+        </div>
+
+        {showCreate && (
+          <div className="mb-4 p-4 border border-blue-200 dark:border-blue-800 rounded bg-blue-50/50 dark:bg-blue-900/20">
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <label className="block col-span-2">
+                <span className="text-gray-500 text-xs">Task Name</span>
+                <input value={name} onChange={e => setName(e.target.value)}
+                  placeholder="e.g. Nightly shutdown dev VMs"
+                  className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm text-gray-900 dark:text-white" />
+              </label>
+              <label className="block">
+                <span className="text-gray-500 text-xs">Action</span>
+                <select value={taskType} onChange={e => setTaskType(e.target.value)}
+                  className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm text-gray-900 dark:text-white">
+                  {TASK_TYPES.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-gray-500 text-xs">Target Type</span>
+                <select value={targetType} onChange={e => setTargetType(e.target.value)}
+                  className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm text-gray-900 dark:text-white">
+                  <option value="vm">VM</option>
+                  <option value="ct">Container</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-gray-500 text-xs">VMID</span>
+                <input value={targetId} onChange={e => setTargetId(e.target.value)}
+                  placeholder="e.g. 102" type="number"
+                  className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm text-gray-900 dark:text-white" />
+              </label>
+              <label className="block">
+                <span className="text-gray-500 text-xs">Cluster</span>
+                <input value={cluster} onChange={e => setCluster(e.target.value)}
+                  className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm text-gray-900 dark:text-white" />
+              </label>
+              <label className="block">
+                <span className="text-gray-500 text-xs">Schedule (cron)</span>
+                <input value={cronExpr} onChange={e => setCronExpr(e.target.value)}
+                  placeholder="minute hour dom month dow"
+                  className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm font-mono text-gray-900 dark:text-white" />
+              </label>
+              <div className="flex flex-wrap gap-1 items-end">
+                {CRON_PRESETS.map(p => (
+                  <button key={p.value} onClick={() => setCronExpr(p.value)}
+                    className={`px-1.5 py-0.5 text-[10px] rounded border ${
+                      cronExpr === p.value
+                        ? 'bg-blue-100 dark:bg-blue-900 border-blue-400 text-blue-800 dark:text-blue-200'
+                        : 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400'
+                    }`}>{p.label}</button>
+                ))}
+              </div>
+              <label className="flex items-center gap-2 col-span-2">
+                <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />
+                <span className="text-gray-500 text-xs">Enabled</span>
+              </label>
+            </div>
+            <div className="flex gap-2 mt-3">
+              <button onClick={createTask} disabled={!name || !targetId}
+                className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">Create</button>
+              <button onClick={() => setShowCreate(false)}
+                className="px-3 py-1 text-sm text-gray-600 dark:text-gray-400">Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {tasks.length === 0 ? (
+          <div className="text-sm text-gray-500 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+            No scheduled tasks. Create one to automate power ops, snapshots, or migrations.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {tasks.map(task => (
+              <div key={task.id} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <button onClick={() => toggleTask(task)}
+                      className={`w-8 h-4 rounded-full transition-colors ${task.enabled ? 'bg-green-500' : 'bg-gray-400'}`}>
+                      <div className={`w-3 h-3 bg-white rounded-full transition-transform mx-0.5 ${task.enabled ? 'translate-x-4' : ''}`} />
+                    </button>
+                    <div>
+                      <span className="font-medium text-gray-900 dark:text-white text-sm">{task.name}</span>
+                      <div className="text-xs text-gray-500">
+                        {task.task_type.replace(/_/g, ' ')} &middot; {task.target_type} {task.target_id} &middot; {task.cluster}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs text-gray-500">
+                    <span className="font-mono">{task.cron_expr}</span>
+                    {task.next_run && (
+                      <span title="Next run">Next: {new Date(task.next_run).toLocaleString()}</span>
+                    )}
+                    <button onClick={() => deleteTask(task.id)} className="text-red-600 hover:text-red-700">Delete</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Recent Runs */}
+      <div>
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">Recent Runs</h2>
+        {runs.length === 0 ? (
+          <div className="text-sm text-gray-500 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+            No task runs yet.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-gray-500 border-b border-gray-200 dark:border-gray-700">
+                  <th className="pb-2 pr-4">Task</th>
+                  <th className="pb-2 pr-4">Time</th>
+                  <th className="pb-2 pr-4">Duration</th>
+                  <th className="pb-2 pr-4">Result</th>
+                  <th className="pb-2">Details</th>
+                </tr>
+              </thead>
+              <tbody className="text-gray-900 dark:text-white">
+                {runs.map(run => (
+                  <tr key={run.id} className="border-b border-gray-100 dark:border-gray-700/50">
+                    <td className="py-2 pr-4">{run.task_name || run.task_id}</td>
+                    <td className="py-2 pr-4 text-xs">{new Date(run.started_at).toLocaleString()}</td>
+                    <td className="py-2 pr-4 text-xs">{run.duration_ms}ms</td>
+                    <td className="py-2 pr-4">
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${run.success ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'}`}>
+                        {run.success ? 'OK' : 'FAIL'}
+                      </span>
+                    </td>
+                    <td className="py-2 text-xs text-gray-500">{run.error || run.upid || ''}</td>
                   </tr>
                 ))}
               </tbody>
