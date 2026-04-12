@@ -115,7 +115,6 @@ function TreeNode({
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onClick={() => {
-          if (hasChildren) setExpanded(!expanded);
           onClick?.();
         }}
         onContextMenu={(e) => {
@@ -134,7 +133,7 @@ function TreeNode({
         }`}
       >
         {hasChildren ? (
-          <span className="w-4 text-center text-gray-400">{expanded ? '▼' : '▶'}</span>
+          <span className="w-4 text-center text-gray-400 hover:text-white cursor-pointer" onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}>{expanded ? '▼' : '▶'}</span>
         ) : (
           <span className="w-4" />
         )}
