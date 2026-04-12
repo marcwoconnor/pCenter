@@ -116,7 +116,7 @@ func (db *DB) migrate() error {
 
 	CREATE TABLE IF NOT EXISTS inventory_hosts (
 		id TEXT PRIMARY KEY,
-		cluster_id TEXT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+		cluster_id TEXT REFERENCES clusters(id) ON DELETE CASCADE,
 		address TEXT NOT NULL,
 		token_id TEXT NOT NULL,
 		insecure INTEGER DEFAULT 1,
