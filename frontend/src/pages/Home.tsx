@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, memo } from 'react';
+import { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { Link } from 'react-router-dom';
 import { useCluster } from '../context/ClusterContext';
 import { Layout } from '../components/Layout';
@@ -446,6 +446,10 @@ export function Home() {
   // Memoize cluster name to prevent unnecessary refetches
   const clusterName = useMemo(() => nodes[0]?.cluster || '', [nodes[0]?.cluster]);
 
+  // Persist last known cluster so QDeviceBanner survives transient empty-nodes states
+  const lastCluster = useRef(clusterName);
+  if (clusterName) lastCluster.current = clusterName;
+
   // Fetch node metrics (cpu, mem, disk)
   const { data: nodeMetrics, loading: nodeMetricsLoading } = useMetrics({
     cluster: clusterName,
@@ -681,7 +685,7 @@ export function Home() {
 
         {/* Nodes Grid */}
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Hosts</h2>
-        {nodes.length > 0 && <QDeviceBanner cluster={nodes[0].cluster} />}
+        {lastCluster.current && <QDeviceBanner cluster={lastCluster.current} />}
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
           {safeNodes.map((node) => {
             const cpuPercent = node.cpu * 100;
