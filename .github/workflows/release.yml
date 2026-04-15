@@ -239,7 +239,7 @@ jobs:
           mkdir -p gh-pages/pool
           gh release download v${{ steps.version.outputs.VERSION }} \
             --repo marcwoconnor/pCenter \
-            --pattern '*.deb' --dir gh-pages/pool/
+            --pattern '*.deb' --dir gh-pages/pool/ --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
