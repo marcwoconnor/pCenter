@@ -848,7 +848,10 @@ func (h *Handler) GetQDeviceStatus(w http.ResponseWriter, r *http.Request) {
 	for nodeName, client := range clients {
 		status, err := client.GetQDeviceStatus(r.Context())
 		if err == nil && status != nil && status.Configured {
-			qdeviceStatus = status
+			// Prefer Connected over Disconnected — any node reporting Connected wins
+			if qdeviceStatus == nil || !qdeviceStatus.Connected {
+				qdeviceStatus = status
+			}
 		}
 
 		// Check if this node has the qdevice VM
