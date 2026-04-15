@@ -40,7 +40,7 @@ function QDeviceBanner({ cluster }: { cluster: string }) {
     return () => { cancelled = true; clearInterval(interval); };
   }, [cluster]);
 
-  if (!qdevice || !qdevice.configured) return null;
+  if (!qdevice || !qdevice.configured) return <div className="mb-4" style={{ height: '52px' }} />;
 
   return (
     <div className={`mb-4 p-3 rounded-lg flex items-center justify-between ${
@@ -524,7 +524,7 @@ export function Home() {
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Datacenter Overview</h1>
 
         {/* Summary Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 items-start">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
             <div className="text-sm text-gray-500 dark:text-gray-400">Nodes</div>
             <div className="text-2xl font-bold text-gray-900 dark:text-white">
@@ -589,7 +589,7 @@ export function Home() {
             </div>
           </div>
           {ceph && (
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 flex flex-col" style={{ minHeight: '160px' }}>
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 flex flex-col">
               <div className="text-sm text-gray-500 dark:text-gray-400">Ceph Health</div>
               <div className={`text-2xl font-bold ${
                 ceph.health === 'HEALTH_OK' ? 'text-green-500' :
@@ -597,35 +597,35 @@ export function Home() {
               }`}>
                 {ceph.health}
               </div>
-              {ceph.checks && Object.keys(ceph.checks).length > 0 && (
-                <div className="mt-2 space-y-1 overflow-y-auto flex-1" style={{ maxHeight: '80px' }}>
-                  {Object.entries(ceph.checks).map(([name, check]) => (
-                    <div key={name} className="text-xs">
-                      <div className={`font-medium ${
-                        check.severity === 'HEALTH_ERR' ? 'text-red-500' : 'text-yellow-500'
-                      }`}>
-                        {check.summary}
-                      </div>
-                      {check.detail && (
-                        <div className="text-gray-500 dark:text-gray-400 pl-2">
-                          {check.detail}
-                        </div>
-                      )}
+              <div className="mt-2 space-y-1 overflow-y-auto" style={{ height: '60px' }}>
+                {ceph.checks && Object.entries(ceph.checks).map(([name, check]) => (
+                  <div key={name} className="text-xs">
+                    <div className={`font-medium ${
+                      check.severity === 'HEALTH_ERR' ? 'text-red-500' : 'text-yellow-500'
+                    }`}>
+                      {check.summary}
                     </div>
-                  ))}
-                </div>
-              )}
+                    {check.detail && (
+                      <div className="text-gray-500 dark:text-gray-400 pl-2">
+                        {check.detail}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
               <div className="text-xs text-gray-500 mt-1">
                 {formatBytes(ceph.bytes_used)} / {formatBytes(ceph.bytes_total)}
               </div>
-              {ceph.health !== 'HEALTH_OK' && (
-                <Link
-                  to="/storage?tab=ceph"
-                  className="mt-2 block text-center text-xs px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded"
-                >
-                  View Details
-                </Link>
-              )}
+              <Link
+                to="/storage?tab=ceph"
+                className={`mt-2 block text-center text-xs px-2 py-1 rounded ${
+                  ceph.health !== 'HEALTH_OK'
+                    ? 'bg-blue-500 hover:bg-blue-600 text-white'
+                    : 'invisible'
+                }`}
+              >
+                View Details
+              </Link>
             </div>
           )}
         </div>
