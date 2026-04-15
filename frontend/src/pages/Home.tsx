@@ -25,14 +25,29 @@ function ProgressBar({ value, color = 'blue' }: { value: number; color?: string 
 
 // QDevice Status Banner - polls every 30s, preserves last known state on error
 function QDeviceBanner({ cluster }: { cluster: string }) {
-  const [qdevice, setQdevice] = useState<QDeviceStatus | null>(null);
+  // Use ref so we never lose a good qdevice state on remount or bad fetch
+  const qdeviceRef = useRef<QDeviceStatus | null>(null);
+  const [, forceRender] = useState(0);
 
   useEffect(() => {
+    if (!cluster) return;
     let cancelled = false;
     const doFetch = () => {
       fetch(`/api/clusters/${cluster}/qdevice`)
         .then(r => r.ok ? r.json() : null)
-        .then(data => { if (!cancelled && data) setQdevice(data); })
+        .then(data => {
+          if (cancelled) return;
+          // Only update if we got valid data with configured=true,
+          // or update connection status if we already know it's configured
+          if (data?.configured) {
+            qdeviceRef.current = data;
+            forceRender(n => n + 1);
+          } else if (qdeviceRef.current && data) {
+            // Keep configured=true from last good state, update connection status
+            qdeviceRef.current = { ...qdeviceRef.current, connected: data.connected };
+            forceRender(n => n + 1);
+          }
+        })
         .catch(() => {}); // keep last known state on error
     };
     doFetch();
@@ -40,6 +55,7 @@ function QDeviceBanner({ cluster }: { cluster: string }) {
     return () => { cancelled = true; clearInterval(interval); };
   }, [cluster]);
 
+  const qdevice = qdeviceRef.current;
   if (!qdevice || !qdevice.configured) return <div className="mb-4" style={{ height: '52px' }} />;
 
   return (
