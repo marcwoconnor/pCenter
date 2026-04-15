@@ -524,7 +524,7 @@ export function Home() {
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Datacenter Overview</h1>
 
         {/* Summary Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 items-start">
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
             <div className="text-sm text-gray-500 dark:text-gray-400">Nodes</div>
             <div className="text-2xl font-bold text-gray-900 dark:text-white">
@@ -589,7 +589,7 @@ export function Home() {
             </div>
           </div>
           {ceph && (
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 flex flex-col" style={{ minHeight: '160px' }}>
               <div className="text-sm text-gray-500 dark:text-gray-400">Ceph Health</div>
               <div className={`text-2xl font-bold ${
                 ceph.health === 'HEALTH_OK' ? 'text-green-500' :
@@ -598,7 +598,7 @@ export function Home() {
                 {ceph.health}
               </div>
               {ceph.checks && Object.keys(ceph.checks).length > 0 && (
-                <div className="mt-2 space-y-1">
+                <div className="mt-2 space-y-1 overflow-y-auto flex-1" style={{ maxHeight: '80px' }}>
                   {Object.entries(ceph.checks).map(([name, check]) => (
                     <div key={name} className="text-xs">
                       <div className={`font-medium ${
