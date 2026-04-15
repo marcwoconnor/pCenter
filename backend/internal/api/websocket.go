@@ -220,6 +220,7 @@ type StatePayload struct {
 	Migrations    []pve.MigrationProgress  `json:"migrations,omitempty"`
 	DRS           []pve.DRSRecommendation  `json:"drs_recommendations,omitempty"`
 	Alarms        []alarms.AlarmInstance   `json:"alarms,omitempty"`
+	QDeviceStatus *pve.QDeviceStatus       `json:"qdevice_status,omitempty"`
 }
 
 // ClusterInfo holds cluster summary
@@ -517,16 +518,28 @@ func (h *Hub) buildStateMessage() []byte {
 		activeAlarms = []alarms.AlarmInstance{}
 	}
 
+	// Get qdevice status from first cluster that has it
+	var qdeviceStatus *pve.QDeviceStatus
+	for _, cs := range globalSummary.Clusters {
+		if cluster, ok := h.store.GetCluster(cs.Name); ok {
+			if qs := cluster.GetQDeviceStatus(); qs != nil && qs.Configured {
+				qdeviceStatus = qs
+				break
+			}
+		}
+	}
+
 	payload := StatePayload{
-		Clusters:   clusters,
-		Summary:    globalSummary.Total,
-		Nodes:      nodeList,
-		Guests:     guests,
-		Storage:    storageList,
-		CephStatus: cephInfo,
-		Migrations: migrations,
-		DRS:        drs,
-		Alarms:     activeAlarms,
+		Clusters:      clusters,
+		Summary:       globalSummary.Total,
+		Nodes:         nodeList,
+		Guests:        guests,
+		Storage:       storageList,
+		CephStatus:    cephInfo,
+		Migrations:    migrations,
+		DRS:           drs,
+		Alarms:        activeAlarms,
+		QDeviceStatus: qdeviceStatus,
 	}
 
 	msg := WSMessage{

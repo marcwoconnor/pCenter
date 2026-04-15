@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, memo } from 'react';
+import { useState, useEffect, useMemo, memo } from 'react';
 import { Link } from 'react-router-dom';
 import { useCluster } from '../context/ClusterContext';
 import { Layout } from '../components/Layout';
@@ -24,39 +24,8 @@ function ProgressBar({ value, color = 'blue' }: { value: number; color?: string 
 }
 
 // QDevice Status Banner - polls every 30s, preserves last known state on error
-function QDeviceBanner({ cluster }: { cluster: string }) {
-  // Use ref so we never lose a good qdevice state on remount or bad fetch
-  const qdeviceRef = useRef<QDeviceStatus | null>(null);
-  const [, forceRender] = useState(0);
-
-  useEffect(() => {
-    if (!cluster) return;
-    let cancelled = false;
-    const doFetch = () => {
-      fetch(`/api/clusters/${cluster}/qdevice`)
-        .then(r => r.ok ? r.json() : null)
-        .then(data => {
-          if (cancelled) return;
-          // Only update if we got valid data with configured=true,
-          // or update connection status if we already know it's configured
-          if (data?.configured) {
-            qdeviceRef.current = data;
-            forceRender(n => n + 1);
-          } else if (qdeviceRef.current && data) {
-            // Keep configured=true from last good state, update connection status
-            qdeviceRef.current = { ...qdeviceRef.current, connected: data.connected };
-            forceRender(n => n + 1);
-          }
-        })
-        .catch(() => {}); // keep last known state on error
-    };
-    doFetch();
-    const interval = setInterval(doFetch, 30000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [cluster]);
-
-  const qdevice = qdeviceRef.current;
-  if (!qdevice || !qdevice.configured) return <div className="mb-4" style={{ height: '52px' }} />;
+function QDeviceBanner({ qdevice }: { qdevice: QDeviceStatus | null }) {
+  if (!qdevice || !qdevice.configured) return null;
 
   return (
     <div className={`mb-4 p-3 rounded-lg flex items-center justify-between ${
@@ -455,16 +424,13 @@ const NODE_METRICS = ['cpu', 'pgpgin', 'pgpgout'] as const;
 const GUEST_METRICS = ['netin', 'netout', 'diskread', 'diskwrite'] as const;
 
 export function Home() {
-  const { summary, nodes, guests, ceph, drsRecommendations, alarms, isLoading } = useCluster();
+  const { summary, nodes, guests, ceph, qdevice, drsRecommendations, alarms, isLoading } = useCluster();
   const [maintenanceNode, setMaintenanceNode] = useState<{ node: string; cluster: string } | null>(null);
   const [timeRange, setTimeRange] = useState<TimeRange>('1h');
 
   // Memoize cluster name to prevent unnecessary refetches
   const clusterName = useMemo(() => nodes[0]?.cluster || '', [nodes[0]?.cluster]);
 
-  // Persist last known cluster so QDeviceBanner survives transient empty-nodes states
-  const lastCluster = useRef(clusterName);
-  if (clusterName) lastCluster.current = clusterName;
 
   // Fetch node metrics (cpu, mem, disk)
   const { data: nodeMetrics, loading: nodeMetricsLoading } = useMetrics({
@@ -701,7 +667,7 @@ export function Home() {
 
         {/* Nodes Grid */}
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Hosts</h2>
-        {lastCluster.current && <QDeviceBanner cluster={lastCluster.current} />}
+        <QDeviceBanner qdevice={qdevice} />
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
           {safeNodes.map((node) => {
             const cpuPercent = node.cpu * 100;

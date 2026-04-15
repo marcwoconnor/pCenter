@@ -34,7 +34,8 @@ type ClusterStore struct {
 	containers  map[int]pve.Container      // keyed by VMID
 	storage     map[string][]pve.Storage   // keyed by node name
 	ceph        map[string]*pve.CephStatus // keyed by node name
-	haStatus    *pve.HAStatus
+	haStatus       *pve.HAStatus
+	qdeviceStatus  *pve.QDeviceStatus
 
 	// Network data
 	networkInterfaces map[string][]pve.NetworkInterface // keyed by node name
@@ -207,6 +208,20 @@ func (cs *ClusterStore) SetHAStatus(status *pve.HAStatus) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	cs.haStatus = status
+}
+
+// SetQDeviceStatus updates qdevice status for the cluster
+func (cs *ClusterStore) SetQDeviceStatus(status *pve.QDeviceStatus) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.qdeviceStatus = status
+}
+
+// GetQDeviceStatus returns the cached qdevice status
+func (cs *ClusterStore) GetQDeviceStatus() *pve.QDeviceStatus {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.qdeviceStatus
 }
 
 // SetNodeDetails updates detailed node info (version, kernel, etc.)

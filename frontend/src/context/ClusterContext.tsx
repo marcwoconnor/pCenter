@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { api } from '../api/client';
-import type { Summary, Node, Guest, Storage, ClusterInfo, MigrationProgress, DRSRecommendation, ActivityEntry, Tag, TagAssignment, AlarmInstance } from '../types';
+import type { Summary, Node, Guest, Storage, ClusterInfo, MigrationProgress, DRSRecommendation, ActivityEntry, Tag, TagAssignment, AlarmInstance, QDeviceStatus } from '../types';
 
 interface CephHealthCheck {
   severity: string;
@@ -47,6 +47,7 @@ interface ClusterState {
   guests: Guest[];
   storage: Storage[];
   ceph: CephStatus | null;
+  qdevice: QDeviceStatus | null;
   migrations: MigrationProgress[];
   drsRecommendations: DRSRecommendation[];
   activityEntries: ActivityEntry[];
@@ -102,6 +103,7 @@ interface StatePayload {
   guests: Guest[];
   storage: Storage[];
   ceph?: CephStatus;
+  qdevice_status?: QDeviceStatus;
   migrations?: MigrationProgress[];
   drs_recommendations?: DRSRecommendation[];
   alarms?: AlarmInstance[];
@@ -114,6 +116,7 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
   const [guests, setGuests] = useState<Guest[]>([]);
   const [storage, setStorage] = useState<Storage[]>([]);
   const [ceph, setCeph] = useState<CephStatus | null>(null);
+  const [qdevice, setQDevice] = useState<QDeviceStatus | null>(null);
   const [migrations, setMigrations] = useState<MigrationProgress[]>([]);
   const [drsRecommendations, setDRSRecommendations] = useState<DRSRecommendation[]>([]);
   const [activityEntries, setActivityEntries] = useState<ActivityEntry[]>([]);
@@ -153,6 +156,7 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
       setGuests(state.guests || []);
       setStorage(state.storage || []);
       setCeph(state.ceph || null);
+      setQDevice(state.qdevice_status || null);
       setMigrations(state.migrations || []);
       setDRSRecommendations(state.drs_recommendations || []);
       setActiveAlarms(state.alarms || []);
@@ -409,6 +413,7 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
       guests,
       storage,
       ceph,
+      qdevice,
       migrations,
       drsRecommendations,
       activityEntries,

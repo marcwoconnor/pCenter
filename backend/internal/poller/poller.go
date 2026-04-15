@@ -211,6 +211,13 @@ func (cp *ClusterPoller) run(ctx context.Context) {
 		cp.pollSDNLoop(ctx)
 	}()
 
+	// Also poll QDevice status periodically
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		cp.pollQDeviceLoop(ctx)
+	}()
+
 	wg.Wait()
 }
 
@@ -466,6 +473,74 @@ func (cp *ClusterPoller) fetchHA(ctx context.Context) {
 
 	cp.clusterStore.SetHAStatus(haStatus)
 
+	if cp.onChange != nil {
+		cp.onChange()
+	}
+}
+
+// pollQDeviceLoop polls qdevice status periodically
+func (cp *ClusterPoller) pollQDeviceLoop(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	cp.fetchQDevice(ctx)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cp.fetchQDevice(ctx)
+		}
+	}
+}
+
+// fetchQDevice fetches qdevice status via Proxmox API and finds hosting VM
+func (cp *ClusterPoller) fetchQDevice(ctx context.Context) {
+	cp.mu.RLock()
+	clients := make(map[string]*pve.Client, len(cp.clients))
+	for k, v := range cp.clients {
+		clients[k] = v
+	}
+	cp.mu.RUnlock()
+
+	if len(clients) == 0 {
+		return
+	}
+
+	fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// Get qdevice status from any node (it's cluster-wide)
+	var status *pve.QDeviceStatus
+	for _, client := range clients {
+		s, err := client.GetQDeviceStatus(fetchCtx)
+		if err == nil && s != nil {
+			status = s
+			break
+		}
+	}
+
+	if status == nil || !status.Configured {
+		cp.clusterStore.SetQDeviceStatus(status)
+		if cp.onChange != nil {
+			cp.onChange()
+		}
+		return
+	}
+
+	// Find the qdevice VM for display info
+	for nodeName, client := range clients {
+		vmStatus, err := client.FindQDeviceVM(fetchCtx, "")
+		if err == nil && vmStatus != nil {
+			status.HostNode = nodeName
+			status.HostVMID = vmStatus.HostVMID
+			status.HostVMName = vmStatus.HostVMName
+			break
+		}
+	}
+
+	cp.clusterStore.SetQDeviceStatus(status)
 	if cp.onChange != nil {
 		cp.onChange()
 	}

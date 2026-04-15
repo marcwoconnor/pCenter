@@ -1401,41 +1401,28 @@ func parseSmartJSON(jsonData string, device string, node string, criticalAttrs m
 
 // --- QDevice & Maintenance ---
 
-// GetQDeviceStatus returns the qdevice status from this node
+// GetQDeviceStatus returns the qdevice status via Proxmox API (no SSH required)
 func (c *Client) GetQDeviceStatus(ctx context.Context) (*QDeviceStatus, error) {
-	host := c.getHostFromURL()
-	if host == "" {
-		return nil, fmt.Errorf("could not determine node host")
-	}
-
-	output, err := RunSSHCommand(ctx, host, "corosync-qdevice-tool -s 2>/dev/null || echo 'NOT_CONFIGURED'")
+	data, err := c.request(ctx, "GET", "/cluster/config/qdevice", nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get qdevice status: %w", err)
+		return &QDeviceStatus{Configured: false}, nil
 	}
 
-	status := &QDeviceStatus{
-		Configured: !strings.Contains(output, "NOT_CONFIGURED"),
+	var resp struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil || len(resp.Data) == 0 {
+		return &QDeviceStatus{Configured: false}, nil
 	}
 
-	if !status.Configured {
-		return status, nil
-	}
-
-	// Parse the output
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "QNetd host:") {
-			status.QNetdAddress = strings.TrimSpace(strings.TrimPrefix(line, "QNetd host:"))
-		} else if strings.HasPrefix(line, "Algorithm:") {
-			status.Algorithm = strings.TrimSpace(strings.TrimPrefix(line, "Algorithm:"))
-		} else if strings.HasPrefix(line, "State:") {
-			status.State = strings.TrimSpace(strings.TrimPrefix(line, "State:"))
-			status.Connected = status.State == "Connected"
-		}
-	}
-
-	return status, nil
+	state := resp.Data["State"]
+	return &QDeviceStatus{
+		Configured:   true,
+		Connected:    state == "Connected",
+		State:        state,
+		QNetdAddress: resp.Data["QNetd host"],
+		Algorithm:    resp.Data["Algorithm"],
+	}, nil
 }
 
 // FindQDeviceVM finds the VM running the qdevice (qnetd) server

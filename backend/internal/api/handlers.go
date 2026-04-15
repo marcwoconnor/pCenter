@@ -826,54 +826,20 @@ func (h *Handler) GetClusterHA(w http.ResponseWriter, r *http.Request) {
 
 // --- Maintenance Mode ---
 
-// GetQDeviceStatus returns the qdevice status for a cluster
+// GetQDeviceStatus returns the cached qdevice status for a cluster
 func (h *Handler) GetQDeviceStatus(w http.ResponseWriter, r *http.Request) {
 	clusterName := r.PathValue("cluster")
 
-	if h.poller == nil {
-		writeError(w, http.StatusServiceUnavailable, "feature unavailable in agent-only mode")
-		return
-	}
-	clients := h.poller.GetClusterClients(clusterName)
-	if clients == nil {
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
 		writeError(w, http.StatusNotFound, "cluster not found")
 		return
 	}
 
-	// Find which node hosts the qdevice VM
-	var qdeviceVMNode string
-	var qdeviceVM *pve.QDeviceStatus
-	var hostClient *pve.Client
-
-	for nodeName, client := range clients {
-		vmStatus, err := client.FindQDeviceVM(r.Context(), "")
-		if err == nil && vmStatus != nil {
-			qdeviceVMNode = nodeName
-			qdeviceVM = vmStatus
-			hostClient = client
-			break
-		}
-	}
-
-	if qdeviceVM == nil {
+	status := cs.GetQDeviceStatus()
+	if status == nil {
 		writeJSON(w, &pve.QDeviceStatus{Configured: false})
 		return
-	}
-
-	// Get the VM's IP via guest agent and SSH to check corosync-qnetd service
-	status := &pve.QDeviceStatus{
-		Configured: true,
-		HostNode:   qdeviceVMNode,
-		HostVMID:   qdeviceVM.HostVMID,
-		HostVMName: qdeviceVM.HostVMName,
-	}
-
-	vmIP, err := hostClient.GetVMIPAddress(r.Context(), qdeviceVM.HostVMID)
-	if err == nil {
-		output, err := pve.RunSSHCommand(r.Context(), vmIP, "systemctl is-active corosync-qnetd 2>/dev/null || echo inactive")
-		if err == nil {
-			status.Connected = strings.TrimSpace(output) == "active"
-		}
 	}
 
 	writeJSON(w, status)
