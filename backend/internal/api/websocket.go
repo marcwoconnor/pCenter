@@ -382,6 +382,11 @@ func (h *Hub) buildStateMessage() []byte {
 		nodeList = append(nodeList, nws)
 	}
 
+	// Sort nodes by name for consistent ordering across broadcasts
+	sort.Slice(nodeList, func(i, j int) bool {
+		return nodeList[i].Node < nodeList[j].Node
+	})
+
 	// Build guests list
 	var guests []Guest
 	for _, vm := range h.store.GetVMs() {
