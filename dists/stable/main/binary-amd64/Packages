@@ -94,10 +94,10 @@ Architecture: amd64
 Maintainer: Marc O'Connor <marc@techsnet.net>
 Depends: libc6
 Filename: pool/pcenter_1.3.0_amd64.deb
-Size: 4338810
-MD5sum: cf81391a055df18e87b2ddf535002df2
-SHA1: 4b7bc82f2781e08e8d7b37d262e006c84b161a19
-SHA256: 4ce5ac5edd01183028e8bf0ccb7421cac61518f758cffbbdad7cb6b25569e13e
+Size: 4339384
+MD5sum: 15aa8b5065f1b280c4579fa71e87e0c0
+SHA1: e3c72b77157653e792bddaffebd76836d8180780
+SHA256: 1912ddc830fc43ef914908a35c8a498789ac90e40af48c1591b16a0ae57cc447
 Section: admin
 Priority: optional
 Homepage: https://github.com/marcwoconnor/pCenter
