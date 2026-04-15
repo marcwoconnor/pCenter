@@ -22,7 +22,8 @@ import (
 )
 
 // runSSHCommand executes a command on a remote host via SSH
-func runSSHCommand(ctx context.Context, host string, command string) (string, error) {
+// RunSSHCommand executes a command on a remote host via SSH
+func RunSSHCommand(ctx context.Context, host string, command string) (string, error) {
 	slog.Info("running SSH command", "host", host, "command", command)
 
 	// Enforce 30s hard timeout if context has no deadline
@@ -1146,7 +1147,7 @@ func (c *Client) RunCephCommand(ctx context.Context, command string, pgID string
 	}
 
 	// Execute via SSH
-	return runSSHCommand(ctx, host, fullCmd)
+	return RunSSHCommand(ctx, host, fullCmd)
 }
 
 // isValidPgID validates the format of a Ceph PG ID (e.g., "4.3b")
@@ -1192,7 +1193,7 @@ func (c *Client) GetSmartData(ctx context.Context) ([]SmartDisk, error) {
 	}
 
 	// Get list of SMART-capable devices
-	scanOutput, err := runSSHCommand(ctx, host, "smartctl --scan -j")
+	scanOutput, err := RunSSHCommand(ctx, host, "smartctl --scan -j")
 	if err != nil {
 		return nil, fmt.Errorf("smartctl scan failed: %w", err)
 	}
@@ -1225,7 +1226,7 @@ func (c *Client) GetSmartData(ctx context.Context) ([]SmartDisk, error) {
 		}
 
 		// Get detailed SMART data for this device
-		smartOutput, err := runSSHCommand(ctx, host, fmt.Sprintf("smartctl -j -a %s", dev.Name))
+		smartOutput, err := RunSSHCommand(ctx, host, fmt.Sprintf("smartctl -j -a %s", dev.Name))
 		if err != nil {
 			slog.Warn("failed to get SMART data", "device", dev.Name, "error", err)
 			continue
@@ -1407,7 +1408,7 @@ func (c *Client) GetQDeviceStatus(ctx context.Context) (*QDeviceStatus, error) {
 		return nil, fmt.Errorf("could not determine node host")
 	}
 
-	output, err := runSSHCommand(ctx, host, "corosync-qdevice-tool -s 2>/dev/null || echo 'NOT_CONFIGURED'")
+	output, err := RunSSHCommand(ctx, host, "corosync-qdevice-tool -s 2>/dev/null || echo 'NOT_CONFIGURED'")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get qdevice status: %w", err)
 	}
@@ -1465,6 +1466,37 @@ func (c *Client) FindQDeviceVM(ctx context.Context, qnetdIP string) (*QDeviceSta
 	return nil, nil
 }
 
+// GetVMIPAddress returns the first non-loopback IPv4 address from the QEMU guest agent
+func (c *Client) GetVMIPAddress(ctx context.Context, vmid int) (string, error) {
+	data, err := c.request(ctx, "GET", fmt.Sprintf("/nodes/%s/qemu/%d/agent/network-get-interfaces", c.nodeName, vmid), nil)
+	if err != nil {
+		return "", err
+	}
+
+	var resp struct {
+		Data struct {
+			Result []struct {
+				IPAddresses []struct {
+					IPAddress   string `json:"ip-address"`
+					IPType      string `json:"ip-address-type"`
+				} `json:"ip-addresses"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return "", err
+	}
+
+	for _, iface := range resp.Data.Result {
+		for _, addr := range iface.IPAddresses {
+			if addr.IPType == "ipv4" && addr.IPAddress != "127.0.0.1" {
+				return addr.IPAddress, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no IPv4 address found for VM %d", vmid)
+}
+
 // GetMaintenancePreflight performs pre-flight checks for maintenance mode
 func (c *Client) GetMaintenancePreflight(ctx context.Context, targetNode string, allNodes []string) (*MaintenancePreflight, error) {
 	preflight := &MaintenancePreflight{
@@ -1502,7 +1534,7 @@ func (c *Client) GetMaintenancePreflight(ctx context.Context, targetNode string,
 	})
 
 	// Check 2: Ceph health
-	cephOutput, err := runSSHCommand(ctx, host, "ceph health 2>/dev/null || echo 'CEPH_NOT_AVAILABLE'")
+	cephOutput, err := RunSSHCommand(ctx, host, "ceph health 2>/dev/null || echo 'CEPH_NOT_AVAILABLE'")
 	if err == nil && !strings.Contains(cephOutput, "CEPH_NOT_AVAILABLE") {
 		cephHealth := strings.TrimSpace(cephOutput)
 		if cephHealth == "HEALTH_OK" {
@@ -1529,7 +1561,7 @@ func (c *Client) GetMaintenancePreflight(ctx context.Context, targetNode string,
 	}
 
 	// Check 3: QDevice status
-	qdeviceOutput, err := runSSHCommand(ctx, host, "corosync-qdevice-tool -s 2>/dev/null | grep -E 'State:|QNetd host:' || echo 'NO_QDEVICE'")
+	qdeviceOutput, err := RunSSHCommand(ctx, host, "corosync-qdevice-tool -s 2>/dev/null | grep -E 'State:|QNetd host:' || echo 'NO_QDEVICE'")
 	if err == nil && !strings.Contains(qdeviceOutput, "NO_QDEVICE") {
 		if strings.Contains(qdeviceOutput, "Connected") {
 			preflight.Checks = append(preflight.Checks, MaintenancePreflightCheck{
@@ -1570,7 +1602,7 @@ func (c *Client) SetCephNoout(ctx context.Context, enable bool) error {
 		cmd = "ceph osd set noout"
 	}
 
-	_, err := runSSHCommand(ctx, host, cmd)
+	_, err := RunSSHCommand(ctx, host, cmd)
 	return err
 }
 
@@ -2432,7 +2464,7 @@ func (c *Client) GetVmStats(ctx context.Context) (*VmStats, error) {
 		return nil, fmt.Errorf("could not determine node host")
 	}
 
-	output, err := runSSHCommand(ctx, host, "cat /proc/vmstat | grep -E '^(pgpgin|pgpgout|pswpin|pswpout|pgfault|pgmajfault) '")
+	output, err := RunSSHCommand(ctx, host, "cat /proc/vmstat | grep -E '^(pgpgin|pgpgout|pswpin|pswpout|pgfault|pgmajfault) '")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get vmstat: %w", err)
 	}

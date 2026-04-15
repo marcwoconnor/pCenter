@@ -840,40 +840,43 @@ func (h *Handler) GetQDeviceStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get qdevice status from any node
-	var qdeviceStatus *pve.QDeviceStatus
+	// Find which node hosts the qdevice VM
 	var qdeviceVMNode string
 	var qdeviceVM *pve.QDeviceStatus
+	var hostClient *pve.Client
 
 	for nodeName, client := range clients {
-		status, err := client.GetQDeviceStatus(r.Context())
-		if err == nil && status != nil && status.Configured {
-			// Prefer Connected over Disconnected — any node reporting Connected wins
-			if qdeviceStatus == nil || !qdeviceStatus.Connected {
-				qdeviceStatus = status
-			}
-		}
-
-		// Check if this node has the qdevice VM
 		vmStatus, err := client.FindQDeviceVM(r.Context(), "")
 		if err == nil && vmStatus != nil {
 			qdeviceVMNode = nodeName
 			qdeviceVM = vmStatus
+			hostClient = client
+			break
 		}
 	}
 
-	if qdeviceStatus == nil {
-		qdeviceStatus = &pve.QDeviceStatus{Configured: false}
+	if qdeviceVM == nil {
+		writeJSON(w, &pve.QDeviceStatus{Configured: false})
+		return
 	}
 
-	// Merge qdevice VM info
-	if qdeviceVM != nil {
-		qdeviceStatus.HostNode = qdeviceVMNode
-		qdeviceStatus.HostVMID = qdeviceVM.HostVMID
-		qdeviceStatus.HostVMName = qdeviceVM.HostVMName
+	// Get the VM's IP via guest agent and SSH to check corosync-qnetd service
+	status := &pve.QDeviceStatus{
+		Configured: true,
+		HostNode:   qdeviceVMNode,
+		HostVMID:   qdeviceVM.HostVMID,
+		HostVMName: qdeviceVM.HostVMName,
 	}
 
-	writeJSON(w, qdeviceStatus)
+	vmIP, err := hostClient.GetVMIPAddress(r.Context(), qdeviceVM.HostVMID)
+	if err == nil {
+		output, err := pve.RunSSHCommand(r.Context(), vmIP, "systemctl is-active corosync-qnetd 2>/dev/null || echo inactive")
+		if err == nil {
+			status.Connected = strings.TrimSpace(output) == "active"
+		}
+	}
+
+	writeJSON(w, status)
 }
 
 // GetMaintenancePreflight returns pre-flight checks for entering maintenance mode
