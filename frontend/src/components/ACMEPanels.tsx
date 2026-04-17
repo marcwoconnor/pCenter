@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api/client';
+import { useCluster } from '../context/ClusterContext';
 import type {
   NodeCertificate,
   ACMEAccount,
@@ -99,6 +100,7 @@ export function NodeCertificatesTab({ cluster, node }: { cluster: string; node: 
   const [err, setErr] = useState<string | null>(null);
   const [renewing, setRenewing] = useState(false);
   const [editDomains, setEditDomains] = useState(false);
+  const [uploadCert, setUploadCert] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -127,10 +129,23 @@ export function NodeCertificatesTab({ cluster, node }: { cluster: string; node: 
     }
   };
 
+  const onDeleteCustom = async () => {
+    if (!confirm(`Remove the custom certificate on ${node} and revert to the default self-signed cert?\n\npveproxy will restart.`)) return;
+    try {
+      await api.deleteNodeCustomCertificate(cluster, node, true);
+      setTimeout(load, 2000);
+    } catch (e) {
+      alert('Delete failed: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  };
+
   if (certs === null) return <div className="text-gray-500 p-4">Loading certificates…</div>;
   if (err) return <div className="bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded p-4">{err}</div>;
 
   const acmeEligible = certs.some(c => c.filename === 'pveproxy-ssl.pem' || c.filename === 'pve-ssl.pem');
+  // Heuristic: a non-default cert exists if pveproxy-ssl.pem's issuer doesn't say "Proxmox".
+  const pveproxyCert = certs.find(c => c.filename === 'pveproxy-ssl.pem');
+  const hasCustomCert = !!pveproxyCert && !!pveproxyCert.issuer && !/Proxmox/i.test(pveproxyCert.issuer);
 
   return (
     <div className="space-y-4">
@@ -146,6 +161,21 @@ export function NodeCertificatesTab({ cluster, node }: { cluster: string; node: 
           >
             Configure Domains
           </button>
+          <button
+            onClick={() => setUploadCert(true)}
+            className="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 text-sm"
+          >
+            Upload Custom Cert
+          </button>
+          {hasCustomCert && (
+            <button
+              onClick={onDeleteCustom}
+              className="px-3 py-1.5 rounded border border-red-300 dark:border-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 text-red-700 dark:text-red-400 text-sm"
+              title="Remove custom cert and revert to default self-signed"
+            >
+              Revert to Self-Signed
+            </button>
+          )}
           <button
             onClick={onRenew}
             disabled={renewing || !acmeEligible}
@@ -195,11 +225,113 @@ export function NodeCertificatesTab({ cluster, node }: { cluster: string; node: 
           onSuccess={() => { setEditDomains(false); load(); }}
         />
       )}
+      {uploadCert && (
+        <UploadCustomCertDialog
+          cluster={cluster}
+          node={node}
+          onClose={() => setUploadCert(false)}
+          onSuccess={() => { setUploadCert(false); setTimeout(load, 2000); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function UploadCustomCertDialog({
+  cluster, node, onClose, onSuccess,
+}: {
+  cluster: string;
+  node: string;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [cert, setCert] = useState('');
+  const [key, setKey] = useState('');
+  const [force, setForce] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const onSave = async () => {
+    setErr(null);
+    if (!cert.trim()) { setErr('Certificate PEM is required'); return }
+    if (!cert.includes('-----BEGIN CERTIFICATE-----')) {
+      setErr('Certificate must be PEM-encoded (contain -----BEGIN CERTIFICATE-----)');
+      return;
+    }
+    if (key && !key.includes('-----BEGIN') && !key.includes('PRIVATE KEY-----')) {
+      setErr('Private key must be PEM-encoded');
+      return;
+    }
+    if (!confirm(`Install custom certificate on ${node}?\n\nThis will restart pveproxy. Make sure the certificate chain and key are correct — a bad cert can lock you out of the Proxmox UI.`)) return;
+
+    setLoading(true);
+    try {
+      await api.uploadNodeCustomCertificate(cluster, node, {
+        certificates: cert,
+        key: key || undefined,
+        force,
+        restart: true,
+      });
+      onSuccess();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'upload failed');
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-3xl p-6 max-h-[90vh] overflow-auto">
+        <h2 className="text-lg font-semibold mb-2 text-gray-900 dark:text-white">Upload Custom Certificate — {node}</h2>
+        <p className="text-xs text-gray-500 mb-4">
+          Paste a PEM-encoded certificate chain (leaf + intermediates) and optionally a private key.
+          If no key is provided, the node's existing private key is reused. pveproxy restarts after install.
+        </p>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Certificate Chain (PEM) <span className="text-red-500">*</span></label>
+            <textarea
+              value={cert}
+              onChange={e => setCert(e.target.value)}
+              disabled={loading}
+              rows={8}
+              placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"
+              className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded px-3 py-2 font-mono text-xs"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Private Key (PEM) — optional</label>
+            <textarea
+              value={key}
+              onChange={e => setKey(e.target.value)}
+              disabled={loading}
+              rows={6}
+              placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"
+              className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded px-3 py-2 font-mono text-xs"
+            />
+            <p className="text-xs text-gray-500 mt-1">Omit to reuse the node's existing private key (e.g. after just renewing a cert with same key).</p>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input type="checkbox" checked={force} onChange={e => setForce(e.target.checked)} disabled={loading} />
+            Overwrite existing custom cert (force)
+          </label>
+          {err && <div className="bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 px-3 py-2 rounded text-sm">{err}</div>}
+        </div>
+        <div className="flex justify-end gap-3 mt-6">
+          <button onClick={onClose} disabled={loading}
+            className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded">Cancel</button>
+          <button onClick={onSave} disabled={loading}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+            {loading ? 'Uploading…' : 'Upload'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
 export function ClusterACMETab({ clusterName }: { clusterName: string }) {
+  const { nodes } = useCluster();
   const [accounts, setAccounts] = useState<ACMEAccount[] | null>(null);
   const [plugins, setPlugins] = useState<ACMEPlugin[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -207,6 +339,9 @@ export function ClusterACMETab({ clusterName }: { clusterName: string }) {
   const [showAddPlugin, setShowAddPlugin] = useState(false);
   const [editAccount, setEditAccount] = useState<ACMEAccount | null>(null);
   const [editPlugin, setEditPlugin] = useState<ACMEPlugin | null>(null);
+  const [renewAll, setRenewAll] = useState<{ node: string; status: 'pending' | 'done' | 'error'; msg?: string }[] | null>(null);
+
+  const clusterNodes = (nodes || []).filter(n => n.cluster === clusterName && n.status === 'online');
 
   const load = useCallback(async () => {
     try {
@@ -236,6 +371,25 @@ export function ClusterACMETab({ clusterName }: { clusterName: string }) {
     }
   };
 
+  const onRenewAll = async () => {
+    if (clusterNodes.length === 0) { alert('No online nodes to renew on'); return }
+    if (!confirm(`Trigger ACME cert renewal on all ${clusterNodes.length} online node(s) in ${clusterName}?\n\nEach node runs independently; failures on one don't block others.`)) return;
+
+    const initial = clusterNodes.map(n => ({ node: n.node, status: 'pending' as const }));
+    setRenewAll(initial);
+
+    // Fire renewals in parallel, update status as each completes
+    await Promise.all(clusterNodes.map(async (n, i) => {
+      try {
+        await api.renewNodeACMECertificate(clusterName, n.node);
+        setRenewAll(prev => prev && prev.map((e, j) => j === i ? { ...e, status: 'done' } : e));
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setRenewAll(prev => prev && prev.map((e, j) => j === i ? { ...e, status: 'error', msg } : e));
+      }
+    }));
+  };
+
   const onDeletePlugin = async (id: string) => {
     if (!confirm(`Delete challenge plugin "${id}"?\n\nNodes using this plugin will lose the ability to renew until a replacement is configured.`)) return;
     try {
@@ -251,6 +405,41 @@ export function ClusterACMETab({ clusterName }: { clusterName: string }) {
 
   return (
     <div className="space-y-4">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 flex items-center justify-between">
+        <div>
+          <h3 className="font-medium text-gray-900 dark:text-white">Bulk Operations</h3>
+          <p className="text-xs text-gray-500">Trigger ACME renewal across all online nodes in this cluster.</p>
+        </div>
+        <button
+          onClick={onRenewAll}
+          disabled={clusterNodes.length === 0 || (!!renewAll && renewAll.some(r => r.status === 'pending'))}
+          className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded disabled:bg-gray-400"
+        >
+          Renew All ({clusterNodes.length} nodes)
+        </button>
+      </div>
+
+      {renewAll && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <h4 className="text-sm font-medium mb-2 text-gray-900 dark:text-white">Bulk Renewal Status</h4>
+          <div className="space-y-1 text-sm">
+            {renewAll.map(r => (
+              <div key={r.node} className="flex items-center gap-2">
+                <span className={
+                  r.status === 'pending' ? 'text-gray-500' :
+                  r.status === 'done' ? 'text-green-600 dark:text-green-400' :
+                  'text-red-600 dark:text-red-400'
+                }>
+                  {r.status === 'pending' ? '⏳' : r.status === 'done' ? '✓' : '✗'}
+                </span>
+                <span className="text-gray-900 dark:text-white">{r.node}</span>
+                {r.msg && <span className="text-xs text-red-600 dark:text-red-400">— {r.msg}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-medium text-gray-900 dark:text-white">ACME Accounts ({accounts.length})</h3>

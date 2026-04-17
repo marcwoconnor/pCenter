@@ -423,6 +423,77 @@ func (h *Handler) SetNodeACMEDomains(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "updated"})
 }
 
+// uploadCustomCertRequest is the JSON body for POSTing a non-ACME cert.
+type uploadCustomCertRequest struct {
+	Certificates string `json:"certificates"`
+	Key          string `json:"key,omitempty"`
+	Force        bool   `json:"force,omitempty"`
+	Restart      bool   `json:"restart,omitempty"`
+}
+
+// UploadNodeCustomCertificate installs a non-ACME PEM cert on a node.
+func (h *Handler) UploadNodeCustomCertificate(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	node := r.PathValue("node")
+
+	var req uploadCustomCertRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Certificates == "" {
+		writeError(w, http.StatusBadRequest, "certificates (PEM) required")
+		return
+	}
+
+	client, ok := h.getClient(cluster, node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	if err := client.UploadNodeCustomCertificate(ctx, req.Certificates, req.Key, req.Force, req.Restart); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action: "custom_cert_upload", ResourceType: "node", ResourceID: node,
+			ResourceName: node, Cluster: cluster, Status: "done",
+		})
+	}
+	writeJSON(w, map[string]string{"status": "installed"})
+}
+
+// DeleteNodeCustomCertificate removes the node's custom cert.
+func (h *Handler) DeleteNodeCustomCertificate(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	node := r.PathValue("node")
+	restart := r.URL.Query().Get("restart") == "1"
+
+	client, ok := h.getClient(cluster, node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	if err := client.DeleteNodeCustomCertificate(ctx, restart); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action: "custom_cert_delete", ResourceType: "node", ResourceID: node,
+			ResourceName: node, Cluster: cluster, Status: "done",
+		})
+	}
+	writeJSON(w, map[string]string{"status": "deleted"})
+}
+
 // RenewNodeACMECertificate triggers ACME cert renewal on a node.
 func (h *Handler) RenewNodeACMECertificate(w http.ResponseWriter, r *http.Request) {
 	cluster := r.PathValue("cluster")

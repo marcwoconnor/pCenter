@@ -1769,6 +1769,33 @@ func (c *Client) RenewNodeACMECertificate(ctx context.Context) (string, error) {
 	return resp.Data, nil
 }
 
+// UploadNodeCustomCertificate installs a non-ACME certificate on a node.
+// `certificates` is the PEM-encoded cert (chain). `key` is optional if reusing existing private key.
+// Returns the list of certificate info entries now installed.
+func (c *Client) UploadNodeCustomCertificate(ctx context.Context, certificates, key string, force, restart bool) error {
+	params := map[string]string{"certificates": certificates}
+	if key != "" {
+		params["key"] = key
+	}
+	if force {
+		params["force"] = "1"
+	}
+	if restart {
+		params["restart"] = "1"
+	}
+	_, err := c.post(ctx, fmt.Sprintf("/nodes/%s/certificates/custom", c.nodeName), params)
+	return err
+}
+
+// DeleteNodeCustomCertificate removes the custom certificate from a node.
+func (c *Client) DeleteNodeCustomCertificate(ctx context.Context, restart bool) error {
+	path := fmt.Sprintf("/nodes/%s/certificates/custom", c.nodeName)
+	if restart {
+		path += "?restart=1"
+	}
+	return c.delete(ctx, path)
+}
+
 // ListACMEDirectories returns the published ACME directories (LE prod, LE staging, etc.).
 func (c *Client) ListACMEDirectories(ctx context.Context) ([]ACMEDirectory, error) {
 	return get[[]ACMEDirectory](c, ctx, "/cluster/acme/directories")

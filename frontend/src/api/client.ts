@@ -319,6 +319,15 @@ export const api = {
     fetchAPI<{ upid: string }>(`/clusters/${cluster}/nodes/${node}/certificates/acme/renew`, {
       method: 'POST',
     }),
+  uploadNodeCustomCertificate: (cluster: string, node: string, req: { certificates: string; key?: string; force?: boolean; restart?: boolean }) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/nodes/${node}/certificates/custom`, {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+  deleteNodeCustomCertificate: (cluster: string, node: string, restart = true) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/nodes/${node}/certificates/custom${restart ? '?restart=1' : ''}`, {
+      method: 'DELETE',
+    }),
   listACMEAccounts: (cluster: string) =>
     fetchAPI<ACMEAccount[]>(`/clusters/${cluster}/acme/accounts`),
   listACMEPlugins: (cluster: string) =>

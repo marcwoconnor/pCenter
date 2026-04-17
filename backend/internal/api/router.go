@@ -267,6 +267,8 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	// ACME / certificate operations
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes/{node}/certificates", h.GetNodeCertificates)
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/certificates/acme/renew", h.RenewNodeACMECertificate)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/certificates/custom", h.UploadNodeCustomCertificate)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/nodes/{node}/certificates/custom", h.DeleteNodeCustomCertificate)
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes/{node}/acme/domains", h.GetNodeACMEDomains)
 	protectedMux.HandleFunc("PUT /api/clusters/{cluster}/nodes/{node}/acme/domains", h.SetNodeACMEDomains)
 
