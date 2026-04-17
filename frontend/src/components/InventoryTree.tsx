@@ -520,6 +520,24 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
         icon: '📋',
         action: () => setCloneGuest(guest),
       },
+      ...(guest.template ? [] : [{
+        label: 'Convert to Template',
+        icon: '🖼',
+        disabled: isRunning,
+        action: async () => {
+          const msg = `Convert ${guest.name} (${guest.vmid}) to a template?\n\nThis is permanent — templates cannot be converted back to regular ${type === 'vm' ? 'VMs' : 'containers'}.`;
+          if (!confirm(msg)) return;
+          try {
+            if (type === 'vm') {
+              await api.convertVMToTemplate(guest.cluster, guest.vmid);
+            } else {
+              await api.convertContainerToTemplate(guest.cluster, guest.vmid);
+            }
+          } catch (err) {
+            alert('Convert failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
+          }
+        },
+      }]),
       { label: '', action: () => {}, divider: true },
       guest.ha_state ? {
         label: 'Disable HA',

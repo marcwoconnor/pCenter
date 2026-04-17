@@ -1707,6 +1707,30 @@ func (c *Client) CloneContainer(ctx context.Context, vmid int, opts CloneOptions
 	return resp.Data, nil
 }
 
+// ConvertVMToTemplate marks a VM as a template (POST /nodes/{node}/qemu/{vmid}/template).
+// The VM must be stopped. Returns UPID for task tracking (empty string if PVE returns no task).
+func (c *Client) ConvertVMToTemplate(ctx context.Context, vmid int) (string, error) {
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/template", c.nodeName, vmid), nil)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// ConvertContainerToTemplate marks a container as a template.
+// The container must be stopped. Returns UPID (empty if PVE returns no task).
+func (c *Client) ConvertContainerToTemplate(ctx context.Context, vmid int) (string, error) {
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/template", c.nodeName, vmid), nil)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
 // --- Console/VNC operations ---
 
 // VNCProxyResponse contains the VNC proxy ticket info

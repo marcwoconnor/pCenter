@@ -260,6 +260,10 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/vms/{vmid}/clone", h.CloneVM)
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/containers/{vmid}/clone", h.CloneContainer)
 
+	// Convert-to-Template operations
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/vms/{vmid}/template", h.ConvertVMToTemplate)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/containers/{vmid}/template", h.ConvertContainerToTemplate)
+
 	// Get nodes for migration target selection
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes/migration-targets", h.GetClusterNodesForMigration)
 

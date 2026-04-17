@@ -97,6 +97,7 @@ type Container struct {
 	DiskRead  int64      `json:"diskread"`
 	DiskWrite int64      `json:"diskwrite"`
 	Type      string     `json:"type,omitempty"` // lxc
+	Template  bool       `json:"template"`
 	Tags      string     `json:"tags,omitempty"`
 	HAState   string     `json:"ha_state,omitempty"` // started, stopped, etc if HA managed
 	NICs      []GuestNIC `json:"nics,omitempty"`     // network interfaces

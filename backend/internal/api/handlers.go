@@ -2424,6 +2424,142 @@ func (h *Handler) CloneContainer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"upid": upid, "new_vmid": req.NewID})
 }
 
+// --- Convert-to-Template Handlers ---
+
+// ConvertVMToTemplate marks a VM as a template at the Proxmox level.
+func (h *Handler) ConvertVMToTemplate(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+	vm, found := cs.GetVM(vmid)
+	if !found {
+		writeError(w, http.StatusNotFound, "VM not found")
+		return
+	}
+	if vm.Template {
+		writeError(w, http.StatusBadRequest, "VM is already a template")
+		return
+	}
+	if vm.Status == "running" {
+		writeError(w, http.StatusBadRequest, "VM must be stopped before conversion")
+		return
+	}
+
+	ctx := r.Context()
+	var upid string
+
+	agentUpid, handled, agentErr := h.tryAgentAction(ctx, clusterName, vm.Node, "vm_convert_to_template", map[string]interface{}{
+		"vmid": vmid,
+	})
+	if handled && agentErr != nil {
+		writeError(w, http.StatusInternalServerError, "convert failed: "+agentErr.Error())
+		return
+	} else if handled {
+		upid = agentUpid
+	} else {
+		client, ok := h.getClient(clusterName, vm.Node)
+		if !ok {
+			writeError(w, http.StatusInternalServerError, "node client not found")
+			return
+		}
+		upid, err = client.ConvertVMToTemplate(ctx, vmid)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "convert failed: "+err.Error())
+			return
+		}
+	}
+
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "convert_to_template",
+			ResourceType: "vm",
+			ResourceID:   vmidStr,
+			ResourceName: vm.Name,
+			Cluster:      clusterName,
+			Status:       "started",
+		})
+	}
+
+	writeJSON(w, map[string]any{"upid": upid})
+}
+
+// ConvertContainerToTemplate marks a container as a template at the Proxmox level.
+func (h *Handler) ConvertContainerToTemplate(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+	ct, found := cs.GetContainer(vmid)
+	if !found {
+		writeError(w, http.StatusNotFound, "container not found")
+		return
+	}
+	if ct.Template {
+		writeError(w, http.StatusBadRequest, "container is already a template")
+		return
+	}
+	if ct.Status == "running" {
+		writeError(w, http.StatusBadRequest, "container must be stopped before conversion")
+		return
+	}
+
+	ctx := r.Context()
+	var upid string
+
+	agentUpid, handled, agentErr := h.tryAgentAction(ctx, clusterName, ct.Node, "ct_convert_to_template", map[string]interface{}{
+		"vmid": vmid,
+	})
+	if handled && agentErr != nil {
+		writeError(w, http.StatusInternalServerError, "convert failed: "+agentErr.Error())
+		return
+	} else if handled {
+		upid = agentUpid
+	} else {
+		client, ok := h.getClient(clusterName, ct.Node)
+		if !ok {
+			writeError(w, http.StatusInternalServerError, "node client not found")
+			return
+		}
+		upid, err = client.ConvertContainerToTemplate(ctx, vmid)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "convert failed: "+err.Error())
+			return
+		}
+	}
+
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "convert_to_template",
+			ResourceType: "ct",
+			ResourceID:   vmidStr,
+			ResourceName: ct.Name,
+			Cluster:      clusterName,
+			Status:       "started",
+		})
+	}
+
+	writeJSON(w, map[string]any{"upid": upid})
+}
+
 // GetTaskStatus returns the status of a Proxmox task
 func (h *Handler) GetTaskStatus(w http.ResponseWriter, r *http.Request) {
 	clusterName := r.PathValue("cluster")

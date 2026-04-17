@@ -20,10 +20,11 @@ var AllowedAgentActions = map[string]bool{
 	"vm_reboot":   true,
 
 	// VM lifecycle
-	"vm_clone":      true,
-	"vm_delete":     true,
-	"vm_config_get": true,
-	"vm_config_set": true,
+	"vm_clone":               true,
+	"vm_delete":              true,
+	"vm_config_get":          true,
+	"vm_config_set":          true,
+	"vm_convert_to_template": true,
 
 	// VM snapshots
 	"vm_snapshot_list":     true,
@@ -38,10 +39,11 @@ var AllowedAgentActions = map[string]bool{
 	"ct_reboot":   true,
 
 	// Container lifecycle
-	"ct_clone":      true,
-	"ct_delete":     true,
-	"ct_config_get": true,
-	"ct_config_set": true,
+	"ct_clone":               true,
+	"ct_delete":              true,
+	"ct_config_get":          true,
+	"ct_config_set":          true,
+	"ct_convert_to_template": true,
 
 	// Container snapshots
 	"ct_snapshot_list":     true,

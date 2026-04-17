@@ -41,6 +41,7 @@ export interface Guest {
   disk: number;
   maxdisk: number;
   uptime: number;
+  template?: boolean;
   tags?: string;
   ha_state?: string;
   nics?: GuestNIC[];
@@ -86,6 +87,7 @@ export interface Container {
   netin: number;
   netout: number;
   type: string;
+  template: boolean;
   tags?: string;
   ha_state?: string;
 }

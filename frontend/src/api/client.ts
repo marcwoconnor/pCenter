@@ -294,6 +294,16 @@ export const api = {
       body: JSON.stringify(opts),
     }),
 
+  // Convert VM/Container to Template (Proxmox native)
+  convertVMToTemplate: (cluster: string, vmid: number) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/vms/${vmid}/template`, {
+      method: 'POST',
+    }),
+  convertContainerToTemplate: (cluster: string, vmid: number) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/containers/${vmid}/template`, {
+      method: 'POST',
+    }),
+
   // Console
   getConsoleURL: (type: 'vm' | 'ct', vmid: number) =>
     fetchAPI<{ url: string }>(`/console/${type}/${vmid}`),

@@ -2,7 +2,7 @@
 
 Comparison of VMware vCenter Server features vs pCenter current implementation, with prioritized roadmap for feature development.
 
-**Last Updated:** 2026-04-12
+**Last Updated:** 2026-04-16
 
 ---
 
@@ -266,7 +266,7 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 | 2 | **Alerting & notifications** | Medium | High | ✅ Done |
 | 3 | **Tags & custom attributes** | Low | High | ✅ Done |
 | 4 | **Affinity/anti-affinity rules** | Medium | High | ✅ Done |
-| 5 | **Scheduled tasks** | Medium | High | 🔴 TODO |
+| 5 | **Scheduled tasks** | Medium | High | ✅ Done |
 
 #### 1. RBAC ✅
 - [x] `roles` table with permissions JSON array
@@ -304,14 +304,14 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 - [x] Rules UI in cluster settings
 - [x] Rule violations shown in DRS panel
 
-#### 5. Scheduled Tasks
-- [ ] `scheduled_tasks` table: type, target, cron_expression, params, enabled
-- [ ] `task_history` table: execution log
-- [ ] Go cron scheduler goroutine
-- [ ] Supported task types: power ops, snapshots, migrations
-- [ ] Schedule builder UI (cron expression helper)
-- [ ] Task execution history view
-- [ ] Enable/disable/delete schedules
+#### 5. Scheduled Tasks ✅
+- [x] `scheduled_tasks` table: type, target, cron_expression, params, enabled
+- [x] `task_history` table: execution log
+- [x] Go cron scheduler goroutine
+- [x] Supported task types: power ops, snapshots, migrations
+- [x] Schedule builder UI (cron expression helper)
+- [x] Task execution history view
+- [x] Enable/disable/delete schedules
 
 ---
 
@@ -319,7 +319,7 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 
 | # | Feature | Effort | Value | Dependencies |
 |---|---------|--------|-------|--------------|
-| 6 | **Template library** | Medium | Medium | New inventory concept |
+| 6 | **Template library** | Medium | Medium | 🟡 In Progress |
 | 7 | **Backup management** | High | Medium | PBS integration |
 | 8 | **Resource pools** | Medium | Medium | Proxmox pools API |
 | 9 | **Scheduled snapshots** | Low | Medium | Phase 1 scheduler |

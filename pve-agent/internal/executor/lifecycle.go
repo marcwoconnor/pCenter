@@ -155,6 +155,34 @@ func (e *Executor) ctConfigSet(ctx context.Context, cmd *types.CommandData, resu
 	result.Success = true
 }
 
+// --- Convert to Template ---
+
+func (e *Executor) convertVMToTemplate(ctx context.Context, cmd *types.CommandData, result *types.CommandResultData) {
+	vmid := getVMID(cmd.Params)
+	node := e.api.NodeName()
+
+	upid, err := e.api.PostWithParams(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/template", node, vmid), nil)
+	if err != nil {
+		result.Error = err.Error()
+		return
+	}
+	result.Success = true
+	result.UPID = upid
+}
+
+func (e *Executor) convertCTToTemplate(ctx context.Context, cmd *types.CommandData, result *types.CommandResultData) {
+	vmid := getVMID(cmd.Params)
+	node := e.api.NodeName()
+
+	upid, err := e.api.PostWithParams(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/template", node, vmid), nil)
+	if err != nil {
+		result.Error = err.Error()
+		return
+	}
+	result.Success = true
+	result.UPID = upid
+}
+
 // --- Snapshots ---
 
 func (e *Executor) vmSnapshotList(ctx context.Context, cmd *types.CommandData, result *types.CommandResultData) {

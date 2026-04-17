@@ -19,10 +19,11 @@ var AllowedActions = map[string]bool{
 	"vm_reboot":   true,
 
 	// VM lifecycle
-	"vm_clone":      true,
-	"vm_delete":     true,
-	"vm_config_get": true,
-	"vm_config_set": true,
+	"vm_clone":               true,
+	"vm_delete":              true,
+	"vm_config_get":          true,
+	"vm_config_set":          true,
+	"vm_convert_to_template": true,
 
 	// VM snapshots
 	"vm_snapshot_list":     true,
@@ -37,10 +38,11 @@ var AllowedActions = map[string]bool{
 	"ct_reboot":   true,
 
 	// Container lifecycle
-	"ct_clone":      true,
-	"ct_delete":     true,
-	"ct_config_get": true,
-	"ct_config_set": true,
+	"ct_clone":               true,
+	"ct_delete":              true,
+	"ct_config_get":          true,
+	"ct_config_set":          true,
+	"ct_convert_to_template": true,
 
 	// Container snapshots
 	"ct_snapshot_list":     true,
@@ -100,6 +102,8 @@ func (e *Executor) Execute(ctx context.Context, cmd *types.CommandData) *types.C
 		e.vmConfigGet(ctx, cmd, result)
 	case "vm_config_set":
 		e.vmConfigSet(ctx, cmd, result)
+	case "vm_convert_to_template":
+		e.convertVMToTemplate(ctx, cmd, result)
 	// VM snapshots
 	case "vm_snapshot_list":
 		e.vmSnapshotList(ctx, cmd, result)
@@ -121,6 +125,8 @@ func (e *Executor) Execute(ctx context.Context, cmd *types.CommandData) *types.C
 		e.ctConfigGet(ctx, cmd, result)
 	case "ct_config_set":
 		e.ctConfigSet(ctx, cmd, result)
+	case "ct_convert_to_template":
+		e.convertCTToTemplate(ctx, cmd, result)
 	// CT snapshots
 	case "ct_snapshot_list":
 		e.ctSnapshotList(ctx, cmd, result)
