@@ -218,6 +218,13 @@ func (cp *ClusterPoller) run(ctx context.Context) {
 		cp.pollQDeviceLoop(ctx)
 	}()
 
+	// Also poll certificates periodically (certs don't change often; 5min is plenty)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		cp.pollCertsLoop(ctx)
+	}()
+
 	wg.Wait()
 }
 
@@ -544,6 +551,58 @@ func (cp *ClusterPoller) fetchQDevice(ctx context.Context) {
 	if cp.onChange != nil {
 		cp.onChange()
 	}
+}
+
+// pollCertsLoop polls per-node certificate info every 5 minutes.
+// Low-frequency because certs only change on renewal events.
+func (cp *ClusterPoller) pollCertsLoop(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	// Initial poll (slight delay so nodes are discovered)
+	time.Sleep(10 * time.Second)
+	cp.fetchCerts(ctx)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cp.fetchCerts(ctx)
+		}
+	}
+}
+
+// fetchCerts fetches cert info from every online node in parallel.
+func (cp *ClusterPoller) fetchCerts(ctx context.Context) {
+	cp.mu.RLock()
+	clients := make(map[string]*pve.Client, len(cp.clients))
+	for k, v := range cp.clients {
+		clients[k] = v
+	}
+	cp.mu.RUnlock()
+
+	if len(clients) == 0 {
+		return
+	}
+
+	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	for nodeName, client := range clients {
+		wg.Add(1)
+		go func(n string, c *pve.Client) {
+			defer wg.Done()
+			certs, err := c.GetNodeCertificates(fetchCtx)
+			if err != nil {
+				slog.Debug("cert poll failed", "cluster", cp.name, "node", n, "error", err)
+				return
+			}
+			cp.clusterStore.SetNodeCertificates(n, certs)
+		}(nodeName, client)
+	}
+	wg.Wait()
 }
 
 // pollSDNLoop polls SDN data periodically

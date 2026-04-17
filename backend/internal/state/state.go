@@ -34,6 +34,7 @@ type ClusterStore struct {
 	containers  map[int]pve.Container      // keyed by VMID
 	storage     map[string][]pve.Storage   // keyed by node name
 	ceph        map[string]*pve.CephStatus // keyed by node name
+	nodeCerts   map[string][]pve.NodeCertificate // keyed by node name (polled infrequently)
 	haStatus       *pve.HAStatus
 	qdeviceStatus  *pve.QDeviceStatus
 
@@ -107,6 +108,7 @@ func (s *Store) GetOrCreateCluster(name string) *ClusterStore {
 		containers:        make(map[int]pve.Container),
 		storage:           make(map[string][]pve.Storage),
 		ceph:              make(map[string]*pve.CephStatus),
+		nodeCerts:         make(map[string][]pve.NodeCertificate),
 		networkInterfaces: make(map[string][]pve.NetworkInterface),
 		lastUpdate:        make(map[string]time.Time),
 		errors:            make(map[string]error),
@@ -222,6 +224,23 @@ func (cs *ClusterStore) GetQDeviceStatus() *pve.QDeviceStatus {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	return cs.qdeviceStatus
+}
+
+// SetNodeCertificates caches the latest cert info for a node.
+func (cs *ClusterStore) SetNodeCertificates(node string, certs []pve.NodeCertificate) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.nodeCerts == nil {
+		cs.nodeCerts = make(map[string][]pve.NodeCertificate)
+	}
+	cs.nodeCerts[node] = certs
+}
+
+// GetNodeCertificates returns the cached cert info for a node (may be nil).
+func (cs *ClusterStore) GetNodeCertificates(node string) []pve.NodeCertificate {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.nodeCerts[node]
 }
 
 // SetNodeDetails updates detailed node info (version, kernel, etc.)

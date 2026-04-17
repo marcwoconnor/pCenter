@@ -540,6 +540,7 @@ function AlarmsTab() {
                 <option value="cpu">CPU %</option>
                 <option value="mem_percent">Memory %</option>
                 <option value="disk_percent">Disk %</option>
+                <option value="cert_days_left">Cert Days Left (node)</option>
               </select>
             </div>
             <div>

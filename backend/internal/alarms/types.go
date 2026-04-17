@@ -107,11 +107,12 @@ type AcknowledgeRequest struct {
 
 // Valid metric types for alarms
 var ValidMetricTypes = map[string]bool{
-	"cpu":          true,
-	"mem_percent":  true,
-	"disk_percent": true,
-	"netin":        true,
-	"netout":       true,
+	"cpu":             true,
+	"mem_percent":     true,
+	"disk_percent":    true,
+	"netin":           true,
+	"netout":          true,
+	"cert_days_left":  true, // Min days-until-expiry across node certs (polled every 5 min)
 }
 
 // Valid resource types for alarms

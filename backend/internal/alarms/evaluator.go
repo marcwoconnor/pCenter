@@ -15,6 +15,7 @@ type Evaluator struct {
 	store    *state.Store
 	interval time.Duration
 	onChange func() // callback to broadcast state changes
+	webhook  *WebhookNotifier
 }
 
 // NewEvaluator creates an alarm evaluator
@@ -27,6 +28,7 @@ func NewEvaluator(db *DB, store *state.Store, intervalSec int, onChange func()) 
 		store:    store,
 		interval: time.Duration(intervalSec) * time.Second,
 		onChange: onChange,
+		webhook:  NewWebhookNotifier(),
 	}
 }
 
@@ -156,6 +158,32 @@ func (e *Evaluator) getMetricValue(res resource, metricType string) (float64, bo
 					if n.MaxMem > 0 {
 						return float64(n.Mem) / float64(n.MaxMem) * 100, true
 					}
+				case "cert_days_left":
+					cs, ok := e.store.GetCluster(n.Cluster)
+					if !ok {
+						return 0, false
+					}
+					certs := cs.GetNodeCertificates(n.Node)
+					if len(certs) == 0 {
+						return 0, false
+					}
+					now := time.Now().Unix()
+					minDays := float64(365000) // sentinel: very large
+					seen := false
+					for _, c := range certs {
+						if c.NotAfter == 0 {
+							continue
+						}
+						days := float64(c.NotAfter-now) / 86400.0
+						if days < minDays {
+							minDays = days
+						}
+						seen = true
+					}
+					if !seen {
+						return 0, false
+					}
+					return minDays, true
 				}
 			}
 		}
@@ -291,6 +319,8 @@ func (e *Evaluator) evaluateAlarm(ctx context.Context, def AlarmDefinition, res 
 			"alarm", def.Name, "resource", res.resourceName,
 			"from", oldState, "to", inst.State,
 			"value", fmt.Sprintf("%.1f", value))
+		// Fire notifications on state change.
+		Dispatch(ctx, e.db, e.webhook, inst, def, oldState)
 	}
 
 	return stateChanged
