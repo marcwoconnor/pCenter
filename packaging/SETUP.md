@@ -47,8 +47,8 @@ Go to: github.com/marcwoconnor/pCenter/settings/pages
 ## 4. Create a release
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
 This triggers the GitHub Actions workflow which:

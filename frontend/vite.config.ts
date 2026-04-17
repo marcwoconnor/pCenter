@@ -10,7 +10,7 @@ const wsTarget = apiTarget.replace(/^http/, 'ws')
 
 // Get version from git tag or package.json
 const version = process.env.PCENTER_VERSION ||
-  (() => { try { return execSync('git describe --tags --always 2>/dev/null').toString().trim() } catch { return '0.0.0' } })()
+  (() => { try { return execSync('git describe --tags --always 2>/dev/null').toString().trim() } catch { return '0.1.0-dev' } })()
 
 // https://vite.dev/config/
 export default defineConfig({
