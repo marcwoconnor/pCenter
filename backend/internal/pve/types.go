@@ -1,6 +1,11 @@
 package pve
 
-import "time"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+)
 
 // Node represents a Proxmox cluster node
 type Node struct {
@@ -750,8 +755,73 @@ type ACMEPlugin struct {
 	Type            string            `json:"type"`   // "dns" or "standalone"
 	API             string            `json:"api,omitempty"`
 	Disable         int               `json:"disable,omitempty"` // 1 if disabled
-	Data            map[string]string `json:"data,omitempty"`    // provider-specific fields
+	Data            map[string]string `json:"data,omitempty"`    // provider-specific fields (parsed from PVE's \n-separated string form)
+	Digest          string            `json:"digest,omitempty"`
 	ValidationDelay int               `json:"validation-delay,omitempty"`
+}
+
+// UnmarshalJSON parses ACMEPlugin responses from Proxmox, where the `data`
+// field is a newline-separated key=value string (not a JSON object).
+func (p *ACMEPlugin) UnmarshalJSON(b []byte) error {
+	var raw struct {
+		Plugin          string          `json:"plugin"`
+		Type            string          `json:"type"`
+		API             string          `json:"api,omitempty"`
+		Disable         int             `json:"disable,omitempty"`
+		Data            json.RawMessage `json:"data,omitempty"`
+		Digest          string          `json:"digest,omitempty"`
+		ValidationDelay int             `json:"validation-delay,omitempty"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	p.Plugin = raw.Plugin
+	p.Type = raw.Type
+	p.API = raw.API
+	p.Disable = raw.Disable
+	p.Digest = raw.Digest
+	p.ValidationDelay = raw.ValidationDelay
+	p.Data = parsePluginData(raw.Data)
+	return nil
+}
+
+// parsePluginData handles PVE's two return shapes for the data field:
+// a JSON string of "k=v\nk=v" pairs, or a nested object, or absent.
+func parsePluginData(raw json.RawMessage) map[string]string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	// Try string form first
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return parseDataLines(s)
+	}
+	// Fall back to object form
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err == nil {
+		out := make(map[string]string, len(m))
+		for k, v := range m {
+			out[k] = fmt.Sprintf("%v", v)
+		}
+		return out
+	}
+	return nil
+}
+
+func parseDataLines(s string) map[string]string {
+	m := map[string]string{}
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		eq := strings.Index(line, "=")
+		if eq <= 0 {
+			continue
+		}
+		m[line[:eq]] = line[eq+1:]
+	}
+	return m
 }
 
 // ACMEDirectory is a published ACME directory (Let's Encrypt, ZeroSSL, etc).
