@@ -92,6 +92,32 @@ export interface Container {
   ha_state?: string;
 }
 
+export interface NodeCertificate {
+  filename: string;
+  fingerprint?: string;
+  issuer?: string;
+  notafter?: number;   // Unix seconds
+  notbefore?: number;
+  public_key_bits?: number;
+  public_key_type?: string;
+  san?: string[];
+  subject?: string;
+  pem?: string;
+}
+
+export interface ACMEAccount {
+  name: string;
+  directory?: string;
+  tos?: string;
+}
+
+export interface ACMEPlugin {
+  plugin: string;
+  type: string;
+  api?: string;
+  disable?: number;
+}
+
 export interface Storage {
   cluster: string;
   storage: string;

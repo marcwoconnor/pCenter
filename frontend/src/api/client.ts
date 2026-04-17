@@ -57,6 +57,9 @@ import type {
   RBACRoleAssignment,
   CreateRoleRequest,
   AssignRoleRequest,
+  NodeCertificate,
+  ACMEAccount,
+  ACMEPlugin,
 } from '../types';
 
 import { getCSRFToken } from './auth';
@@ -303,6 +306,18 @@ export const api = {
     fetchAPI<{ upid: string }>(`/clusters/${cluster}/containers/${vmid}/template`, {
       method: 'POST',
     }),
+
+  // ACME / certificates
+  getNodeCertificates: (cluster: string, node: string) =>
+    fetchAPI<NodeCertificate[]>(`/clusters/${cluster}/nodes/${node}/certificates`),
+  renewNodeACMECertificate: (cluster: string, node: string) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/nodes/${node}/certificates/acme/renew`, {
+      method: 'POST',
+    }),
+  listACMEAccounts: (cluster: string) =>
+    fetchAPI<ACMEAccount[]>(`/clusters/${cluster}/acme/accounts`),
+  listACMEPlugins: (cluster: string) =>
+    fetchAPI<ACMEPlugin[]>(`/clusters/${cluster}/acme/plugins`),
 
   // Console
   getConsoleURL: (type: 'vm' | 'ct', vmid: number) =>

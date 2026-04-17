@@ -12,6 +12,7 @@ import { TagPicker } from './TagPicker';
 import { PCenterRootDetail } from './PCenterRootDetail';
 import { DatacenterDetail } from './DatacenterDetail';
 import { ClusterDetail } from './ClusterDetail';
+import { NodeCertificatesTab } from './ACMEPanels';
 
 type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d';
 
@@ -37,6 +38,7 @@ const nodeTabs: Tab[] = [
   { id: 'summary', label: 'Summary' },
   { id: 'vms', label: 'Virtual Machines' },
   { id: 'configure', label: 'Configure' },
+  { id: 'certificates', label: 'Certificates' },
   { id: 'monitor', label: 'Monitor' },
 ];
 
@@ -243,6 +245,9 @@ export function ObjectDetail() {
         {activeTab === 'vms' && storageItem && <StorageVMs storage={storageItem} />}
         {activeTab === 'configure' && node && (
           <NodeConfigureTab node={node.node} cluster={node.cluster} />
+        )}
+        {activeTab === 'certificates' && node && (
+          <NodeCertificatesTab node={node.node} cluster={node.cluster} />
         )}
         {activeTab === 'monitor' && node && <NodeMonitorTab node={node.node} />}
         {activeTab === 'monitor' && guest && (

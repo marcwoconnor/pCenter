@@ -353,6 +353,15 @@ func (c *Client) post(ctx context.Context, path string, params map[string]string
 	return c.request(ctx, http.MethodPost, path, strings.NewReader(form.Encode()))
 }
 
+// put sends a PUT and returns the response body. Mirrors post().
+func (c *Client) put(ctx context.Context, path string, params map[string]string) ([]byte, error) {
+	form := url.Values{}
+	for k, v := range params {
+		form.Set(k, v)
+	}
+	return c.request(ctx, http.MethodPut, path, strings.NewReader(form.Encode()))
+}
+
 // --- Node operations ---
 
 // GetNodes returns all nodes in the cluster
@@ -1723,6 +1732,35 @@ func (c *Client) ConvertVMToTemplate(ctx context.Context, vmid int) (string, err
 // The container must be stopped. Returns UPID (empty if PVE returns no task).
 func (c *Client) ConvertContainerToTemplate(ctx context.Context, vmid int) (string, error) {
 	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/template", c.nodeName, vmid), nil)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// --- ACME / certificate operations ---
+
+// GetNodeCertificates returns the certificates installed on this node.
+func (c *Client) GetNodeCertificates(ctx context.Context) ([]NodeCertificate, error) {
+	return get[[]NodeCertificate](c, ctx, fmt.Sprintf("/nodes/%s/certificates/info", c.nodeName))
+}
+
+// ListACMEAccounts returns ACME accounts configured at the cluster level.
+func (c *Client) ListACMEAccounts(ctx context.Context) ([]ACMEAccount, error) {
+	return get[[]ACMEAccount](c, ctx, "/cluster/acme/account")
+}
+
+// ListACMEPlugins returns ACME DNS/standalone plugins configured at the cluster level.
+func (c *Client) ListACMEPlugins(ctx context.Context) ([]ACMEPlugin, error) {
+	return get[[]ACMEPlugin](c, ctx, "/cluster/acme/plugins")
+}
+
+// RenewNodeACMECertificate triggers a renewal of the node's existing ACME certificate.
+// Returns UPID for task tracking. Requires the node already has an ACME-issued cert.
+func (c *Client) RenewNodeACMECertificate(ctx context.Context) (string, error) {
+	data, err := c.put(ctx, fmt.Sprintf("/nodes/%s/certificates/acme/certificate", c.nodeName), nil)
 	if err != nil {
 		return "", err
 	}

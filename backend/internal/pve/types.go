@@ -719,3 +719,35 @@ type NodeConfig struct {
 	APTRepos     *APTRepositoryInfo  `json:"apt_repos"`
 	Status       *NodeStatus         `json:"status"`        // PVE version, kernel, CPU info
 }
+
+// NodeCertificate represents a certificate installed on a node.
+// From GET /nodes/{node}/certificates/info
+type NodeCertificate struct {
+	Filename      string   `json:"filename"`
+	Fingerprint   string   `json:"fingerprint,omitempty"`
+	Issuer        string   `json:"issuer,omitempty"`
+	NotAfter      int64    `json:"notafter,omitempty"`  // Unix seconds
+	NotBefore     int64    `json:"notbefore,omitempty"` // Unix seconds
+	PublicKeyBits int      `json:"public_key_bits,omitempty"`
+	PublicKeyType string   `json:"public_key_type,omitempty"`
+	SAN           []string `json:"san,omitempty"`
+	Subject       string   `json:"subject,omitempty"`
+	PEM           string   `json:"pem,omitempty"`
+}
+
+// ACMEAccount is an ACME account registered at the cluster level.
+// From GET /cluster/acme/account
+type ACMEAccount struct {
+	Name      string `json:"name"`
+	Directory string `json:"directory,omitempty"`
+	TOSURL    string `json:"tos,omitempty"`
+}
+
+// ACMEPlugin is an ACME DNS/HTTP challenge plugin configured at the cluster level.
+// From GET /cluster/acme/plugins
+type ACMEPlugin struct {
+	Plugin  string `json:"plugin"` // id
+	Type    string `json:"type"`   // "dns" or "standalone"
+	API     string `json:"api,omitempty"`
+	Disable int    `json:"disable,omitempty"` // 1 if disabled
+}

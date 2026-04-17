@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useCluster } from '../context/ClusterContext';
 import { Layout } from '../components/Layout';
 import { DRSPanel } from '../components/DRSPanel';
+import { CertExpiryBanner } from '../components/ACMEPanels';
 import { MetricsChart } from '../components/MetricsChart';
 import { useMetrics } from '../hooks/useMetrics';
 import { formatBytes } from '../api/client';
@@ -668,6 +669,7 @@ export function Home() {
         {/* Nodes Grid */}
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Hosts</h2>
         <QDeviceBanner qdevice={qdevice} />
+        <CertExpiryBanner nodes={safeNodes.map(n => ({ cluster: n.cluster, node: n.node }))} />
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
           {safeNodes.map((node) => {
             const cpuPercent = node.cpu * 100;

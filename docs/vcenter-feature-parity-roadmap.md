@@ -2,7 +2,7 @@
 
 Comparison of VMware vCenter Server features vs pCenter current implementation, with prioritized roadmap for feature development.
 
-**Last Updated:** 2026-04-16
+**Last Updated:** 2026-04-17
 
 ---
 
@@ -143,6 +143,23 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 | Storage profiles/policies | 🔴 | Policy-based VM storage placement |
 | Storage DRS | 🔴 | Auto-balance storage across pools |
 | Datastore clusters | 🔴 | Group storage pools |
+
+---
+
+## Certificates & ACME
+
+| vCenter Feature | pCenter | Notes |
+|-----------------|---------|-------|
+| Per-node certificate info | ✅ | Tab on node detail: subject, issuer, SAN, expiry, fingerprint |
+| ACME cert renewal trigger | ✅ | Per-node Renew button; requires PVE-side account + plugin setup |
+| List ACME accounts | ✅ | Cluster ACME tab (read-only) |
+| List DNS challenge plugins | ✅ | Cluster ACME tab (read-only) |
+| Cert expiry warning | ✅ | Home banner <30d warning, <7d critical |
+| ACME account CRUD | 🔴 | Register/revoke accounts, ToS accept (Phase 2) |
+| DNS plugin CRUD | 🔴 | Schema-driven provider config (Phase 2) |
+| Custom certificate upload | 🔴 | Non-ACME cert+key upload (Phase 2) |
+| Scheduled auto-renewal | 🔴 | Reuse scheduler subsystem (Phase 3) |
+| Cert chain/PEM viewer | 🔴 | Decoded leaf + chain display (Phase 3) |
 
 ---
 

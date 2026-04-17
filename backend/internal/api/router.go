@@ -264,6 +264,12 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/vms/{vmid}/template", h.ConvertVMToTemplate)
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/containers/{vmid}/template", h.ConvertContainerToTemplate)
 
+	// ACME / certificate operations
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes/{node}/certificates", h.GetNodeCertificates)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/certificates/acme/renew", h.RenewNodeACMECertificate)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/acme/accounts", h.ListACMEAccounts)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/acme/plugins", h.ListACMEPlugins)
+
 	// Get nodes for migration target selection
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes/migration-targets", h.GetClusterNodesForMigration)
 

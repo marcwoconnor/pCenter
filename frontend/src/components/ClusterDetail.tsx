@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, type FormEvent } from 'react';
 import { useCluster } from '../context/ClusterContext';
 import { api, formatBytes } from '../api/client';
 import { DRSPanel } from './DRSPanel';
+import { ClusterACMETab } from './ACMEPanels';
 import type { Node, Guest, DRSRule, DRSRuleViolation } from '../types';
 
 interface Tab { id: string; label: string; }
@@ -9,6 +10,7 @@ const clusterTabs: Tab[] = [
   { id: 'summary', label: 'Summary' },
   { id: 'ha', label: 'HA' },
   { id: 'drs', label: 'DRS' },
+  { id: 'acme', label: 'ACME' },
   { id: 'configure', label: 'Configure' },
 ];
 
@@ -76,6 +78,7 @@ export function ClusterDetail({ clusterName, displayName, defaultTab }: { cluste
             <DRSRulesPanel clusterName={clusterName} guests={cg} nodes={cn} />
           </div>
         )}
+        {activeTab === 'acme' && <ClusterACMETab clusterName={clusterName} />}
         {activeTab === 'configure' && <ClusterConfigure clusterName={clusterName} cluster={cluster} />}
       </div>
     </div>
