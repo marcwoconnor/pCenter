@@ -267,8 +267,23 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	// ACME / certificate operations
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes/{node}/certificates", h.GetNodeCertificates)
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/certificates/acme/renew", h.RenewNodeACMECertificate)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes/{node}/acme/domains", h.GetNodeACMEDomains)
+	protectedMux.HandleFunc("PUT /api/clusters/{cluster}/nodes/{node}/acme/domains", h.SetNodeACMEDomains)
+
+	// ACME cluster-level config
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/acme/accounts", h.ListACMEAccounts)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/acme/accounts", h.CreateACMEAccount)
+	protectedMux.HandleFunc("PUT /api/clusters/{cluster}/acme/accounts/{name}", h.UpdateACMEAccount)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/acme/accounts/{name}", h.DeleteACMEAccount)
+
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/acme/plugins", h.ListACMEPlugins)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/acme/plugins", h.CreateACMEPlugin)
+	protectedMux.HandleFunc("PUT /api/clusters/{cluster}/acme/plugins/{id}", h.UpdateACMEPlugin)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/acme/plugins/{id}", h.DeleteACMEPlugin)
+
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/acme/directories", h.ListACMEDirectories)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/acme/tos", h.GetACMETOSURL)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/acme/challenge-schema", h.ListACMEChallengeSchemas)
 
 	// Get nodes for migration target selection
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes/migration-targets", h.GetClusterNodesForMigration)

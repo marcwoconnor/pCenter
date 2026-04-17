@@ -116,6 +116,39 @@ export interface ACMEPlugin {
   type: string;
   api?: string;
   disable?: number;
+  data?: Record<string, string>;
+  'validation-delay'?: number;
+}
+
+export interface ACMEDirectory {
+  name: string;
+  url: string;
+}
+
+export interface ACMEChallengeSchema {
+  id: string;
+  name: string;
+  type: string;
+  schema: Record<string, { description?: string; type?: string; default?: unknown }>;
+}
+
+export interface NodeACMEDomain {
+  domain: string;
+  plugin?: string;
+}
+
+export interface CreateACMEAccountRequest {
+  name: string;
+  contact: string;
+  directory?: string;
+  tos_url?: string;
+}
+
+export interface CreateACMEPluginRequest {
+  id: string;
+  type: string;
+  api?: string;
+  data?: Record<string, string>;
 }
 
 export interface Storage {

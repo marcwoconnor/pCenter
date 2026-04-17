@@ -60,6 +60,11 @@ import type {
   NodeCertificate,
   ACMEAccount,
   ACMEPlugin,
+  ACMEDirectory,
+  ACMEChallengeSchema,
+  NodeACMEDomain,
+  CreateACMEAccountRequest,
+  CreateACMEPluginRequest,
 } from '../types';
 
 import { getCSRFToken } from './auth';
@@ -318,6 +323,50 @@ export const api = {
     fetchAPI<ACMEAccount[]>(`/clusters/${cluster}/acme/accounts`),
   listACMEPlugins: (cluster: string) =>
     fetchAPI<ACMEPlugin[]>(`/clusters/${cluster}/acme/plugins`),
+  listACMEDirectories: (cluster: string) =>
+    fetchAPI<ACMEDirectory[]>(`/clusters/${cluster}/acme/directories`),
+  getACMETOSURL: (cluster: string, directory: string) =>
+    fetchAPI<{ tos: string }>(`/clusters/${cluster}/acme/tos?directory=${encodeURIComponent(directory)}`),
+  listACMEChallengeSchemas: (cluster: string) =>
+    fetchAPI<ACMEChallengeSchema[]>(`/clusters/${cluster}/acme/challenge-schema`),
+
+  createACMEAccount: (cluster: string, req: CreateACMEAccountRequest) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/acme/accounts`, {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+  updateACMEAccount: (cluster: string, name: string, contact: string) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/acme/accounts/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ contact }),
+    }),
+  deleteACMEAccount: (cluster: string, name: string) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/acme/accounts/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    }),
+
+  createACMEPlugin: (cluster: string, req: CreateACMEPluginRequest) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/acme/plugins`, {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+  updateACMEPlugin: (cluster: string, id: string, data: Record<string, string>) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/acme/plugins/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ data }),
+    }),
+  deleteACMEPlugin: (cluster: string, id: string) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/acme/plugins/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
+  getNodeACMEDomains: (cluster: string, node: string) =>
+    fetchAPI<NodeACMEDomain[]>(`/clusters/${cluster}/nodes/${node}/acme/domains`),
+  setNodeACMEDomains: (cluster: string, node: string, domains: NodeACMEDomain[]) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/nodes/${node}/acme/domains`, {
+      method: 'PUT',
+      body: JSON.stringify({ domains }),
+    }),
 
   // Console
   getConsoleURL: (type: 'vm' | 'ct', vmid: number) =>

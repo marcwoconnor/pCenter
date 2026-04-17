@@ -746,8 +746,40 @@ type ACMEAccount struct {
 // ACMEPlugin is an ACME DNS/HTTP challenge plugin configured at the cluster level.
 // From GET /cluster/acme/plugins
 type ACMEPlugin struct {
-	Plugin  string `json:"plugin"` // id
-	Type    string `json:"type"`   // "dns" or "standalone"
-	API     string `json:"api,omitempty"`
-	Disable int    `json:"disable,omitempty"` // 1 if disabled
+	Plugin          string            `json:"plugin"` // id
+	Type            string            `json:"type"`   // "dns" or "standalone"
+	API             string            `json:"api,omitempty"`
+	Disable         int               `json:"disable,omitempty"` // 1 if disabled
+	Data            map[string]string `json:"data,omitempty"`    // provider-specific fields
+	ValidationDelay int               `json:"validation-delay,omitempty"`
+}
+
+// ACMEDirectory is a published ACME directory (Let's Encrypt, ZeroSSL, etc).
+// From GET /cluster/acme/directories
+type ACMEDirectory struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+// ACMEChallengeSchema describes one DNS/standalone plugin type with its required fields.
+// From GET /cluster/acme/challenge-schema
+type ACMEChallengeSchema struct {
+	ID     string                 `json:"id"`
+	Name   string                 `json:"name"`
+	Type   string                 `json:"type"`   // "dns" or "standalone"
+	Schema map[string]interface{} `json:"schema"` // per-field metadata: description, type, etc.
+}
+
+// ACMEAccountDetail is the full account body returned by GET /cluster/acme/account/{name}.
+type ACMEAccountDetail struct {
+	Location  string                 `json:"location,omitempty"`
+	Directory string                 `json:"directory,omitempty"`
+	TOSURL    string                 `json:"tos,omitempty"`
+	Account   map[string]interface{} `json:"account,omitempty"`
+}
+
+// NodeACMEDomain is one domain entry in a node's ACME config (parsed from `acme`/`acmedomain[0-4]` fields).
+type NodeACMEDomain struct {
+	Domain string `json:"domain"`
+	Plugin string `json:"plugin,omitempty"`
 }

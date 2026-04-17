@@ -1769,6 +1769,247 @@ func (c *Client) RenewNodeACMECertificate(ctx context.Context) (string, error) {
 	return resp.Data, nil
 }
 
+// ListACMEDirectories returns the published ACME directories (LE prod, LE staging, etc.).
+func (c *Client) ListACMEDirectories(ctx context.Context) ([]ACMEDirectory, error) {
+	return get[[]ACMEDirectory](c, ctx, "/cluster/acme/directories")
+}
+
+// GetACMETOSURL returns the terms-of-service URL for the specified ACME directory.
+func (c *Client) GetACMETOSURL(ctx context.Context, directoryURL string) (string, error) {
+	path := "/cluster/acme/tos"
+	if directoryURL != "" {
+		path += "?directory=" + url.QueryEscape(directoryURL)
+	}
+	return get[string](c, ctx, path)
+}
+
+// GetACMEAccount returns full details for a single account.
+func (c *Client) GetACMEAccount(ctx context.Context, name string) (*ACMEAccountDetail, error) {
+	detail, err := get[ACMEAccountDetail](c, ctx, "/cluster/acme/account/"+url.PathEscape(name))
+	if err != nil {
+		return nil, err
+	}
+	return &detail, nil
+}
+
+// CreateACMEAccount registers a new ACME account. Returns UPID.
+func (c *Client) CreateACMEAccount(ctx context.Context, name, contact, directory, tosURL string) (string, error) {
+	params := map[string]string{"name": name, "contact": contact}
+	if directory != "" {
+		params["directory"] = directory
+	}
+	if tosURL != "" {
+		params["tos_url"] = tosURL
+	}
+	data, err := c.post(ctx, "/cluster/acme/account", params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// UpdateACMEAccount updates an account's contact. Returns UPID.
+func (c *Client) UpdateACMEAccount(ctx context.Context, name, contact string) (string, error) {
+	params := map[string]string{}
+	if contact != "" {
+		params["contact"] = contact
+	}
+	data, err := c.put(ctx, "/cluster/acme/account/"+url.PathEscape(name), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// DeleteACMEAccount deregisters an ACME account. Returns UPID.
+func (c *Client) DeleteACMEAccount(ctx context.Context, name string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+"/cluster/acme/account/"+url.PathEscape(name), nil)
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("PVEAPIToken=%s=%s", c.tokenID, c.tokenSecret))
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+	}
+	var apiResp APIResponse[string]
+	json.Unmarshal(body, &apiResp)
+	return apiResp.Data, nil
+}
+
+// ListACMEChallengeSchemas returns all available DNS/standalone plugin schemas.
+func (c *Client) ListACMEChallengeSchemas(ctx context.Context) ([]ACMEChallengeSchema, error) {
+	return get[[]ACMEChallengeSchema](c, ctx, "/cluster/acme/challenge-schema")
+}
+
+// GetACMEPlugin returns full details for a single plugin.
+func (c *Client) GetACMEPlugin(ctx context.Context, id string) (*ACMEPlugin, error) {
+	plugin, err := get[ACMEPlugin](c, ctx, "/cluster/acme/plugins/"+url.PathEscape(id))
+	if err != nil {
+		return nil, err
+	}
+	return &plugin, nil
+}
+
+// CreateACMEPlugin creates a new DNS/standalone plugin.
+// `data` contains the provider-specific fields (e.g. {"CF_Token": "..."}).
+func (c *Client) CreateACMEPlugin(ctx context.Context, id, pluginType, api string, data map[string]string) error {
+	params := map[string]string{"id": id, "type": pluginType}
+	if api != "" {
+		params["api"] = api
+	}
+	// Encode data[] as semicolon-separated key=value pairs
+	if len(data) > 0 {
+		pairs := make([]string, 0, len(data))
+		for k, v := range data {
+			pairs = append(pairs, k+"="+v)
+		}
+		params["data"] = strings.Join(pairs, "\n")
+	}
+	_, err := c.post(ctx, "/cluster/acme/plugins", params)
+	return err
+}
+
+// UpdateACMEPlugin updates an existing plugin. Only non-empty fields are sent.
+func (c *Client) UpdateACMEPlugin(ctx context.Context, id string, data map[string]string) error {
+	params := map[string]string{}
+	if len(data) > 0 {
+		pairs := make([]string, 0, len(data))
+		for k, v := range data {
+			pairs = append(pairs, k+"="+v)
+		}
+		params["data"] = strings.Join(pairs, "\n")
+	}
+	_, err := c.put(ctx, "/cluster/acme/plugins/"+url.PathEscape(id), params)
+	return err
+}
+
+// DeleteACMEPlugin removes a plugin.
+func (c *Client) DeleteACMEPlugin(ctx context.Context, id string) error {
+	return c.delete(ctx, "/cluster/acme/plugins/"+url.PathEscape(id))
+}
+
+// GetNodeACMEDomains parses ACME domain config from the raw node config.
+// Reads `acme` (if present as "domains=...;plugin=...") plus `acmedomain0..4` fields.
+func (c *Client) GetNodeACMEDomains(ctx context.Context) ([]NodeACMEDomain, error) {
+	raw, err := get[map[string]interface{}](c, ctx, fmt.Sprintf("/nodes/%s/config", c.nodeName))
+	if err != nil {
+		return nil, err
+	}
+	return parseACMEDomains(raw), nil
+}
+
+// SetNodeACMEDomains writes ACME domain config back. All domains share `plugin` on the `acme` field.
+// Passing an empty list clears the acme + acmedomain[0-4] fields.
+func (c *Client) SetNodeACMEDomains(ctx context.Context, domains []NodeACMEDomain) error {
+	params := map[string]string{}
+
+	if len(domains) == 0 {
+		// Clear everything via the `delete` param
+		params["delete"] = "acme,acmedomain0,acmedomain1,acmedomain2,acmedomain3,acmedomain4"
+	} else {
+		// Group domains by plugin. If they all share one plugin, use the `acme` field.
+		// Otherwise, fall back to acmedomain[0-4] per-domain.
+		pluginGroups := map[string][]string{}
+		for _, d := range domains {
+			pluginGroups[d.Plugin] = append(pluginGroups[d.Plugin], d.Domain)
+		}
+		// Always clear the slots we don't touch to avoid leftovers.
+		params["delete"] = "acmedomain0,acmedomain1,acmedomain2,acmedomain3,acmedomain4"
+
+		if len(pluginGroups) == 1 {
+			for plugin, doms := range pluginGroups {
+				val := "domains=" + strings.Join(doms, ",")
+				if plugin != "" {
+					val += ";plugin=" + plugin
+				}
+				params["acme"] = val
+			}
+		} else {
+			// Use acmedomain[0-4] for per-domain plugin (up to 5 entries)
+			params["delete"] = "acme"
+			slot := 0
+			for _, d := range domains {
+				if slot > 4 {
+					return fmt.Errorf("more than 5 domains with different plugins is not supported")
+				}
+				val := d.Domain
+				if d.Plugin != "" {
+					val += ",plugin=" + d.Plugin
+				}
+				params[fmt.Sprintf("acmedomain%d", slot)] = val
+				slot++
+			}
+		}
+	}
+
+	return c.putForm(ctx, fmt.Sprintf("/nodes/%s/config", c.nodeName), mapToValues(params))
+}
+
+// parseACMEDomains extracts domain entries from a raw /nodes/{node}/config response.
+func parseACMEDomains(raw map[string]interface{}) []NodeACMEDomain {
+	var out []NodeACMEDomain
+	// Top-level `acme` field: "domains=a,b,c;plugin=x"
+	if s, ok := raw["acme"].(string); ok && s != "" {
+		domains, plugin := parseACMEField(s)
+		for _, d := range domains {
+			out = append(out, NodeACMEDomain{Domain: d, Plugin: plugin})
+		}
+	}
+	// acmedomain0..4: "domain,plugin=x"
+	for i := 0; i < 5; i++ {
+		key := fmt.Sprintf("acmedomain%d", i)
+		s, ok := raw[key].(string)
+		if !ok || s == "" {
+			continue
+		}
+		parts := strings.Split(s, ",")
+		if len(parts) == 0 {
+			continue
+		}
+		entry := NodeACMEDomain{Domain: parts[0]}
+		for _, kv := range parts[1:] {
+			if strings.HasPrefix(kv, "plugin=") {
+				entry.Plugin = strings.TrimPrefix(kv, "plugin=")
+			}
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// parseACMEField parses "domains=a,b,c;plugin=x" into ([a,b,c], "x").
+func parseACMEField(s string) ([]string, string) {
+	var domains []string
+	var plugin string
+	for _, part := range strings.Split(s, ";") {
+		if strings.HasPrefix(part, "domains=") {
+			domains = strings.Split(strings.TrimPrefix(part, "domains="), ",")
+		} else if strings.HasPrefix(part, "plugin=") {
+			plugin = strings.TrimPrefix(part, "plugin=")
+		}
+	}
+	return domains, plugin
+}
+
+// mapToValues converts a string map to url.Values for form submission.
+func mapToValues(m map[string]string) url.Values {
+	v := url.Values{}
+	for k, val := range m {
+		v.Set(k, val)
+	}
+	return v
+}
+
 // --- Console/VNC operations ---
 
 // VNCProxyResponse contains the VNC proxy ticket info

@@ -2,7 +2,7 @@
 
 Comparison of VMware vCenter Server features vs pCenter current implementation, with prioritized roadmap for feature development.
 
-**Last Updated:** 2026-04-17
+**Last Updated:** 2026-04-17 (Phase 2a ACME: accounts + plugins + domain editor shipped)
 
 ---
 
@@ -151,13 +151,14 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 | vCenter Feature | pCenter | Notes |
 |-----------------|---------|-------|
 | Per-node certificate info | ✅ | Tab on node detail: subject, issuer, SAN, expiry, fingerprint |
-| ACME cert renewal trigger | ✅ | Per-node Renew button; requires PVE-side account + plugin setup |
-| List ACME accounts | ✅ | Cluster ACME tab (read-only) |
-| List DNS challenge plugins | ✅ | Cluster ACME tab (read-only) |
+| ACME cert renewal trigger | ✅ | Per-node Renew button |
 | Cert expiry warning | ✅ | Home banner <30d warning, <7d critical |
-| ACME account CRUD | 🔴 | Register/revoke accounts, ToS accept (Phase 2) |
-| DNS plugin CRUD | 🔴 | Schema-driven provider config (Phase 2) |
-| Custom certificate upload | 🔴 | Non-ACME cert+key upload (Phase 2) |
+| ACME account CRUD | ✅ | Register/update/delete with directory picker + ToS accept |
+| DNS plugin CRUD | ✅ | Schema-driven form renders any provider from `/cluster/acme/challenge-schema` |
+| Node ACME domain editor | ✅ | Per-node domain list with plugin assignment |
+| Custom certificate upload | 🔴 | Non-ACME cert+key upload (Phase 2b) |
+| Bulk cert renewal | 🔴 | Renew across all nodes in a cluster (Phase 2b) |
+| Alarm integration for expiry | 🔴 | Hook into alarms subsystem (Phase 2b) |
 | Scheduled auto-renewal | 🔴 | Reuse scheduler subsystem (Phase 3) |
 | Cert chain/PEM viewer | 🔴 | Decoded leaf + chain display (Phase 3) |
 
