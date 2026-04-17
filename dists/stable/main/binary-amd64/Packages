@@ -16,3 +16,21 @@ Description: Proxmox Datacenter Manager
  Multi-cluster, real-time dashboard with VM/container lifecycle,
  live migration, DRS, HA, metrics, snapshots, and more.
 
+Package: pcenter
+Version: 0.1.1
+Architecture: amd64
+Maintainer: Marc O'Connor <marc@techsnet.net>
+Depends: libc6
+Filename: pool/pcenter_0.1.1_amd64.deb
+Size: 4344832
+MD5sum: 7cac6e8ea7d517e72b83e75e1806fe02
+SHA1: eb1f25ea8da078f94394a676cdf89fdf0e5f0a55
+SHA256: 0257bd50b9389f757e5ab71a908dc116e953ff0186d5d538d0aa362fb195935f
+Section: admin
+Priority: optional
+Homepage: https://github.com/marcwoconnor/pCenter
+Description: Proxmox Datacenter Manager
+ A vCenter-like management platform for Proxmox VE.
+ Multi-cluster, real-time dashboard with VM/container lifecycle,
+ live migration, DRS, HA, metrics, snapshots, and more.
+
