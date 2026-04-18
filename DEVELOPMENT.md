@@ -13,7 +13,7 @@ Proxmox datacenter manager - vCenter alternative
 - `docs/auth-system.md` - Authentication system: sessions, TOTP 2FA, trusted IPs
 
 ## Stack
-- **Backend**: Go 1.22+ (Chi router, SQLite)
+- **Backend**: Go 1.22+ (stdlib `net/http` mux with method-prefix routing, SQLite)
 - **Frontend**: React 18 + TypeScript + Vite + TailwindCSS + shadcn/ui
 - **Real-time**: WebSocket for live updates
 
