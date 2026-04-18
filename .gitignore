@@ -27,5 +27,8 @@ Thumbs.db
 *.sqlite
 backend/server
 
+# Build artifacts
+*.deb
+
 # Local IDE/agent state
 .claude/
