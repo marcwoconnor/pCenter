@@ -6,14 +6,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+## v0.1.10 — 2026-04-18
+
 ### Added (Phase 3)
 - **Outbound webhooks** (closes #27). New `internal/webhooks` package + Settings → Webhooks admin UI. Endpoint CRUD, event filtering (dotted names like `vm.create`; empty filter = all events), enable/disable, test-ping, delete. Activity entries are translated into webhook events and dispatched through a buffered queue with 1+3 retries (5s/30s/2min backoff, 10s request timeout). Each request is HMAC-SHA256 signed with the receiver's shared secret: `X-pCenter-Signature: t=<unix>,v1=<hex>` over `<unix>.<body>` — same canonical form as Stripe, so receivers can reject replays by checking timestamp skew. Secrets are server-generated and returned **once** at creation, encrypted at rest with the existing `auth.Crypto` key (same one used for TOTP secrets). Endpoints are admin-only + CSRF-protected on mutating methods.
 - **OpenAPI spec + Swagger UI** (closes #26). Hand-authored `openapi.yaml` embedded in the binary, served at `/api/openapi.yaml` and `/api/openapi.json` (YAML is the source; JSON is converted once at startup). Interactive Swagger UI at `/api/docs`. All three endpoints are unauthenticated so the docs are reachable before login. Documents the session-cookie + `X-CSRF-Token` flow via OpenAPI `securitySchemes`.
 - Initial OpenAPI spec coverage: auth (14 routes), clusters/nodes (5), guests/VMs/containers (10), webhooks (5). Remaining route groups tracked as follow-up issues; see `backend/internal/api/openapi.yaml` header for the coverage note.
 
+### Docs
+- Dropped stale `PROGRESS.md` (superseded by ROADMAP + CHANGELOG + GitHub issues).
+- Corrected DEVELOPMENT.md stack description: stdlib `net/http` mux, not chi.
+- Opened 10 follow-up issues (#31–#32 from #26; #33–#42 from session review covering alarms consolidation, graceful shutdown, OpenAPI drift-checker, systemd readiness, persistent delivery log, wildcard event filters, endpoint auto-disable, per-project CLAUDE.md, DEVELOPMENT.md audit, frontend lint debt).
+
 ### Notes
-- The existing alarms webhook path (`alarms/notifier.go`) is intentionally left untouched this round. Consolidation is a future refactor — the issue explicitly called this out.
-- Swagger UI assets are loaded from `cdn.jsdelivr.net` — works out-of-the-box but not air-gap-capable. Vendoring the two assets into the binary is a tracked follow-up.
+- The existing alarms webhook path (`alarms/notifier.go`) is intentionally left untouched this round. Consolidation is tracked as #33.
+- Swagger UI assets are loaded from `cdn.jsdelivr.net` — works out-of-the-box but not air-gap-capable. Vendoring tracked as #31.
 
 ## v0.1.9 — 2026-04-17
 
