@@ -607,9 +607,10 @@ func migrateConfigClusters(ctx context.Context, svc *inventory.Service, cfg *con
 
 		// Add the host from legacy config
 		host, err := svc.AddHost(ctx, cluster.ID, inventory.AddHostRequest{
-			Address:  legacy.DiscoveryNode,
-			TokenID:  legacy.TokenID,
-			Insecure: legacy.Insecure,
+			Address:     legacy.DiscoveryNode,
+			TokenID:     legacy.TokenID,
+			TokenSecret: legacy.TokenSecret,
+			Insecure:    legacy.Insecure,
 		})
 		if err != nil {
 			slog.Warn("failed to add host during migration", "cluster", legacy.Name, "error", err)
