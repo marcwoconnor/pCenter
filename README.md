@@ -28,6 +28,7 @@ Built because PDM (Proxmox Datacenter Manager) links to individual node UIs inst
 - [API](#api)
 - [Development](#development)
 - [Project Structure](#project-structure)
+- [Roadmap & Contributing](#roadmap--contributing)
 
 ---
 
@@ -712,6 +713,17 @@ pCenter/
 ├── config.yaml              # Main configuration
 └── docs/                    # Architecture docs
 ```
+
+---
+
+## Roadmap & Contributing
+
+- **Changelog:** [`CHANGELOG.md`](CHANGELOG.md) — what shipped in each release.
+- **Feature roadmap:** [`docs/vcenter-feature-parity-roadmap.md`](docs/vcenter-feature-parity-roadmap.md) — vCenter feature parity matrix and phase planning.
+- **Open work:** [Phase 3 issues](https://github.com/marcwoconnor/pCenter/issues?q=is%3Aissue+is%3Aopen+label%3Aphase-3) and [Phase 4 issues](https://github.com/marcwoconnor/pCenter/issues?q=is%3Aissue+is%3Aopen+label%3Aphase-4) track the next features.
+- **Issue labels:** `roadmap` (tracked feature), `phase-3`/`phase-4` (milestone), `effort-s`/`effort-m`/`effort-l` (rough size).
+
+Pre-1.0: the project is held at `0.x.y` until it's genuinely production-ready. Breaking changes may land between minor releases until `v1.0`.
 
 ---
 

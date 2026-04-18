@@ -6,6 +6,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+### Docs
+- README now links the detailed vCenter-parity roadmap + CHANGELOG + Phase 3/4 issue filters.
+- Legacy root `ROADMAP.md` is now a pointer to the active roadmap sources; original M0–M5 build plan preserved as historical archive below the pointer.
+- Phase 3 roadmap items (#24–#30) opened as GitHub Issues with `roadmap` + `phase-3` + effort labels.
+
 ## v0.1.8 — 2026-04-17
 
 ### Added
