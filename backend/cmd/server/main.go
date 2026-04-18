@@ -26,6 +26,7 @@ import (
 	"github.com/moconnor/pcenter/internal/metrics"
 	"github.com/moconnor/pcenter/internal/migration"
 	"github.com/moconnor/pcenter/internal/poller"
+	"github.com/moconnor/pcenter/internal/pve"
 	"github.com/moconnor/pcenter/internal/rbac"
 	"github.com/moconnor/pcenter/internal/scheduler"
 	"github.com/moconnor/pcenter/internal/state"
@@ -459,6 +460,16 @@ func main() {
 					return rotateSnapshots(sctx, client, true, vmid, params)
 				case "ct_snapshot_rotate":
 					return rotateSnapshots(sctx, client, false, vmid, params)
+				case "vm_backup", "ct_backup":
+					storage, _ := params["storage"].(string)
+					if storage == "" {
+						return "", fmt.Errorf("backup task requires 'storage' param")
+					}
+					mode, _ := params["mode"].(string)
+					compress, _ := params["compress"].(string)
+					return client.CreateVzdump(sctx, pve.VzdumpOptions{
+						VMIDs: []int{vmid}, Storage: storage, Mode: mode, Compress: compress,
+					})
 				default:
 					return "", fmt.Errorf("unsupported action for poller fallback: %s", action)
 				}

@@ -1796,6 +1796,56 @@ func (c *Client) DeleteNodeCustomCertificate(ctx context.Context, restart bool) 
 	return c.delete(ctx, path)
 }
 
+// --- Backup (vzdump) operations ---
+
+// VzdumpOptions configures a backup operation.
+type VzdumpOptions struct {
+	VMIDs    []int  // one or more guest IDs
+	Storage  string // target storage ID (required)
+	Mode     string // snapshot (default), suspend, stop
+	Compress string // 0, gzip, lzo, zstd
+	Remove   int    // -1 to keep current defaults, otherwise number of backups to keep
+	Notes    string // notes-template
+}
+
+// CreateVzdump triggers a backup task on a node.
+// Returns UPID for task tracking. Multi-VMID requests return a single task UPID.
+func (c *Client) CreateVzdump(ctx context.Context, opts VzdumpOptions) (string, error) {
+	if len(opts.VMIDs) == 0 {
+		return "", fmt.Errorf("at least one VMID required")
+	}
+	if opts.Storage == "" {
+		return "", fmt.Errorf("storage required")
+	}
+
+	vmidStrs := make([]string, 0, len(opts.VMIDs))
+	for _, id := range opts.VMIDs {
+		vmidStrs = append(vmidStrs, fmt.Sprintf("%d", id))
+	}
+
+	params := map[string]string{
+		"vmid":    strings.Join(vmidStrs, ","),
+		"storage": opts.Storage,
+	}
+	if opts.Mode != "" {
+		params["mode"] = opts.Mode
+	}
+	if opts.Compress != "" {
+		params["compress"] = opts.Compress
+	}
+	if opts.Notes != "" {
+		params["notes-template"] = opts.Notes
+	}
+
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/vzdump", c.nodeName), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
 // --- Resource Pool operations (cluster-wide) ---
 
 // ListPools returns all resource pools in the cluster.

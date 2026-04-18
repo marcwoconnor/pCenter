@@ -169,6 +169,14 @@ export interface UpdatePoolRequest {
   delete?: boolean;
 }
 
+export interface CreateBackupRequest {
+  vmids: number[];
+  storage: string;
+  mode?: 'snapshot' | 'suspend' | 'stop';
+  compress?: '0' | 'gzip' | 'lzo' | 'zstd';
+  notes?: string;
+}
+
 export interface CreateACMEAccountRequest {
   name: string;
   contact: string;

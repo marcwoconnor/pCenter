@@ -6,6 +6,7 @@ import type { Guest, Storage, ClusterInfo, NetworkInterface, Folder, TreeView, D
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { MigrateDialog } from './MigrateDialog';
 import { CloneDialog } from './CloneDialog';
+import { BackupDialog } from './BackupDialog';
 import { FolderDialog } from './FolderDialog';
 import { DatacenterDialog } from './DatacenterDialog';
 import { AddHostDialog } from './AddHostDialog';
@@ -257,6 +258,7 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [migrateGuest, setMigrateGuest] = useState<Guest | null>(null);
   const [cloneGuest, setCloneGuest] = useState<Guest | null>(null);
+  const [backupGuest, setBackupGuest] = useState<Guest | null>(null);
   const [networkInterfaces, setNetworkInterfaces] = useState<NetworkInterface[]>([]);
   const [folderDialog, setFolderDialog] = useState<FolderDialogState | null>(null);
 
@@ -519,6 +521,11 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
         label: 'Clone',
         icon: '📋',
         action: () => setCloneGuest(guest),
+      },
+      {
+        label: 'Backup Now',
+        icon: '💾',
+        action: () => setBackupGuest(guest),
       },
       ...(guest.template ? [] : [{
         label: 'Convert to Template',
@@ -1413,6 +1420,13 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
             }}
           />
         )}
+        {backupGuest && (
+          <BackupDialog
+            guest={backupGuest}
+            onClose={() => setBackupGuest(null)}
+            onSuccess={() => setBackupGuest(null)}
+          />
+        )}
         {datacenterDialog && (
           <DatacenterDialog
             mode={datacenterDialog.mode}
@@ -1609,6 +1623,13 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
             guest={cloneGuest}
             onClose={() => setCloneGuest(null)}
             onSuccess={() => {}}
+          />
+        )}
+        {backupGuest && (
+          <BackupDialog
+            guest={backupGuest}
+            onClose={() => setBackupGuest(null)}
+            onSuccess={() => setBackupGuest(null)}
           />
         )}
         {folderDialog && (

@@ -6,6 +6,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+## v0.1.8 — 2026-04-17
+
+### Added
+- **Backup management MVP** (roadmap Phase 2 #7). "Backup Now" context menu action on VMs/CTs opens a dialog with storage picker (auto-filtered to backup-capable storage accessible from the guest's node), mode (snapshot / suspend / stop), and compression (zstd / gzip / lzo / none).
+- **Scheduled backups** via new `backup_create` task type in the scheduler — pick storage + mode in the task form, runs on a cron schedule.
+- Backend: `CreateVzdump` client method + `POST /api/clusters/{cluster}/nodes/{node}/backup` handler + scheduler task dispatch for `vm_backup` / `ct_backup`.
+
+### Notes
+- **Phase 2 of the vCenter parity roadmap is now complete.** Items 6–10 (template library, backup, resource pools, scheduled snapshots, power schedules) all ship.
+- Backup restore UI is deferred to a future phase — restore is a separate UX concern (target VM/CT ID, overwrite semantics).
+
 ## v0.1.7 — 2026-04-17
 
 ### Added

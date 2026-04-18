@@ -69,6 +69,7 @@ import type {
   PoolDetail,
   CreatePoolRequest,
   UpdatePoolRequest,
+  CreateBackupRequest,
 } from '../types';
 
 import { getCSRFToken } from './auth';
@@ -399,6 +400,13 @@ export const api = {
   deletePool: (cluster: string, poolID: string) =>
     fetchAPI<{ status: string }>(`/clusters/${cluster}/pools/${encodeURIComponent(poolID)}`, {
       method: 'DELETE',
+    }),
+
+  // Backup (vzdump)
+  createBackup: (cluster: string, node: string, req: CreateBackupRequest) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/nodes/${node}/backup`, {
+      method: 'POST',
+      body: JSON.stringify(req),
     }),
 
   // Console

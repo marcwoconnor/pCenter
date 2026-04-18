@@ -287,6 +287,9 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/acme/tos", h.GetACMETOSURL)
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/acme/challenge-schema", h.ListACMEChallengeSchemas)
 
+	// Backup (vzdump)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/backup", h.CreateBackup)
+
 	// Resource pools (cluster-wide)
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/pools", h.ListPools)
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/pools/{poolid}", h.GetPool)

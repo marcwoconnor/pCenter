@@ -1078,6 +1078,8 @@ function SchedulerTab() {
   const [cronExpr, setCronExpr] = useState('0 2 * * *');
   const [enabled, setEnabled] = useState(true);
   const [retention, setRetention] = useState(7);
+  const [backupStorage, setBackupStorage] = useState('');
+  const [backupMode, setBackupMode] = useState('snapshot');
 
   const reload = async () => {
     setLoading(true);
@@ -1104,6 +1106,12 @@ function SchedulerTab() {
       let params: string | undefined;
       if (taskType === 'snapshot_rotate') {
         params = JSON.stringify({ retention });
+      } else if (taskType === 'backup_create') {
+        if (!backupStorage.trim()) {
+          setErr('Storage is required for backup schedules');
+          return;
+        }
+        params = JSON.stringify({ storage: backupStorage.trim(), mode: backupMode });
       }
       await api.createScheduledTask({
         name, task_type: taskType, target_type: targetType,
@@ -1134,7 +1142,7 @@ function SchedulerTab() {
     } catch (e: unknown) { setErr(e instanceof Error ? e.message : 'Update failed'); }
   };
 
-  const TASK_TYPES = ['power_on', 'power_off', 'shutdown', 'snapshot_create', 'snapshot_cleanup', 'snapshot_rotate', 'migrate'];
+  const TASK_TYPES = ['power_on', 'power_off', 'shutdown', 'snapshot_create', 'snapshot_cleanup', 'snapshot_rotate', 'backup_create', 'migrate'];
   const CRON_PRESETS = [
     { label: 'Every hour', value: '0 * * * *' },
     { label: 'Daily 2am', value: '0 2 * * *' },
@@ -1221,6 +1229,25 @@ function SchedulerTab() {
                     Each run creates a new <code>auto-YYYYMMDD-HHMMSS</code> snapshot and prunes older auto-* beyond this count.
                   </span>
                 </label>
+              )}
+              {taskType === 'backup_create' && (
+                <>
+                  <label className="block">
+                    <span className="text-gray-500 text-xs">Backup Storage <span className="text-red-500">*</span></span>
+                    <input type="text" value={backupStorage} onChange={e => setBackupStorage(e.target.value)}
+                      placeholder="e.g. local-zfs or PBS-01"
+                      className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm text-gray-900 dark:text-white" />
+                  </label>
+                  <label className="block">
+                    <span className="text-gray-500 text-xs">Mode</span>
+                    <select value={backupMode} onChange={e => setBackupMode(e.target.value)}
+                      className="mt-0.5 block w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-sm text-gray-900 dark:text-white">
+                      <option value="snapshot">snapshot</option>
+                      <option value="suspend">suspend</option>
+                      <option value="stop">stop</option>
+                    </select>
+                  </label>
+                </>
               )}
               <label className="flex items-center gap-2 col-span-2">
                 <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />

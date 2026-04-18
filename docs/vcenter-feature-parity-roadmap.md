@@ -2,7 +2,7 @@
 
 Comparison of VMware vCenter Server features vs pCenter current implementation, with prioritized roadmap for feature development.
 
-**Last Updated:** 2026-04-17 (Phase 2a ACME: accounts + plugins + domain editor shipped)
+**Last Updated:** 2026-04-17 (Phase 2 complete: all of items 6-10 shipped)
 
 ---
 
@@ -335,13 +335,13 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 
 ### Phase 2 — Power User Features
 
-| # | Feature | Effort | Value | Dependencies |
-|---|---------|--------|-------|--------------|
-| 6 | **Template library** | Medium | Medium | 🟡 In Progress |
-| 7 | **Backup management** | High | Medium | PBS integration |
-| 8 | **Resource pools** | Medium | Medium | Proxmox pools API |
-| 9 | **Scheduled snapshots** | Low | Medium | Phase 1 scheduler |
-| 10 | **Power schedules** | Low | Medium | Phase 1 scheduler |
+| # | Feature | Effort | Value | Status |
+|---|---------|--------|-------|--------|
+| 6 | **Template library** | Medium | Medium | ✅ Done (via Content Library + convert-to-template) |
+| 7 | **Backup management** | High | Medium | ✅ Done (MVP: context-menu + schedule; restore deferred) |
+| 8 | **Resource pools** | Medium | Medium | ✅ Done (cluster-level CRUD + members view) |
+| 9 | **Scheduled snapshots** | Low | Medium | ✅ Done (`snapshot_rotate` task type with retention) |
+| 10 | **Power schedules** | Low | Medium | ✅ Done (existing `power_on`/`power_off` scheduler tasks) |
 
 #### 6. Template Library
 - [ ] Convert VM/CT to template (Proxmox API `POST .../template`)
