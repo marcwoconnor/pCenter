@@ -1743,8 +1743,17 @@ func (c *Client) ConvertContainerToTemplate(ctx context.Context, vmid int) (stri
 // --- ACME / certificate operations ---
 
 // GetNodeCertificates returns the certificates installed on this node.
+// Each cert is enriched with server-side parsed fields (serial, signature
+// algorithm, key usage, etc.) by decoding its PEM block.
 func (c *Client) GetNodeCertificates(ctx context.Context) ([]NodeCertificate, error) {
-	return get[[]NodeCertificate](c, ctx, fmt.Sprintf("/nodes/%s/certificates/info", c.nodeName))
+	certs, err := get[[]NodeCertificate](c, ctx, fmt.Sprintf("/nodes/%s/certificates/info", c.nodeName))
+	if err != nil {
+		return nil, err
+	}
+	for i := range certs {
+		EnrichCertificateFromPEM(&certs[i])
+	}
+	return certs, nil
 }
 
 // ListACMEAccounts returns ACME accounts configured at the cluster level.

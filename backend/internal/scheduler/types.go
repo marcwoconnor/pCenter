@@ -13,6 +13,7 @@ const (
 	TaskSnapshotCleanup TaskType = "snapshot_cleanup" // delete a specific named snapshot
 	TaskSnapshotRotate  TaskType = "snapshot_rotate"  // create a new snapshot + prune auto-* beyond retention
 	TaskBackupCreate    TaskType = "backup_create"    // vzdump to target storage
+	TaskACMERenew       TaskType = "acme_renew"       // renew ACME cert across all online nodes in cluster
 	TaskMigrate         TaskType = "migrate"
 )
 

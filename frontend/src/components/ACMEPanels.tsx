@@ -191,31 +191,7 @@ export function NodeCertificatesTab({ cluster, node }: { cluster: string; node: 
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 text-center text-gray-500">No certificate info returned.</div>
       )}
 
-      {certs.map(c => (
-        <div key={c.filename} className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-          <div className="flex items-center justify-between mb-2">
-            <div className="font-mono text-sm text-gray-900 dark:text-white">{c.filename}</div>
-            {expiryBadge(c.notafter)}
-          </div>
-          <div className="grid md:grid-cols-2 gap-x-4 gap-y-1 text-sm">
-            <div><span className="text-gray-500">Subject: </span><span className="text-gray-900 dark:text-white break-all">{c.subject || '—'}</span></div>
-            <div><span className="text-gray-500">Issuer: </span><span className="text-gray-900 dark:text-white break-all">{c.issuer || '—'}</span></div>
-            <div><span className="text-gray-500">Not Before: </span><span className="text-gray-900 dark:text-white">{formatUnixDate(c.notbefore)}</span></div>
-            <div><span className="text-gray-500">Not After: </span><span className="text-gray-900 dark:text-white">{formatUnixDate(c.notafter)}</span></div>
-            <div><span className="text-gray-500">Public Key: </span><span className="text-gray-900 dark:text-white">{c.public_key_type || '—'} {c.public_key_bits ? `${c.public_key_bits}b` : ''}</span></div>
-            <div className="md:col-span-2">
-              <span className="text-gray-500">Fingerprint: </span>
-              <span className="text-gray-900 dark:text-white font-mono text-xs break-all">{c.fingerprint || '—'}</span>
-            </div>
-            {c.san && c.san.length > 0 && (
-              <div className="md:col-span-2">
-                <span className="text-gray-500">SAN: </span>
-                <span className="text-gray-900 dark:text-white">{c.san.join(', ')}</span>
-              </div>
-            )}
-          </div>
-        </div>
-      ))}
+      {certs.map(c => <CertificateCard key={c.filename} cert={c} />)}
 
       {editDomains && (
         <NodeDomainsDialog
@@ -883,6 +859,133 @@ export function NodeDomainsDialog({
             {saving ? 'Saving…' : 'Save'}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function CertificateCard({ cert: c }: { cert: NodeCertificate }) {
+  const [showPEM, setShowPEM] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+
+  const hasExtras = !!(c.serial || c.signature_algorithm ||
+    (c.key_usage && c.key_usage.length > 0) ||
+    (c.extended_key_usage && c.extended_key_usage.length > 0));
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+      <div className="flex items-center justify-between mb-2">
+        <div className="font-mono text-sm text-gray-900 dark:text-white flex items-center gap-2">
+          {c.filename}
+          {c.is_self_signed && (
+            <span className="px-1.5 py-0.5 rounded text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">self-signed</span>
+          )}
+          {c.is_ca && (
+            <span className="px-1.5 py-0.5 rounded text-xs bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400">CA</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {expiryBadge(c.notafter)}
+          {c.pem && (
+            <button onClick={() => setShowPEM(true)}
+              className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300">
+              View PEM
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="grid md:grid-cols-2 gap-x-4 gap-y-1 text-sm">
+        <div><span className="text-gray-500">Subject: </span><span className="text-gray-900 dark:text-white break-all">{c.subject || '—'}</span></div>
+        <div><span className="text-gray-500">Issuer: </span><span className="text-gray-900 dark:text-white break-all">{c.issuer || '—'}</span></div>
+        <div><span className="text-gray-500">Not Before: </span><span className="text-gray-900 dark:text-white">{formatUnixDate(c.notbefore)}</span></div>
+        <div><span className="text-gray-500">Not After: </span><span className="text-gray-900 dark:text-white">{formatUnixDate(c.notafter)}</span></div>
+        <div><span className="text-gray-500">Public Key: </span><span className="text-gray-900 dark:text-white">{c.public_key_type || '—'} {c.public_key_bits ? `${c.public_key_bits}b` : ''}</span></div>
+        <div className="md:col-span-2">
+          <span className="text-gray-500">Fingerprint: </span>
+          <span className="text-gray-900 dark:text-white font-mono text-xs break-all">{c.fingerprint || '—'}</span>
+        </div>
+        {c.san && c.san.length > 0 && (
+          <div className="md:col-span-2">
+            <span className="text-gray-500">SAN: </span>
+            <span className="text-gray-900 dark:text-white">{c.san.join(', ')}</span>
+          </div>
+        )}
+      </div>
+
+      {hasExtras && (
+        <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700/50">
+          <button onClick={() => setDetailsOpen(!detailsOpen)}
+            className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
+            {detailsOpen ? '▾' : '▸'} Decoded details
+          </button>
+          {detailsOpen && (
+            <div className="mt-2 grid md:grid-cols-2 gap-x-4 gap-y-1 text-xs">
+              {c.serial && (
+                <div>
+                  <span className="text-gray-500">Serial: </span>
+                  <span className="text-gray-900 dark:text-white font-mono break-all">{c.serial}</span>
+                </div>
+              )}
+              {c.signature_algorithm && (
+                <div>
+                  <span className="text-gray-500">Signature: </span>
+                  <span className="text-gray-900 dark:text-white">{c.signature_algorithm}</span>
+                </div>
+              )}
+              {c.key_usage && c.key_usage.length > 0 && (
+                <div className="md:col-span-2">
+                  <span className="text-gray-500">Key Usage: </span>
+                  <span className="text-gray-900 dark:text-white">{c.key_usage.join(', ')}</span>
+                </div>
+              )}
+              {c.extended_key_usage && c.extended_key_usage.length > 0 && (
+                <div className="md:col-span-2">
+                  <span className="text-gray-500">Extended Key Usage: </span>
+                  <span className="text-gray-900 dark:text-white">{c.extended_key_usage.join(', ')}</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {showPEM && c.pem && (
+        <PEMViewerModal filename={c.filename} pem={c.pem} onClose={() => setShowPEM(false)} />
+      )}
+    </div>
+  );
+}
+
+function PEMViewerModal({ filename, pem, onClose }: { filename: string; pem: string; onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(pem);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard may be unavailable (insecure context); ignore.
+    }
+  };
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-3xl p-6 max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white font-mono">{filename}</h2>
+          <div className="flex gap-2">
+            <button onClick={onCopy}
+              className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300">
+              {copied ? '✓ Copied' : 'Copy'}
+            </button>
+            <button onClick={onClose}
+              className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300">
+              Close
+            </button>
+          </div>
+        </div>
+        <pre className="flex-1 overflow-auto bg-gray-50 dark:bg-gray-900 rounded p-3 text-xs font-mono text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-all">
+{pem}
+        </pre>
       </div>
     </div>
   );

@@ -103,6 +103,14 @@ export interface NodeCertificate {
   san?: string[];
   subject?: string;
   pem?: string;
+
+  // Populated server-side from PEM parsing
+  serial?: string;
+  signature_algorithm?: string;
+  key_usage?: string[];
+  extended_key_usage?: string[];
+  is_ca?: boolean;
+  is_self_signed?: boolean;
 }
 
 export interface ACMEAccount {

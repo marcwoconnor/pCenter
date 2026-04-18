@@ -1142,7 +1142,7 @@ function SchedulerTab() {
     } catch (e: unknown) { setErr(e instanceof Error ? e.message : 'Update failed'); }
   };
 
-  const TASK_TYPES = ['power_on', 'power_off', 'shutdown', 'snapshot_create', 'snapshot_cleanup', 'snapshot_rotate', 'backup_create', 'migrate'];
+  const TASK_TYPES = ['power_on', 'power_off', 'shutdown', 'snapshot_create', 'snapshot_cleanup', 'snapshot_rotate', 'backup_create', 'acme_renew', 'migrate'];
   const CRON_PRESETS = [
     { label: 'Every hour', value: '0 * * * *' },
     { label: 'Daily 2am', value: '0 2 * * *' },
@@ -1229,6 +1229,13 @@ function SchedulerTab() {
                     Each run creates a new <code>auto-YYYYMMDD-HHMMSS</code> snapshot and prunes older auto-* beyond this count.
                   </span>
                 </label>
+              )}
+              {taskType === 'acme_renew' && (
+                <div className="col-span-2 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded px-3 py-2">
+                  <span className="text-xs text-blue-800 dark:text-blue-300">
+                    Cluster-wide task — renews ACME certs on every online node in the cluster. Target VM/CT fields are ignored (set to any valid value).
+                  </span>
+                </div>
               )}
               {taskType === 'backup_create' && (
                 <>

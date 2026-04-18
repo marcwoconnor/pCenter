@@ -117,20 +117,33 @@ func (s *Service) runDueTasks(ctx context.Context) {
 	}
 }
 
+// isClusterWideTask returns true for tasks that operate on a whole cluster
+// rather than a specific VM/CT. These bypass per-guest node resolution.
+func isClusterWideTask(t TaskType) bool {
+	switch t {
+	case TaskACMERenew:
+		return true
+	}
+	return false
+}
+
 // executeTask runs a single scheduled task
 func (s *Service) executeTask(ctx context.Context, task ScheduledTask) {
 	startedAt := time.Now()
 	slog.Info("scheduler: executing task", "id", task.ID, "name", task.Name, "type", task.TaskType,
 		"target", fmt.Sprintf("%s/%d", task.TargetType, task.TargetID))
 
-	// Resolve node
-	node := s.resolveNode(task.Cluster, task.TargetType, task.TargetID)
-	if node == "" {
-		errMsg := "could not resolve target node"
-		slog.Error("scheduler: "+errMsg, "task", task.Name)
-		s.recordRun(task.ID, startedAt, false, "", errMsg)
-		s.advanceNextRun(task)
-		return
+	// Cluster-wide tasks (e.g. acme_renew) don't need a VM/CT target.
+	var node string
+	if !isClusterWideTask(task.TaskType) {
+		node = s.resolveNode(task.Cluster, task.TargetType, task.TargetID)
+		if node == "" {
+			errMsg := "could not resolve target node"
+			slog.Error("scheduler: "+errMsg, "task", task.Name)
+			s.recordRun(task.ID, startedAt, false, "", errMsg)
+			s.advanceNextRun(task)
+			return
+		}
 	}
 
 	// Build action name
@@ -210,6 +223,8 @@ func (s *Service) taskTypeToAction(task ScheduledTask) string {
 		return prefix + "_snapshot_rotate"
 	case TaskBackupCreate:
 		return prefix + "_backup"
+	case TaskACMERenew:
+		return "cluster_acme_renew" // cluster-wide, no vm/ct prefix
 	case TaskMigrate:
 		return prefix + "_migrate"
 	default:

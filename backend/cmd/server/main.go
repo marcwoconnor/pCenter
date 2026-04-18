@@ -409,6 +409,11 @@ func main() {
 
 	// Action function: tries agent first, falls back to poller
 	scheduleAction := func(sctx context.Context, cluster, node, action string, params map[string]interface{}) (string, error) {
+		// Cluster-wide actions: bypass per-node agent/poller lookup
+		if action == "cluster_acme_renew" {
+			return clusterACMERenew(sctx, p, cluster)
+		}
+
 		// Try agent
 		if agentHub != nil {
 			agents := agentHub.GetConnectedAgents()

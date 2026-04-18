@@ -6,6 +6,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+## v0.1.9 — 2026-04-17
+
+### Added (ACME Phase 3)
+- **Scheduled ACME auto-renewal** (closes #24). New `acme_renew` scheduler task type. Cluster-wide: one task renews every online node in the cluster in parallel. Partial failures are tolerated — as long as at least one node succeeds, the task run is recorded as successful with a per-node summary. Recommended schedule: weekly Sunday 3am (`0 3 * * 0`).
+- **Decoded certificate viewer** (closes #25). Node Certificates tab now shows extra fields parsed from each cert's PEM: serial number, signature algorithm, key usage flags, extended key usage OIDs, CA flag, self-signed flag. New "View PEM" button opens a modal with the raw PEM text and a copy-to-clipboard action.
+
+### Changed
+- Backend parses PEM fields server-side using Go's `crypto/x509` — no new JS dependencies, no bundle-size growth for the parsing logic itself.
+
 ### Docs
 - README now links the detailed vCenter-parity roadmap + CHANGELOG + Phase 3/4 issue filters.
 - Legacy root `ROADMAP.md` is now a pointer to the active roadmap sources; original M0–M5 build plan preserved as historical archive below the pointer.

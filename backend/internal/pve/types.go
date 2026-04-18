@@ -726,7 +726,8 @@ type NodeConfig struct {
 }
 
 // NodeCertificate represents a certificate installed on a node.
-// From GET /nodes/{node}/certificates/info
+// From GET /nodes/{node}/certificates/info.
+// Fields below `PEM` are populated by pCenter-side parsing (not PVE).
 type NodeCertificate struct {
 	Filename      string   `json:"filename"`
 	Fingerprint   string   `json:"fingerprint,omitempty"`
@@ -738,6 +739,14 @@ type NodeCertificate struct {
 	SAN           []string `json:"san,omitempty"`
 	Subject       string   `json:"subject,omitempty"`
 	PEM           string   `json:"pem,omitempty"`
+
+	// Populated server-side by parsing `PEM` — optional on the wire.
+	Serial             string   `json:"serial,omitempty"`
+	SignatureAlgorithm string   `json:"signature_algorithm,omitempty"`
+	KeyUsage           []string `json:"key_usage,omitempty"`
+	ExtendedKeyUsage   []string `json:"extended_key_usage,omitempty"`
+	IsCA               bool     `json:"is_ca,omitempty"`
+	IsSelfSigned       bool     `json:"is_self_signed,omitempty"`
 }
 
 // ACMEAccount is an ACME account registered at the cluster level.
