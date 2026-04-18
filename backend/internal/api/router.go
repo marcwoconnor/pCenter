@@ -118,6 +118,11 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 		mux.HandleFunc("GET /api/agent/connected", h.GetConnectedAgents)
 	}
 
+	// OpenAPI spec + Swagger UI (public; the docs must be reachable before login)
+	mux.HandleFunc("GET /api/openapi.yaml", serveOpenAPIYAML)
+	mux.HandleFunc("GET /api/openapi.json", serveOpenAPIJSON)
+	mux.HandleFunc("GET /api/docs", serveSwaggerUI)
+
 	// === Protected API endpoints ===
 	// Build a protected mux for all API routes
 	protectedMux := http.NewServeMux()

@@ -1,0 +1,618 @@
+openapi: 3.0.3
+info:
+  title: pCenter API
+  version: 0.1.0
+  description: |
+    pCenter is a multi-cluster Proxmox datacenter manager.
+
+    **Coverage note:** this spec currently covers authentication, cluster/node inventory,
+    and guest (VM/container) endpoints — roughly 25 of the 213 routes the backend exposes.
+    Remaining route groups (ACME, pools, backup, scheduler, alarms, metrics, RBAC, tags,
+    library, folders, SDN, HA, DRS, inventory) will be added incrementally; see the
+    `roadmap` + `phase-3` labeled GitHub issues.
+
+    ## Authentication flow
+
+    1. `POST /api/auth/login` with `{username, password}`. On success you receive either:
+       - `LoginResponse` — session is fully authenticated; a `session` cookie is set and
+         the response body contains a `csrf_token` string.
+       - `TOTPRequiredResponse` — partial session established; caller must complete
+         2FA via `POST /api/auth/verify-totp`.
+    2. Subsequent authenticated requests send the `session` cookie automatically
+       (HttpOnly) and, for mutating methods (POST/PUT/DELETE), must include the
+       `X-CSRF-Token` header echoing the `csrf_token` from the login/me response.
+    3. `POST /api/auth/logout` terminates the session.
+
+servers:
+  - url: /
+    description: Same-origin (default deployment)
+
+tags:
+  - name: auth
+    description: Login, sessions, TOTP, password, admin user management
+  - name: clusters
+    description: Cluster/node inventory and summaries
+  - name: guests
+    description: VMs, containers, and combined guest listings
+  - name: meta
+    description: Health, version, and the OpenAPI spec itself
+
+security:
+  - sessionCookie: []
+    csrfToken: []
+
+paths:
+  /health:
+    get:
+      tags: [meta]
+      summary: Liveness probe
+      security: []
+      responses:
+        '200':
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+
+  /api/openapi.yaml:
+    get:
+      tags: [meta]
+      summary: This OpenAPI spec (YAML)
+      security: []
+      responses:
+        '200':
+          description: YAML spec
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /api/openapi.json:
+    get:
+      tags: [meta]
+      summary: This OpenAPI spec (JSON)
+      security: []
+      responses:
+        '200':
+          description: JSON spec
+          content:
+            application/json:
+              schema: { type: object }
+
+  /api/version:
+    get:
+      tags: [meta]
+      summary: Server version and update check
+      responses:
+        '200':
+          description: Version info
+          content:
+            application/json:
+              schema: { type: object }
+
+  # === Auth ===
+
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: Log in with username + password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Login succeeded (or TOTP required)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/LoginResponse'
+                  - $ref: '#/components/schemas/TOTPRequiredResponse'
+        '401': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+
+  /api/auth/register:
+    post:
+      tags: [auth]
+      summary: Register the first user (only when zero users exist)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '200':
+          description: Registered; auto-logged in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '403':
+          description: Registration closed (users already exist)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/auth/user-count:
+    get:
+      tags: [auth]
+      summary: How many users exist (used to show first-run UI)
+      security: []
+      responses:
+        '200':
+          description: Count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+
+  /api/auth/check:
+    get:
+      tags: [auth]
+      summary: Whether the caller has a valid session (unauthenticated probe)
+      security: []
+      responses:
+        '200':
+          description: Auth status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authenticated: { type: boolean }
+
+  /api/auth/me:
+    get:
+      tags: [auth]
+      summary: Current user + CSRF token
+      responses:
+        '200':
+          description: Session owner
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeResponse' }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/auth/logout:
+    post:
+      tags: [auth]
+      summary: End the current session
+      responses:
+        '204': { description: Logged out }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/auth/verify-totp:
+    post:
+      tags: [auth]
+      summary: Complete 2FA after login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VerifyTOTPRequest' }
+      responses:
+        '200':
+          description: TOTP accepted; session promoted to full auth
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/auth/password:
+    put:
+      tags: [auth]
+      summary: Change own password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangePasswordRequest' }
+      responses:
+        '204': { description: Password changed }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/auth/sessions:
+    get:
+      tags: [auth]
+      summary: List own active sessions
+      responses:
+        '200':
+          description: Sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Session' }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/auth/sessions/{id}:
+    delete:
+      tags: [auth]
+      summary: Revoke a specific session
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Revoked }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  # === Clusters / nodes ===
+
+  /api/summary:
+    get:
+      tags: [clusters]
+      summary: Global summary across all clusters
+      responses:
+        '200':
+          description: Aggregate counts and resources
+          content:
+            application/json:
+              schema: { type: object }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/clusters:
+    get:
+      tags: [clusters]
+      summary: All configured clusters
+      responses:
+        '200':
+          description: Clusters
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Cluster' }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/nodes:
+    get:
+      tags: [clusters]
+      summary: All nodes across all clusters
+      responses:
+        '200':
+          description: Nodes
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Node' }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/summary:
+    get:
+      tags: [clusters]
+      summary: Summary for one cluster
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+      responses:
+        '200':
+          description: Cluster summary
+          content:
+            application/json:
+              schema: { type: object }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/nodes:
+    get:
+      tags: [clusters]
+      summary: Nodes in one cluster
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+      responses:
+        '200':
+          description: Nodes
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Node' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  # === Guests ===
+
+  /api/guests:
+    get:
+      tags: [guests]
+      summary: All guests (VMs + containers) across all clusters
+      responses:
+        '200':
+          description: Guests
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Guest' }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/vms:
+    get:
+      tags: [guests]
+      summary: All VMs
+      responses:
+        '200':
+          description: VMs
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Guest' }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/vms/{vmid}:
+    get:
+      tags: [guests]
+      summary: VM by id (searches all clusters)
+      parameters:
+        - $ref: '#/components/parameters/VMID'
+      responses:
+        '200':
+          description: VM detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Guest' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/vms/{vmid}/{action}:
+    post:
+      tags: [guests]
+      summary: Perform an action on a VM (start|stop|shutdown|reboot|reset|suspend|resume)
+      parameters:
+        - $ref: '#/components/parameters/VMID'
+        - in: path
+          name: action
+          required: true
+          schema:
+            type: string
+            enum: [start, stop, shutdown, reboot, reset, suspend, resume]
+      responses:
+        '200':
+          description: Task started (body includes UPID)
+          content:
+            application/json:
+              schema: { type: object }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/containers:
+    get:
+      tags: [guests]
+      summary: All containers
+      responses:
+        '200':
+          description: Containers
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Guest' }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/containers/{vmid}:
+    get:
+      tags: [guests]
+      summary: Container by id (searches all clusters)
+      parameters:
+        - $ref: '#/components/parameters/VMID'
+      responses:
+        '200':
+          description: Container detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Guest' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/containers/{vmid}/{action}:
+    post:
+      tags: [guests]
+      summary: Perform an action on a container
+      parameters:
+        - $ref: '#/components/parameters/VMID'
+        - in: path
+          name: action
+          required: true
+          schema:
+            type: string
+            enum: [start, stop, shutdown, reboot, suspend, resume]
+      responses:
+        '200':
+          description: Task started
+          content:
+            application/json:
+              schema: { type: object }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/guests:
+    get:
+      tags: [guests]
+      summary: Guests in one cluster
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+      responses:
+        '200':
+          description: Guests
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Guest' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session
+      description: Opaque session token set on login; HttpOnly.
+    csrfToken:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: |
+        Required on every state-changing request (POST/PUT/DELETE). Value is the
+        `csrf_token` string returned by `/api/auth/login`, `/api/auth/me`, or
+        `/api/auth/verify-totp`. Not required for safe methods (GET/HEAD).
+
+  parameters:
+    ClusterName:
+      in: path
+      name: cluster
+      required: true
+      schema: { type: string }
+      description: Cluster name as configured in pCenter (matches `Cluster.name`).
+    VMID:
+      in: path
+      name: vmid
+      required: true
+      schema: { type: integer, minimum: 100 }
+      description: Proxmox VMID (unique per cluster; searches all clusters when called on global paths).
+
+  responses:
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: invalid credentials
+
+    User:
+      type: object
+      properties:
+        id: { type: string }
+        username: { type: string }
+        email: { type: string }
+        role: { type: string, enum: [admin, user] }
+        totp_enabled: { type: boolean }
+        last_login: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Session:
+      type: object
+      properties:
+        id: { type: string }
+        user_id: { type: string }
+        totp_verified: { type: boolean }
+        ip_address: { type: string }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string, format: password }
+
+    LoginResponse:
+      type: object
+      required: [user, csrf_token]
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+        csrf_token: { type: string }
+
+    TOTPRequiredResponse:
+      type: object
+      required: [requires_totp, csrf_token]
+      properties:
+        requires_totp: { type: boolean, enum: [true] }
+        csrf_token:
+          type: string
+          description: Use this on the follow-up `/api/auth/verify-totp` request.
+
+    VerifyTOTPRequest:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, example: "123456" }
+
+    RegisterRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string, format: password }
+        email: { type: string }
+
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password: { type: string, format: password }
+        new_password: { type: string, format: password }
+
+    MeResponse:
+      type: object
+      required: [user, csrf_token]
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+        csrf_token: { type: string }
+
+    Cluster:
+      type: object
+      description: |
+        Proxmox cluster as configured in pCenter. Fields are returned by the poller;
+        see `backend/internal/state` for the source-of-truth struct.
+      additionalProperties: true
+      properties:
+        name: { type: string }
+        nodes:
+          type: array
+          items: { $ref: '#/components/schemas/Node' }
+
+    Node:
+      type: object
+      description: Proxmox host node.
+      additionalProperties: true
+      properties:
+        node: { type: string }
+        cluster: { type: string }
+        status: { type: string, example: online }
+        cpu: { type: number, description: CPU usage 0..1 }
+        mem: { type: integer, description: Used memory bytes }
+        maxmem: { type: integer, description: Total memory bytes }
+        uptime: { type: integer, description: Seconds }
+
+    Guest:
+      type: object
+      description: |
+        Unified shape for a VM or container. `type` discriminates.
+        Additional Proxmox-native fields pass through.
+      additionalProperties: true
+      required: [vmid, type]
+      properties:
+        vmid: { type: integer }
+        name: { type: string }
+        type: { type: string, enum: [qemu, lxc] }
+        node: { type: string }
+        cluster: { type: string }
+        status: { type: string, example: running }
+        cpu: { type: number }
+        maxcpu: { type: integer }
+        mem: { type: integer }
+        maxmem: { type: integer }
+        uptime: { type: integer }
