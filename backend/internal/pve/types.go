@@ -853,3 +853,28 @@ type NodeACMEDomain struct {
 	Domain string `json:"domain"`
 	Plugin string `json:"plugin,omitempty"`
 }
+
+// Pool is a Proxmox resource pool (cluster-wide grouping of VMs/CTs/storage).
+// From GET /pools
+type Pool struct {
+	PoolID  string `json:"poolid"`
+	Comment string `json:"comment,omitempty"`
+}
+
+// PoolMember is one member of a resource pool.
+// `type` is "qemu", "lxc", or "storage". VMID is populated for qemu/lxc; Storage for storage type.
+type PoolMember struct {
+	Type    string `json:"type"`
+	ID      string `json:"id"`   // e.g. "qemu/100", "storage/local-lvm"
+	Node    string `json:"node,omitempty"`
+	VMID    int    `json:"vmid,omitempty"`
+	Storage string `json:"storage,omitempty"`
+	Name    string `json:"name,omitempty"`   // VM/CT display name or storage name
+	Status  string `json:"status,omitempty"` // running/stopped for guests
+}
+
+// PoolDetail is the full pool body returned by GET /pools/{poolid}.
+type PoolDetail struct {
+	Comment string       `json:"comment,omitempty"`
+	Members []PoolMember `json:"members,omitempty"`
+}

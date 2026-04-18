@@ -137,6 +137,38 @@ export interface NodeACMEDomain {
   plugin?: string;
 }
 
+export interface Pool {
+  poolid: string;
+  comment?: string;
+}
+
+export interface PoolMember {
+  type: string;    // "qemu" | "lxc" | "storage"
+  id: string;
+  node?: string;
+  vmid?: number;
+  storage?: string;
+  name?: string;
+  status?: string;
+}
+
+export interface PoolDetail {
+  comment?: string;
+  members: PoolMember[];
+}
+
+export interface CreatePoolRequest {
+  poolid: string;
+  comment?: string;
+}
+
+export interface UpdatePoolRequest {
+  comment?: string;
+  vms?: string[];
+  storage?: string[];
+  delete?: boolean;
+}
+
 export interface CreateACMEAccountRequest {
   name: string;
   contact: string;

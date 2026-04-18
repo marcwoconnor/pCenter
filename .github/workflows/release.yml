@@ -201,15 +201,37 @@ jobs:
           # Build
           dpkg-deb --build ${PKG_DIR} pcenter_${VERSION}_${ARCH}.deb
 
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          # Pull lines between `## v<VERSION>` and the next `## ` heading.
+          awk -v tag="## v${VERSION}" '
+            $0 ~ "^"tag"($|[^0-9.])" { found=1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+
+          if [ ! -s release-notes.md ]; then
+            echo "No CHANGELOG entry for v${VERSION}; using minimal body." > release-notes.md
+            echo "" >> release-notes.md
+            echo "See commit history: https://github.com/marcwoconnor/pCenter/commits/v${VERSION}" >> release-notes.md
+          fi
+
+          echo '--- Release notes ---'
+          cat release-notes.md
+
       - name: Upload .deb to release
         uses: softprops/action-gh-release@v2
         with:
           files: pcenter_*.deb
+          body_path: release-notes.md
 
       - name: Upload binary to release
         uses: softprops/action-gh-release@v2
         with:
           files: backend/pcenter
+          body_path: release-notes.md
 
   update-apt-repo:
     needs: build

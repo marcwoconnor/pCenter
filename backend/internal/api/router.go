@@ -287,6 +287,13 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/acme/tos", h.GetACMETOSURL)
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/acme/challenge-schema", h.ListACMEChallengeSchemas)
 
+	// Resource pools (cluster-wide)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/pools", h.ListPools)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/pools/{poolid}", h.GetPool)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/pools", h.CreatePool)
+	protectedMux.HandleFunc("PUT /api/clusters/{cluster}/pools/{poolid}", h.UpdatePool)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/pools/{poolid}", h.DeletePool)
+
 	// Get nodes for migration target selection
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes/migration-targets", h.GetClusterNodesForMigration)
 

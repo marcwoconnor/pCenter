@@ -3,6 +3,7 @@ import { useCluster } from '../context/ClusterContext';
 import { api, formatBytes } from '../api/client';
 import { DRSPanel } from './DRSPanel';
 import { ClusterACMETab } from './ACMEPanels';
+import { PoolsTab } from './PoolsTab';
 import type { Node, Guest, DRSRule, DRSRuleViolation } from '../types';
 
 interface Tab { id: string; label: string; }
@@ -11,6 +12,7 @@ const clusterTabs: Tab[] = [
   { id: 'ha', label: 'HA' },
   { id: 'drs', label: 'DRS' },
   { id: 'acme', label: 'ACME' },
+  { id: 'pools', label: 'Pools' },
   { id: 'configure', label: 'Configure' },
 ];
 
@@ -79,6 +81,7 @@ export function ClusterDetail({ clusterName, displayName, defaultTab }: { cluste
           </div>
         )}
         {activeTab === 'acme' && <ClusterACMETab clusterName={clusterName} />}
+        {activeTab === 'pools' && <PoolsTab clusterName={clusterName} />}
         {activeTab === 'configure' && <ClusterConfigure clusterName={clusterName} cluster={cluster} />}
       </div>
     </div>

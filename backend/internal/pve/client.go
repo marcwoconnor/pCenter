@@ -1796,6 +1796,57 @@ func (c *Client) DeleteNodeCustomCertificate(ctx context.Context, restart bool) 
 	return c.delete(ctx, path)
 }
 
+// --- Resource Pool operations (cluster-wide) ---
+
+// ListPools returns all resource pools in the cluster.
+func (c *Client) ListPools(ctx context.Context) ([]Pool, error) {
+	return get[[]Pool](c, ctx, "/pools")
+}
+
+// GetPool returns full pool details including members.
+func (c *Client) GetPool(ctx context.Context, poolID string) (*PoolDetail, error) {
+	d, err := get[PoolDetail](c, ctx, "/pools/"+url.PathEscape(poolID))
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+// CreatePool creates a new resource pool.
+func (c *Client) CreatePool(ctx context.Context, poolID, comment string) error {
+	params := map[string]string{"poolid": poolID}
+	if comment != "" {
+		params["comment"] = comment
+	}
+	_, err := c.post(ctx, "/pools", params)
+	return err
+}
+
+// UpdatePool modifies a pool. Can update comment, add members via `vms` (comma-sep VMIDs)
+// or `storage` (comma-sep storage IDs), or remove members by setting `delete=1`.
+func (c *Client) UpdatePool(ctx context.Context, poolID, comment string, vms, storage []string, deleteMembers bool) error {
+	params := map[string]string{}
+	if comment != "" {
+		params["comment"] = comment
+	}
+	if len(vms) > 0 {
+		params["vms"] = strings.Join(vms, ",")
+	}
+	if len(storage) > 0 {
+		params["storage"] = strings.Join(storage, ",")
+	}
+	if deleteMembers {
+		params["delete"] = "1"
+	}
+	_, err := c.put(ctx, "/pools/"+url.PathEscape(poolID), params)
+	return err
+}
+
+// DeletePool removes an empty pool.
+func (c *Client) DeletePool(ctx context.Context, poolID string) error {
+	return c.delete(ctx, "/pools/"+url.PathEscape(poolID))
+}
+
 // ListACMEDirectories returns the published ACME directories (LE prod, LE staging, etc.).
 func (c *Client) ListACMEDirectories(ctx context.Context) ([]ACMEDirectory, error) {
 	return get[[]ACMEDirectory](c, ctx, "/cluster/acme/directories")

@@ -65,6 +65,10 @@ import type {
   NodeACMEDomain,
   CreateACMEAccountRequest,
   CreateACMEPluginRequest,
+  Pool,
+  PoolDetail,
+  CreatePoolRequest,
+  UpdatePoolRequest,
 } from '../types';
 
 import { getCSRFToken } from './auth';
@@ -375,6 +379,26 @@ export const api = {
     fetchAPI<{ status: string }>(`/clusters/${cluster}/nodes/${node}/acme/domains`, {
       method: 'PUT',
       body: JSON.stringify({ domains }),
+    }),
+
+  // Resource pools
+  listPools: (cluster: string) =>
+    fetchAPI<Pool[]>(`/clusters/${cluster}/pools`),
+  getPool: (cluster: string, poolID: string) =>
+    fetchAPI<PoolDetail>(`/clusters/${cluster}/pools/${encodeURIComponent(poolID)}`),
+  createPool: (cluster: string, req: CreatePoolRequest) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/pools`, {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+  updatePool: (cluster: string, poolID: string, req: UpdatePoolRequest) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/pools/${encodeURIComponent(poolID)}`, {
+      method: 'PUT',
+      body: JSON.stringify(req),
+    }),
+  deletePool: (cluster: string, poolID: string) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/pools/${encodeURIComponent(poolID)}`, {
+      method: 'DELETE',
     }),
 
   // Console
