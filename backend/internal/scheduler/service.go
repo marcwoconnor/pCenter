@@ -206,6 +206,8 @@ func (s *Service) taskTypeToAction(task ScheduledTask) string {
 		return prefix + "_snapshot_create"
 	case TaskSnapshotCleanup:
 		return prefix + "_snapshot_delete"
+	case TaskSnapshotRotate:
+		return prefix + "_snapshot_rotate"
 	case TaskMigrate:
 		return prefix + "_migrate"
 	default:

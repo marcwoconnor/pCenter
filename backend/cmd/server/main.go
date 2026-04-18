@@ -455,6 +455,10 @@ func main() {
 					return client.StopContainer(sctx, vmid)
 				case "ct_shutdown":
 					return client.ShutdownContainer(sctx, vmid)
+				case "vm_snapshot_rotate":
+					return rotateSnapshots(sctx, client, true, vmid, params)
+				case "ct_snapshot_rotate":
+					return rotateSnapshots(sctx, client, false, vmid, params)
 				default:
 					return "", fmt.Errorf("unsupported action for poller fallback: %s", action)
 				}

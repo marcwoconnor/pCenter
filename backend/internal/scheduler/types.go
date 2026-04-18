@@ -10,7 +10,8 @@ const (
 	TaskPowerOff        TaskType = "power_off"
 	TaskShutdown        TaskType = "shutdown"
 	TaskSnapshotCreate  TaskType = "snapshot_create"
-	TaskSnapshotCleanup TaskType = "snapshot_cleanup" // delete beyond retention
+	TaskSnapshotCleanup TaskType = "snapshot_cleanup" // delete a specific named snapshot
+	TaskSnapshotRotate  TaskType = "snapshot_rotate"  // create a new snapshot + prune auto-* beyond retention
 	TaskMigrate         TaskType = "migrate"
 )
 
