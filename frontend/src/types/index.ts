@@ -1110,3 +1110,34 @@ export interface CreateScheduledTaskRequest {
   params?: string;
   enabled: boolean;
 }
+
+export interface WebhookEndpoint {
+  id: string;
+  name: string;
+  url: string;
+  events: string[];
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  last_fired_at?: string;
+  last_status?: '' | 'success' | 'failure';
+}
+
+export interface CreateWebhookRequest {
+  name: string;
+  url: string;
+  events: string[];
+  enabled: boolean;
+}
+
+export interface CreateWebhookResponse {
+  endpoint: WebhookEndpoint;
+  secret: string;
+}
+
+export interface UpdateWebhookRequest {
+  name: string;
+  url: string;
+  events: string[];
+  enabled: boolean;
+}

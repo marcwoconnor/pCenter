@@ -31,6 +31,7 @@ import (
 	"github.com/moconnor/pcenter/internal/scheduler"
 	"github.com/moconnor/pcenter/internal/tags"
 	"github.com/moconnor/pcenter/internal/updater"
+	"github.com/moconnor/pcenter/internal/webhooks"
 )
 
 // Handler holds dependencies for API handlers
@@ -48,6 +49,7 @@ type Handler struct {
 	rbac            *rbac.Service
 	updater         *updater.Checker
 	scheduler       *scheduler.Service
+	webhooks        *webhooks.Service
 	agentHub        *agent.Hub
 	clusters        []config.ClusterConfig // For on-demand client creation
 	secrets         map[string]string      // Token secrets keyed by cluster/agent name
@@ -116,6 +118,11 @@ func (h *Handler) SetOnChange(fn func()) {
 // SetSchedulerService sets the scheduler service
 func (h *Handler) SetSchedulerService(s *scheduler.Service) {
 	h.scheduler = s
+}
+
+// SetWebhooksService sets the outbound webhooks service
+func (h *Handler) SetWebhooksService(w *webhooks.Service) {
+	h.webhooks = w
 }
 
 // SetUpdateChecker sets the update checker

@@ -103,6 +103,19 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 		mux.Handle("DELETE /api/users/{id}", authSvc.RequireAuth(authSvc.RequireFullAuth(authSvc.RequireAdmin(authSvc.CSRFProtection(http.HandlerFunc(authHandlers.HandleDeleteUser))))))
 		mux.Handle("GET /api/auth/events", authSvc.RequireAuth(authSvc.RequireFullAuth(authSvc.RequireAdmin(http.HandlerFunc(authHandlers.HandleListEvents)))))
 
+		// Webhooks (admin-only, CSRF-protected for mutations)
+		adminOnly := func(fn http.HandlerFunc) http.Handler {
+			return authSvc.RequireAuth(authSvc.RequireFullAuth(authSvc.RequireAdmin(http.HandlerFunc(fn))))
+		}
+		adminCSRF := func(fn http.HandlerFunc) http.Handler {
+			return authSvc.RequireAuth(authSvc.RequireFullAuth(authSvc.RequireAdmin(authSvc.CSRFProtection(http.HandlerFunc(fn)))))
+		}
+		mux.Handle("GET /api/webhooks", adminOnly(h.GetWebhooks))
+		mux.Handle("POST /api/webhooks", adminCSRF(h.CreateWebhook))
+		mux.Handle("PUT /api/webhooks/{id}", adminCSRF(h.UpdateWebhook))
+		mux.Handle("DELETE /api/webhooks/{id}", adminCSRF(h.DeleteWebhook))
+		mux.Handle("POST /api/webhooks/{id}/test", adminCSRF(h.TestWebhook))
+
 		// Wrap WebSocket with auth
 		mux.Handle("GET /ws", authSvc.AuthenticatedWebSocket(hub.HandleWebSocket))
 	} else {

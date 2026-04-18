@@ -70,6 +70,10 @@ import type {
   CreatePoolRequest,
   UpdatePoolRequest,
   CreateBackupRequest,
+  WebhookEndpoint,
+  CreateWebhookRequest,
+  CreateWebhookResponse,
+  UpdateWebhookRequest,
 } from '../types';
 
 import { getCSRFToken } from './auth';
@@ -692,6 +696,28 @@ export const api = {
   },
   getAllPermissions: () =>
     fetchAPI<string[]>('/rbac/permissions'),
+
+  // Webhooks (admin)
+  listWebhooks: () =>
+    fetchAPI<WebhookEndpoint[]>('/webhooks'),
+  createWebhook: (req: CreateWebhookRequest) =>
+    fetchAPI<CreateWebhookResponse>('/webhooks', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+  updateWebhook: (id: string, req: UpdateWebhookRequest) =>
+    fetchAPI<WebhookEndpoint>(`/webhooks/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(req),
+    }),
+  deleteWebhook: (id: string) =>
+    fetchAPI<void>(`/webhooks/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+  testWebhook: (id: string) =>
+    fetchAPI<{ status: string }>(`/webhooks/${encodeURIComponent(id)}/test`, {
+      method: 'POST',
+    }),
 };
 
 // Helper functions

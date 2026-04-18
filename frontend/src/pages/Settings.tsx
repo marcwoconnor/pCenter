@@ -4,10 +4,11 @@ import { authApi } from '../api/auth';
 import { api } from '../api/client';
 import { TOTPSetupWizard } from '../components/TOTPSetupWizard';
 import { Layout } from '../components/Layout';
+import { WebhooksPanel } from '../components/WebhooksPanel';
 import type { Session } from '../types/auth';
 import type { AlarmDefinition, NotificationChannel, RBACRole, RBACRoleAssignment, ScheduledTask, TaskRun } from '../types';
 
-type SettingsTab = 'security' | 'sessions' | 'rbac' | 'scheduler' | 'alarms' | 'notifications';
+type SettingsTab = 'security' | 'sessions' | 'rbac' | 'scheduler' | 'alarms' | 'notifications' | 'webhooks';
 
 export function Settings() {
   const { user, refreshUser } = useAuth();
@@ -85,6 +86,18 @@ export function Settings() {
             >
               Notifications
             </button>
+            {user?.role === 'admin' && (
+              <button
+                onClick={() => setActiveTab('webhooks')}
+                className={`pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${
+                  activeTab === 'webhooks'
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'
+                }`}
+              >
+                Webhooks
+              </button>
+            )}
           </div>
 
           {activeTab === 'security' && <SecurityTab user={user} onUpdate={refreshUser} />}
@@ -93,6 +106,7 @@ export function Settings() {
           {activeTab === 'scheduler' && <SchedulerTab />}
           {activeTab === 'alarms' && <AlarmsTab />}
           {activeTab === 'notifications' && <NotificationsTab />}
+          {activeTab === 'webhooks' && <WebhooksPanel />}
         </div>
       </div>
     </Layout>

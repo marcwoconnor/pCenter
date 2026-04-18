@@ -40,12 +40,23 @@ type Config struct {
 	// DRS Rules settings
 	DRSRules DRSRulesConfig `yaml:"drs_rules"`
 
+	// Webhooks settings
+	Webhooks WebhooksConfig `yaml:"webhooks"`
+
 	// Legacy: flat nodes array (auto-converted to single cluster)
 	Nodes []NodeConfig `yaml:"nodes,omitempty"`
 }
 
 // DRSRulesConfig holds DRS rule settings
 type DRSRulesConfig struct {
+	DatabasePath string `yaml:"database_path"`
+}
+
+// WebhooksConfig holds outbound webhook settings.
+// Webhook secrets are encrypted at rest using Auth.EncryptionKey — the same
+// key used for TOTP secrets — so no separate key needs to be configured.
+type WebhooksConfig struct {
+	Enabled      bool   `yaml:"enabled"`
 	DatabasePath string `yaml:"database_path"`
 }
 
@@ -322,6 +333,11 @@ func Load(path string) (*Config, error) {
 	// Alarms defaults
 	if cfg.Alarms.DatabasePath == "" {
 		cfg.Alarms.DatabasePath = "data/alarms.db"
+	}
+
+	// Webhooks defaults
+	if cfg.Webhooks.DatabasePath == "" {
+		cfg.Webhooks.DatabasePath = "data/webhooks.db"
 	}
 	if cfg.Alarms.EvalInterval == 0 {
 		cfg.Alarms.EvalInterval = 30

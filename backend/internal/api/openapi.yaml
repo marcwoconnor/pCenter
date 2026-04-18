@@ -34,6 +34,8 @@ tags:
     description: Cluster/node inventory and summaries
   - name: guests
     description: VMs, containers, and combined guest listings
+  - name: webhooks
+    description: Outbound webhook endpoints for event dispatch (admin-only)
   - name: meta
     description: Health, version, and the OpenAPI spec itself
 
@@ -452,6 +454,89 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
 
+  # === Webhooks (admin-only) ===
+
+  /api/webhooks:
+    get:
+      tags: [webhooks]
+      summary: List outbound webhook endpoints
+      responses:
+        '200':
+          description: Endpoints
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/WebhookEndpoint' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      tags: [webhooks]
+      summary: Create an endpoint (secret is generated server-side, returned once)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookCreateRequest' }
+      responses:
+        '201':
+          description: Created. **The returned `secret` is shown only once** — store it.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookCreateResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/webhooks/{id}:
+    put:
+      tags: [webhooks]
+      summary: Update endpoint (name, url, events, enabled — not secret)
+      parameters:
+        - $ref: '#/components/parameters/WebhookID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookUpdateRequest' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookEndpoint' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [webhooks]
+      summary: Delete endpoint
+      parameters:
+        - $ref: '#/components/parameters/WebhookID'
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/webhooks/{id}/test:
+    post:
+      tags: [webhooks]
+      summary: Fire a synthetic `webhook.test` event through the dispatcher
+      description: |
+        Enqueues a synthetic event. Delivery goes through the normal retry path,
+        so admins see the same behaviour real events will have. Returns immediately;
+        check `last_status` on the endpoint after a few seconds.
+      parameters:
+        - $ref: '#/components/parameters/WebhookID'
+      responses:
+        '200':
+          description: Queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: queued }
+        '404': { $ref: '#/components/responses/Error' }
+
 components:
   securitySchemes:
     sessionCookie:
@@ -481,6 +566,12 @@ components:
       required: true
       schema: { type: integer, minimum: 100 }
       description: Proxmox VMID (unique per cluster; searches all clusters when called on global paths).
+    WebhookID:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+      description: Webhook endpoint ID.
 
   responses:
     Error:
@@ -616,3 +707,61 @@ components:
         mem: { type: integer }
         maxmem: { type: integer }
         uptime: { type: integer }
+
+    WebhookEndpoint:
+      type: object
+      required: [id, name, url, enabled]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        url: { type: string, format: uri }
+        events:
+          type: array
+          items: { type: string }
+          description: |
+            Dotted event names (e.g. `vm.create`, `ct.migrate`). An empty array
+            means the endpoint receives **all** events. Event names are derived
+            from the activity log's `resource_type.action`.
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        last_fired_at: { type: string, format: date-time }
+        last_status:
+          type: string
+          enum: ["", success, failure]
+          description: Result of the most recent delivery attempt.
+
+    WebhookCreateRequest:
+      type: object
+      required: [name, url]
+      properties:
+        name: { type: string }
+        url: { type: string, format: uri }
+        events:
+          type: array
+          items: { type: string }
+        enabled: { type: boolean, default: true }
+
+    WebhookCreateResponse:
+      type: object
+      required: [endpoint, secret]
+      properties:
+        endpoint: { $ref: '#/components/schemas/WebhookEndpoint' }
+        secret:
+          type: string
+          description: |
+            Shared secret for HMAC-SHA256 signature verification. **Returned
+            exactly once on creation** — store it immediately. pCenter signs
+            every outbound request as `X-pCenter-Signature: t=<unix>,v1=<hex>`
+            where `v1 = hmac_sha256(secret, "<unix>.<body>")`.
+
+    WebhookUpdateRequest:
+      type: object
+      required: [name, url]
+      properties:
+        name: { type: string }
+        url: { type: string, format: uri }
+        events:
+          type: array
+          items: { type: string }
+        enabled: { type: boolean }

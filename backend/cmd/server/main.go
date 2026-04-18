@@ -32,6 +32,7 @@ import (
 	"github.com/moconnor/pcenter/internal/state"
 	"github.com/moconnor/pcenter/internal/tags"
 	"github.com/moconnor/pcenter/internal/updater"
+	"github.com/moconnor/pcenter/internal/webhooks"
 )
 
 func main() {
@@ -91,6 +92,7 @@ func main() {
 
 	// Initialize auth service
 	var authSvc *auth.Service
+	var authCrypto *auth.Crypto // shared with webhooks for secret encryption
 	if cfg.Auth.Enabled {
 		authDB, err := auth.Open(cfg.Auth.DatabasePath)
 		if err != nil {
@@ -120,6 +122,7 @@ func main() {
 			slog.Error("failed to initialize auth crypto", "error", err)
 			os.Exit(1)
 		}
+		authCrypto = crypto
 
 		// Build auth config from app config
 		authCfg := auth.Config{
@@ -373,12 +376,32 @@ func main() {
 	defer activityDB.Close()
 
 	activityService := activity.NewService(activityDB, cfg.Activity.RetentionDays)
-	activityService.OnLog(func(e activity.Entry) {
-		hub.BroadcastActivity(e)
-	})
 	activityService.StartCleanup()
 	handler.SetActivityService(activityService)
 	slog.Info("activity logging enabled", "database", cfg.Activity.DatabasePath, "retention_days", cfg.Activity.RetentionDays)
+
+	// Webhooks: translate activity entries into outbound POSTs
+	var webhookSubscribe func(activity.Entry)
+	webhooksDB, err := webhooks.Open(cfg.Webhooks.DatabasePath)
+	if err != nil {
+		slog.Error("failed to open webhooks database", "error", err)
+		os.Exit(1)
+	}
+	defer webhooksDB.Close()
+	webhooksSvc := webhooks.NewService(webhooksDB, authCrypto)
+	webhooksSvc.Start(ctx)
+	handler.SetWebhooksService(webhooksSvc)
+	webhookSubscribe = webhooksSvc.Subscribe()
+	slog.Info("webhooks enabled", "database", cfg.Webhooks.DatabasePath)
+
+	// Fan activity entries out to both the WebSocket broadcast and webhooks.
+	// OnLog is a single-subscriber slot, so we bundle fanout in one closure.
+	activityService.OnLog(func(e activity.Entry) {
+		hub.BroadcastActivity(e)
+		if webhookSubscribe != nil {
+			webhookSubscribe(e)
+		}
+	})
 
 	// Start migration monitor (tracks task status for active migrations)
 	migrationMonitor := migration.NewMonitor(store, cfg.Clusters, 3*time.Second)
