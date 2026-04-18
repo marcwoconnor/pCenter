@@ -37,7 +37,7 @@ interface LayoutProps {
 }
 
 export function Layout({ children, sidebar }: LayoutProps) {
-  const { isConnected, summary, error, consoles, closeConsole, focusConsole, updateConsole } = useCluster();
+  const { isConnected, summary, clusters, error, consoles, closeConsole, focusConsole, updateConsole } = useCluster();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
@@ -216,7 +216,7 @@ export function Layout({ children, sidebar }: LayoutProps) {
             )}
             <div className={`flex items-center gap-1.5 text-xs ${isConnected ? 'text-green-400' : 'text-yellow-400'}`}>
               <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-yellow-400 animate-pulse'}`} />
-              {isConnected ? 'Connected' : 'Reconnecting...'}
+              {isConnected ? 'Connected' : 'Connecting...'}
             </div>
 
             {/* Alarms */}
@@ -245,12 +245,26 @@ export function Layout({ children, sidebar }: LayoutProps) {
         </div>
       </header>
 
-      {/* Error Banner */}
-      {error && (
+      {/* Status Banner — onboarding takes priority over transient connection errors
+          when there's nothing to connect to yet. A misleading "connection lost"
+          on a freshly installed / un-configured instance sends the wrong signal. */}
+      {clusters.length === 0 ? (
+        <div className="bg-blue-100 dark:bg-blue-900/40 text-blue-900 dark:text-blue-100 px-4 py-2 text-sm flex-shrink-0 flex items-center justify-between">
+          <span>
+            No Proxmox hosts connected yet. Add one to start managing nodes, VMs, and containers.
+          </span>
+          <NavLink
+            to="/hosts"
+            className="ml-4 px-3 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium"
+          >
+            Add a host →
+          </NavLink>
+        </div>
+      ) : error ? (
         <div className="bg-yellow-500 text-yellow-900 px-4 py-2 text-sm flex-shrink-0">
           {error}
         </div>
-      )}
+      ) : null}
 
       {/* Main Content Area */}
       <div className="flex-1 flex overflow-hidden">

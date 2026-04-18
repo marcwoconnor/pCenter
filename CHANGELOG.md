@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+### Changed
+- Empty-state UX: replaced the misleading "Connection lost — reconnecting..." yellow banner with a blue "No Proxmox hosts connected yet — Add a host →" info banner when no clusters are configured. Correctly distinguishes data-state (have hosts?) from transport-state (WS connected?). Upper-right indicator now reads "Connecting..." instead of "Reconnecting..." since the latter wrongly implied a prior successful connection on first page load.
+
 ## v0.1.10 — 2026-04-18
 
 ### Added (Phase 3)
