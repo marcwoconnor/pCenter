@@ -104,9 +104,13 @@ This guide walks you through installing pCenter from scratch. You'll need:
 
 ### Quick Install (Ubuntu/Debian)
 
-If you already have an Ubuntu/Debian machine ready and a Proxmox API token:
+If you already have an Ubuntu/Debian machine ready and a Proxmox API token (see [Step 1](#step-1-create-the-proxmox-api-token) if you need one):
 
 ```bash
+# Prerequisites (stock LXC templates often ship without these)
+sudo apt update
+sudo apt install -y curl gpg ca-certificates
+
 # Add the pCenter APT repository
 curl -fsSL https://marcwoconnor.github.io/pCenter/pcenter.gpg.key \
   | sudo gpg --dearmor -o /usr/share/keyrings/pcenter.gpg
@@ -126,15 +130,17 @@ sudo nano /etc/pcenter/config.yaml
 sudo systemctl start pcenter
 ```
 
-Then open `http://<your-ip>:8080` in your browser.
+Then open `http://<your-ip>:8080` in your browser and jump to [Step 6: First Login](#step-6-first-login).
+
+> The APT package puts config in `/etc/pcenter/config.yaml` (+ `/etc/pcenter/env` for secrets) and the binary/data in `/opt/pcenter/`, with a pre-built systemd unit. **If you used Quick Install, skip Steps 3–5 below — they describe a manual flow that keeps config inside `/opt/pcenter/` instead of `/etc/pcenter/`.**
 
 To upgrade later: `sudo apt update && sudo apt upgrade pcenter`
 
 ---
 
-### Detailed Installation (Step by Step)
+### Manual Install (Source Build)
 
-If you're starting from scratch, follow the steps below.
+If you'd rather build from source or install without APT, follow the steps below. This flow uses `/opt/pcenter/` as the install root — that's different from the APT layout above, and the two should not be mixed.
 
 ### Step 1: Create the Proxmox API Token
 
