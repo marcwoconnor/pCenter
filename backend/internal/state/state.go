@@ -15,6 +15,9 @@ type Store struct {
 	// Active migrations across all clusters
 	migrations map[string]*pve.MigrationProgress // keyed by UPID
 
+	// Active disk moves (storage vMotion) across all clusters
+	diskMoves map[string]*pve.DiskMoveProgress // keyed by UPID
+
 	// DRS recommendations per cluster
 	drsRecommendations map[string][]pve.DRSRecommendation // keyed by cluster name
 
@@ -54,6 +57,7 @@ func New() *Store {
 	return &Store{
 		clusters:           make(map[string]*ClusterStore),
 		migrations:         make(map[string]*pve.MigrationProgress),
+		diskMoves:          make(map[string]*pve.DiskMoveProgress),
 		drsRecommendations: make(map[string][]pve.DRSRecommendation),
 		maintenanceStates:  make(map[string]*pve.MaintenanceState),
 	}
@@ -612,6 +616,45 @@ func (s *Store) RemoveMigration(upid string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.migrations, upid)
+}
+
+// Disk-move (storage vMotion) management
+
+// AddDiskMove tracks a new disk/volume move
+func (s *Store) AddDiskMove(m *pve.DiskMoveProgress) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.diskMoves[m.UPID] = m
+}
+
+// UpdateDiskMove updates disk-move progress
+func (s *Store) UpdateDiskMove(upid string, progress int, status string, errMsg string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if m, ok := s.diskMoves[upid]; ok {
+		m.Progress = progress
+		m.Status = status
+		m.Error = errMsg
+	}
+}
+
+// GetDiskMoves returns all active disk moves
+func (s *Store) GetDiskMoves() []pve.DiskMoveProgress {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]pve.DiskMoveProgress, 0, len(s.diskMoves))
+	for _, m := range s.diskMoves {
+		out = append(out, *m)
+	}
+	return out
+}
+
+// RemoveDiskMove removes a completed disk move
+func (s *Store) RemoveDiskMove(upid string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.diskMoves, upid)
 }
 
 // DRS recommendation management

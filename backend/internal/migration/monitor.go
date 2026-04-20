@@ -64,6 +64,7 @@ func (m *Monitor) Start(ctx context.Context) {
 			return
 		case <-ticker.C:
 			m.checkMigrations(ctx)
+			m.checkDiskMoves(ctx)
 		}
 	}
 }
@@ -262,6 +263,124 @@ func (m *Monitor) parseProgress(ctx context.Context, client *pve.Client, mig *pv
 	}
 
 	return progress
+}
+
+// checkDiskMoves checks status of all active storage vMotion tasks. Mirrors
+// checkMigrations; simpler because there's no from/to-node concept and
+// move_disk/move_volume task logs don't expose fine-grained percentage in a
+// form worth parsing — we flip 0 → 100 on success.
+func (m *Monitor) checkDiskMoves(ctx context.Context) {
+	moves := m.store.GetDiskMoves()
+	if len(moves) == 0 {
+		return
+	}
+
+	changed := false
+	for _, mv := range moves {
+		if mv.Status != "running" {
+			continue
+		}
+
+		node := parseNodeFromUPID(mv.UPID)
+		if node == "" {
+			slog.Warn("could not parse node from disk-move UPID", "upid", mv.UPID)
+			continue
+		}
+
+		client := m.getClient(mv.Cluster, node)
+		if client == nil {
+			continue
+		}
+
+		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		task, err := client.GetTaskStatus(checkCtx, mv.UPID)
+		cancel()
+
+		if err != nil {
+			if time.Since(mv.StartedAt) > 30*time.Minute {
+				slog.Warn("disk-move task not found after timeout, marking failed",
+					"vmid", mv.VMID, "disk", mv.Disk)
+				m.store.UpdateDiskMove(mv.UPID, 0, "failed", "task not found")
+				changed = true
+			}
+			continue
+		}
+
+		switch task.Status {
+		case "running":
+			// PVE task logs for move_disk emit "transferred X MiB of Y GiB"
+			// lines. Rather than parse them, we just leave progress at whatever
+			// the caller set (typically 0) until completion.
+			continue
+		case "stopped":
+			if task.ExitCode == "OK" {
+				slog.Info("disk move completed",
+					"vmid", mv.VMID, "disk", mv.Disk, "to", mv.ToStorage)
+				m.store.UpdateDiskMove(mv.UPID, 100, "completed", "")
+				if m.activity != nil {
+					details, _ := json.Marshal(map[string]interface{}{
+						"disk":          mv.Disk,
+						"from_storage":  mv.FromStorage,
+						"to_storage":    mv.ToStorage,
+						"delete_source": mv.DeleteSource,
+						"duration":      time.Since(mv.StartedAt).String(),
+					})
+					m.activity.Log(activity.Entry{
+						Action:       activity.ActionMoveDisk,
+						ResourceType: mv.GuestType,
+						ResourceID:   strconv.Itoa(mv.VMID),
+						ResourceName: mv.GuestName,
+						Cluster:      mv.Cluster,
+						Details:      string(details),
+						Status:       activity.StatusSuccess,
+					})
+				}
+				go func(upid string) {
+					time.Sleep(5 * time.Second)
+					m.store.RemoveDiskMove(upid)
+					if m.onChange != nil {
+						m.onChange()
+					}
+				}(mv.UPID)
+			} else {
+				detailedError := client.GetTaskError(ctx, mv.UPID)
+				if detailedError == "" {
+					detailedError = task.ExitCode
+				}
+				slog.Warn("disk move failed", "vmid", mv.VMID, "disk", mv.Disk, "error", detailedError)
+				m.store.UpdateDiskMove(mv.UPID, 0, "failed", detailedError)
+				if m.activity != nil {
+					details, _ := json.Marshal(map[string]interface{}{
+						"disk":         mv.Disk,
+						"from_storage": mv.FromStorage,
+						"to_storage":   mv.ToStorage,
+						"error":        detailedError,
+					})
+					m.activity.Log(activity.Entry{
+						Action:       activity.ActionMoveDisk,
+						ResourceType: mv.GuestType,
+						ResourceID:   strconv.Itoa(mv.VMID),
+						ResourceName: mv.GuestName,
+						Cluster:      mv.Cluster,
+						Details:      string(details),
+						Status:       activity.StatusError,
+					})
+				}
+				go func(upid string) {
+					time.Sleep(30 * time.Second)
+					m.store.RemoveDiskMove(upid)
+					if m.onChange != nil {
+						m.onChange()
+					}
+				}(mv.UPID)
+			}
+			changed = true
+		}
+	}
+
+	if changed && m.onChange != nil {
+		m.onChange()
+	}
 }
 
 // getClient returns a PVE client for the given cluster/node, creating one if needed

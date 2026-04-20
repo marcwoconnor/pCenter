@@ -17,6 +17,7 @@ const (
 	PermVMDelete   = "vm.delete"
 	PermVMMigrate  = "vm.migrate"
 	PermVMClone    = "vm.clone"
+	PermVMDiskMove = "vm.disk_move" // storage vMotion per-disk
 
 	// Container permissions
 	PermCTPower    = "ct.power"
@@ -27,6 +28,7 @@ const (
 	PermCTDelete   = "ct.delete"
 	PermCTMigrate  = "ct.migrate"
 	PermCTClone    = "ct.clone"
+	PermCTDiskMove = "ct.disk_move" // volume move across storages
 
 	// Host permissions
 	PermHostConfig      = "host.config"
@@ -51,9 +53,9 @@ const (
 var AllPermissions = []string{
 	PermView,
 	PermVMPower, PermVMConsole, PermVMConfig, PermVMSnapshot,
-	PermVMCreate, PermVMDelete, PermVMMigrate, PermVMClone,
+	PermVMCreate, PermVMDelete, PermVMMigrate, PermVMClone, PermVMDiskMove,
 	PermCTPower, PermCTConsole, PermCTConfig, PermCTSnapshot,
-	PermCTCreate, PermCTDelete, PermCTMigrate, PermCTClone,
+	PermCTCreate, PermCTDelete, PermCTMigrate, PermCTClone, PermCTDiskMove,
 	PermHostConfig, PermHostMaintenance,
 	PermStorageView, PermStorageUpload,
 	PermClusterConfig, PermInventoryManage,

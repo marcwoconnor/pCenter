@@ -1644,6 +1644,61 @@ func (c *Client) MigrateContainer(ctx context.Context, vmid int, targetNode stri
 	return resp.Data, nil
 }
 
+// --- Storage vMotion (per-disk / per-volume move across storages) ---
+
+// MoveVMDisk moves a single VM disk to a different storage pool while the
+// VM can stay running. Returns the UPID of the PVE task.
+//
+//   disk:          qemu disk key (scsi0, virtio0, ide0, sata0, ...)
+//   targetStorage: destination storage pool name
+//   delete:        when true, removes the source disk after the copy completes
+//                  (PVE default is false — source is kept as an unused disk)
+//   format:        optional target format override ("raw", "qcow2", "vmdk");
+//                  empty string lets PVE pick the right default for the target
+func (c *Client) MoveVMDisk(ctx context.Context, vmid int, disk, targetStorage string, delete bool, format string) (string, error) {
+	params := map[string]string{
+		"disk":    disk,
+		"storage": targetStorage,
+	}
+	if delete {
+		params["delete"] = "1"
+	}
+	if format != "" {
+		params["format"] = format
+	}
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/move_disk", c.nodeName, vmid), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// MoveContainerVolume moves a single LXC volume (rootfs or mpN) to a different
+// storage pool. PVE requires the container to be stopped for this op — it
+// does not support online volume migration for LXC today. Returns UPID.
+//
+//   volume:        lxc volume key ("rootfs" or "mp0", "mp1", ...)
+//   targetStorage: destination storage pool name
+//   delete:        when true, removes the source volume after copy completes
+func (c *Client) MoveContainerVolume(ctx context.Context, vmid int, volume, targetStorage string, delete bool) (string, error) {
+	params := map[string]string{
+		"volume":  volume,
+		"storage": targetStorage,
+	}
+	if delete {
+		params["delete"] = "1"
+	}
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/move_volume", c.nodeName, vmid), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
 // --- Clone operations ---
 
 // CloneOptions contains options for cloning a VM or container

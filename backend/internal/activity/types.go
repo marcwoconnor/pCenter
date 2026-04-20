@@ -29,6 +29,7 @@ const (
 	ActionCTStop       = "ct_stop"
 	ActionCTShutdown   = "ct_shutdown"
 	ActionMigrate      = "migrate"
+	ActionMoveDisk     = "move_disk" // storage vMotion (VM disk or CT volume)
 	ActionHAEnable     = "ha_enable"
 	ActionHADisable    = "ha_disable"
 	ActionDRSApply     = "drs_apply"

@@ -1804,6 +1804,22 @@ func (h *Handler) ClearMigration(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"message": "migration cleared"})
 }
 
+// GetDiskMoves returns all active storage vMotion (disk/volume move) tasks
+func (h *Handler) GetDiskMoves(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, h.store.GetDiskMoves())
+}
+
+// ClearDiskMove removes a stale disk-move from tracking
+func (h *Handler) ClearDiskMove(w http.ResponseWriter, r *http.Request) {
+	upid := r.PathValue("upid")
+	if upid == "" {
+		writeError(w, http.StatusBadRequest, "upid required")
+		return
+	}
+	h.store.RemoveDiskMove(upid)
+	writeJSON(w, map[string]string{"message": "disk move cleared"})
+}
+
 // GetDRSRecommendations returns all DRS recommendations
 func (h *Handler) GetDRSRecommendations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, h.store.GetAllDRSRecommendations())
@@ -1826,6 +1842,18 @@ func (h *Handler) GetClusterDRS(w http.ResponseWriter, r *http.Request) {
 type MigrateRequest struct {
 	TargetNode string `json:"target_node"`
 	Online     bool   `json:"online"` // live migration
+}
+
+// MoveDiskRequest is the request body for storage vMotion.
+// "Disk" holds the qemu disk key (scsi0, virtio0, ...) for VMs or the
+// lxc volume key (rootfs, mp0, ...) for containers. FromStorage is optional
+// and stored only for display in progress tracking — PVE doesn't require it.
+type MoveDiskRequest struct {
+	Disk         string `json:"disk"`
+	TargetStorage string `json:"target_storage"`
+	DeleteSource bool   `json:"delete_source"`
+	Format       string `json:"format,omitempty"` // VM only: raw|qcow2|vmdk; empty = PVE default
+	FromStorage  string `json:"from_storage,omitempty"`
 }
 
 // MigrateVM initiates a VM migration (searches all clusters by VMID)
@@ -2207,6 +2235,193 @@ func (h *Handler) ClusterMigrateContainer(w http.ResponseWriter, r *http.Request
 		h.onChange()
 	}
 
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// ClusterMoveVMDisk initiates a storage vMotion of a VM disk to a different
+// storage pool. VM can be running. See pve.Client.MoveVMDisk for params.
+func (h *Handler) ClusterMoveVMDisk(w http.ResponseWriter, r *http.Request) {
+	if !h.requirePermission(w, r, rbac.PermVMDiskMove, rbac.ObjectVM, r.PathValue("vmid")) {
+		return
+	}
+	clusterName := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	var req MoveDiskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Disk == "" {
+		writeError(w, http.StatusBadRequest, "disk required")
+		return
+	}
+	if req.TargetStorage == "" {
+		writeError(w, http.StatusBadRequest, "target_storage required")
+		return
+	}
+
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+	vm, ok := cs.GetVM(vmid)
+	if !ok {
+		writeError(w, http.StatusNotFound, "VM not found in cluster")
+		return
+	}
+
+	client, ok := h.getClient(clusterName, vm.Node)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "node client not found")
+		return
+	}
+
+	ctx := r.Context()
+	upid, err := client.MoveVMDisk(ctx, vmid, req.Disk, req.TargetStorage, req.DeleteSource, req.Format)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "disk move failed: "+err.Error())
+		return
+	}
+
+	h.store.AddDiskMove(&pve.DiskMoveProgress{
+		UPID:         upid,
+		Cluster:      clusterName,
+		VMID:         vmid,
+		GuestName:    vm.Name,
+		GuestType:    "vm",
+		Node:         vm.Node,
+		Disk:         req.Disk,
+		FromStorage:  req.FromStorage,
+		ToStorage:    req.TargetStorage,
+		DeleteSource: req.DeleteSource,
+		StartedAt:    time.Now(),
+		Progress:     0,
+		Status:       "running",
+	})
+
+	if h.activity != nil {
+		details, _ := json.Marshal(map[string]interface{}{
+			"disk":          req.Disk,
+			"from_storage":  req.FromStorage,
+			"to_storage":    req.TargetStorage,
+			"delete_source": req.DeleteSource,
+			"upid":          upid,
+		})
+		h.activity.Log(activity.Entry{
+			Action:       activity.ActionMoveDisk,
+			ResourceType: "vm",
+			ResourceID:   vmidStr,
+			ResourceName: vm.Name,
+			Cluster:      clusterName,
+			Details:      string(details),
+			Status:       "started",
+		})
+	}
+
+	if h.onChange != nil {
+		h.onChange()
+	}
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// ClusterMoveContainerVolume initiates a storage move of an LXC volume
+// (rootfs / mpN) to a different storage pool. Container must be stopped —
+// PVE does not support online volume migration for LXC today.
+func (h *Handler) ClusterMoveContainerVolume(w http.ResponseWriter, r *http.Request) {
+	if !h.requirePermission(w, r, rbac.PermCTDiskMove, rbac.ObjectCT, r.PathValue("vmid")) {
+		return
+	}
+	clusterName := r.PathValue("cluster")
+	vmidStr := r.PathValue("vmid")
+	vmid, err := strconv.Atoi(vmidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid vmid")
+		return
+	}
+
+	var req MoveDiskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Disk == "" {
+		writeError(w, http.StatusBadRequest, "disk (volume) required")
+		return
+	}
+	if req.TargetStorage == "" {
+		writeError(w, http.StatusBadRequest, "target_storage required")
+		return
+	}
+
+	cs, ok := h.store.GetCluster(clusterName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+	ct, ok := cs.GetContainer(vmid)
+	if !ok {
+		writeError(w, http.StatusNotFound, "container not found in cluster")
+		return
+	}
+
+	client, ok := h.getClient(clusterName, ct.Node)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "node client not found")
+		return
+	}
+
+	ctx := r.Context()
+	upid, err := client.MoveContainerVolume(ctx, vmid, req.Disk, req.TargetStorage, req.DeleteSource)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "volume move failed: "+err.Error())
+		return
+	}
+
+	h.store.AddDiskMove(&pve.DiskMoveProgress{
+		UPID:         upid,
+		Cluster:      clusterName,
+		VMID:         vmid,
+		GuestName:    ct.Name,
+		GuestType:    "ct",
+		Node:         ct.Node,
+		Disk:         req.Disk,
+		FromStorage:  req.FromStorage,
+		ToStorage:    req.TargetStorage,
+		DeleteSource: req.DeleteSource,
+		StartedAt:    time.Now(),
+		Progress:     0,
+		Status:       "running",
+	})
+
+	if h.activity != nil {
+		details, _ := json.Marshal(map[string]interface{}{
+			"volume":        req.Disk,
+			"from_storage":  req.FromStorage,
+			"to_storage":    req.TargetStorage,
+			"delete_source": req.DeleteSource,
+			"upid":          upid,
+		})
+		h.activity.Log(activity.Entry{
+			Action:       activity.ActionMoveDisk,
+			ResourceType: "ct",
+			ResourceID:   vmidStr,
+			ResourceName: ct.Name,
+			Cluster:      clusterName,
+			Details:      string(details),
+			Status:       "started",
+		})
+	}
+
+	if h.onChange != nil {
+		h.onChange()
+	}
 	writeJSON(w, map[string]string{"upid": upid})
 }
 

@@ -270,6 +270,27 @@ type MigrationProgress struct {
 	Error     string    `json:"error,omitempty"`
 }
 
+// DiskMoveProgress tracks an active storage vMotion (per-disk / per-volume
+// move between storage pools). Used for both qemu `move_disk` and lxc
+// `move_volume` — GuestType distinguishes them. Node stays the same across
+// the operation; what changes is the backing storage of one disk/volume.
+type DiskMoveProgress struct {
+	UPID         string    `json:"upid"`
+	Cluster      string    `json:"cluster"`
+	VMID         int       `json:"vmid"`
+	GuestName    string    `json:"guest_name"`
+	GuestType    string    `json:"guest_type"` // vm, ct
+	Node         string    `json:"node"`
+	Disk         string    `json:"disk"`           // e.g. scsi0 (VM) or rootfs/mp0 (CT)
+	FromStorage  string    `json:"from_storage"`   // resolved at initiation (for display)
+	ToStorage    string    `json:"to_storage"`
+	DeleteSource bool      `json:"delete_source"`
+	StartedAt    time.Time `json:"started_at"`
+	Progress     int       `json:"progress"` // 0-100
+	Status       string    `json:"status"`   // running, completed, failed
+	Error        string    `json:"error,omitempty"`
+}
+
 // DRSRecommendation suggests a migration for load balancing
 type DRSRecommendation struct {
 	ID        string    `json:"id"`

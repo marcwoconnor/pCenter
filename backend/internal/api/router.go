@@ -173,6 +173,8 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	// Migrations & DRS (global)
 	protectedMux.HandleFunc("GET /api/migrations", h.GetMigrations)
 	protectedMux.HandleFunc("DELETE /api/migrations/{upid}", h.ClearMigration)
+	protectedMux.HandleFunc("GET /api/disk-moves", h.GetDiskMoves)
+	protectedMux.HandleFunc("DELETE /api/disk-moves/{upid}", h.ClearDiskMove)
 	protectedMux.HandleFunc("GET /api/drs/recommendations", h.GetDRSRecommendations)
 
 	// Console - ticket endpoint and websocket proxy (legacy, searches all clusters)
@@ -273,6 +275,10 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	// Cluster-specific migrations
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/vms/{vmid}/migrate", h.ClusterMigrateVM)
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/containers/{vmid}/migrate", h.ClusterMigrateContainer)
+
+	// Storage vMotion (per-disk / per-volume move across storage pools)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/vms/{vmid}/disk/move", h.ClusterMoveVMDisk)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/containers/{vmid}/volume/move", h.ClusterMoveContainerVolume)
 
 	// Clone operations
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/vms/{vmid}/clone", h.CloneVM)
