@@ -226,3 +226,71 @@ nodes:
 		t.Errorf("legacy cluster should be named 'default', got %q", cfg.Clusters[0].Name)
 	}
 }
+
+// TestLoad_PollerDefaultsOnWhenClustersConfigured verifies the fix for #45:
+// a deb-install config with clusters but no poller block should auto-enable
+// the poller so the UI isn't empty on first start.
+func TestLoad_PollerDefaultsOnWhenClustersConfigured(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	yaml := `
+clusters:
+  - name: test
+    discovery_node: "10.0.0.1:8006"
+    token_id: "root@pam!test"
+    token_secret: "secret"
+`
+	os.WriteFile(cfgPath, []byte(yaml), 0644)
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !cfg.Poller.Enabled {
+		t.Error("poller should default to enabled when clusters are configured")
+	}
+}
+
+// TestLoad_PollerExplicitFalseHonored verifies that a user's explicit
+// `poller.enabled: false` is never overridden by the default logic.
+func TestLoad_PollerExplicitFalseHonored(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	yaml := `
+clusters:
+  - name: test
+    discovery_node: "10.0.0.1:8006"
+    token_id: "root@pam!test"
+    token_secret: "secret"
+poller:
+  enabled: false
+`
+	os.WriteFile(cfgPath, []byte(yaml), 0644)
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Poller.Enabled {
+		t.Error("explicit poller.enabled=false must not be overridden")
+	}
+}
+
+// TestLoad_PollerStaysOffWithNoClusters verifies the poller stays disabled
+// when no clusters are configured — nothing for it to poll.
+func TestLoad_PollerStaysOffWithNoClusters(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	os.WriteFile(cfgPath, []byte("server:\n  port: 8080\n"), 0644)
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Poller.Enabled {
+		t.Error("poller should stay disabled when no clusters are configured")
+	}
+}

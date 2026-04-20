@@ -127,9 +127,12 @@ type ActivityConfig struct {
 	RetentionDays int    `yaml:"retention_days"`
 }
 
-// PollerConfig holds poller settings
+// PollerConfig holds poller settings.
+// When the poller key is absent from config AND at least one cluster is
+// configured, Load() defaults Enabled to true. An explicit `enabled: false`
+// under `poller:` is always honored.
 type PollerConfig struct {
-	Enabled bool `yaml:"enabled"` // Default: true
+	Enabled bool `yaml:"enabled"`
 }
 
 // FoldersConfig holds folder organization settings
@@ -224,6 +227,13 @@ func Load(path string) (*Config, error) {
 			TokenSecret:   cfg.Nodes[0].TokenSecret,
 			Insecure:      cfg.Nodes[0].Insecure || !strings.HasPrefix(cfg.Nodes[0].Host, "http"),
 		}}
+	}
+
+	// Poller default: enabled when clusters are configured, unless the user
+	// explicitly set poller.enabled. Distinguishing "unset" from "false"
+	// requires a second pass because Go bool zero-value collapses both.
+	if !isPollerEnabledExplicit(expanded) && len(cfg.Clusters) > 0 {
+		cfg.Poller.Enabled = true
 	}
 
 	// Defaults
@@ -386,4 +396,19 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// isPollerEnabledExplicit returns true if the raw YAML contains an explicit
+// `poller.enabled` key, so Load() can tell "unset" apart from "false".
+func isPollerEnabledExplicit(raw string) bool {
+	var m map[string]interface{}
+	if err := yaml.Unmarshal([]byte(raw), &m); err != nil {
+		return false
+	}
+	poller, ok := m["poller"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	_, set := poller["enabled"]
+	return set
 }

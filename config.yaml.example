@@ -15,6 +15,10 @@ clusters:
   #   token_id: root@pam!prodToken
   #   token_secret: ${PVE_TOKEN_SECRET_PROD}
 
+# Background polling of PVE clusters (default: true when clusters configured)
+poller:
+  enabled: true
+
 # DRS settings (optional)
 drs:
   enabled: false

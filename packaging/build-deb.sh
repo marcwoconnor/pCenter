@@ -54,6 +54,9 @@ clusters:
     token_secret: "${PVE_TOKEN_SECRET}"        # Set in /etc/pcenter/env or change this
     insecure: true
 
+poller:
+  enabled: true   # Set to false to disable background polling (dashboard will be empty)
+
 server:
   port: 8080
 
