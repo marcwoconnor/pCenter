@@ -97,6 +97,7 @@ WorkingDirectory=/opt/pcenter
 ExecStart=/opt/pcenter/pcenter -config /etc/pcenter/config.yaml
 Restart=always
 RestartSec=5
+Environment=HOME=/opt/pcenter/data
 EnvironmentFile=-/etc/pcenter/env
 
 # Security hardening
@@ -144,6 +145,16 @@ ln -sf /opt/pcenter/pcenter /usr/local/bin/pcenter
 if [ ! -f /etc/pcenter/env ]; then
     echo "# pCenter environment variables" > /etc/pcenter/env
     echo "# PVE_TOKEN_SECRET=your-token-secret-here" >> /etc/pcenter/env
+    chmod 600 /etc/pcenter/env
+fi
+
+# Seed encryption key on first install if missing.
+# The runtime can generate one too, but systemd ProtectSystem=strict blocks
+# the persist-to-/etc/pcenter path, causing silent TOTP/webhook-secret loss
+# across restarts. Generating here guarantees a stable key from day one.
+if ! grep -q '^PCENTER_ENCRYPTION_KEY=' /etc/pcenter/env 2>/dev/null; then
+    key=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    echo "PCENTER_ENCRYPTION_KEY=${key}" >> /etc/pcenter/env
     chmod 600 /etc/pcenter/env
 fi
 

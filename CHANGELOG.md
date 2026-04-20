@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+### Fixed
+- **Silent encryption-key data loss on deb installs** (closes #47). Postinst now seeds `PCENTER_ENCRYPTION_KEY` in `/etc/pcenter/env` on first install (32-byte random hex). The runtime's auto-persist path previously failed silently under systemd `ProtectSystem=strict` because `/etc` is read-only to the service — a new key was generated every restart, making any data encrypted with the prior key (TOTP secrets, webhook secrets) unreadable. Existing installs are left alone (grep check); source-build installs still use the runtime auto-persist which works fine against `/opt/pcenter/.env`.
+- **SSH/vmstat failures against `/root/.ssh` read-only errors** (closes #49). Systemd unit now sets `Environment=HOME=/opt/pcenter/data`, which redirects pCenter's SSH state (`~/.ssh/id_ed25519`, `~/.ssh/known_hosts`) into the already-writable data directory. Previously `ProtectSystem=strict` blocked writes to `/root/.ssh` and `ProtectHome=true` blocked reads of the private key — so SSH auth failed on every poll and the journal filled with "Read-only file system" errors. No Go code changes: `ensureSSHKeypair()` already honors `HOME`, and `ssh(1)` inherits it via `exec`.
+
 ### Changed
 - Empty-state UX: replaced the misleading "Connection lost — reconnecting..." yellow banner with a blue "No Proxmox hosts connected yet — Add a host →" info banner when no clusters are configured. Correctly distinguishes data-state (have hosts?) from transport-state (WS connected?). Upper-right indicator now reads "Connecting..." instead of "Reconnecting..." since the latter wrongly implied a prior successful connection on first page load.
 
