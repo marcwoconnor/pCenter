@@ -423,7 +423,8 @@ func main() {
 		slog.Error("failed to open webhooks database", "error", err)
 		os.Exit(1)
 	}
-	defer webhooksDB.Close()
+	// DB lifecycle is owned by webhooksSvc.Stop() in the graceful shutdown path
+	// below — calling Close() here too would double-close the *sql.DB.
 	webhooksSvc := webhooks.NewService(webhooksDB, authCrypto)
 	webhooksSvc.Start(ctx)
 	handler.SetWebhooksService(webhooksSvc)
@@ -587,17 +588,44 @@ func main() {
 	// Wait for shutdown signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	sig := <-quit
+	slog.Info("shutting down", "signal", sig.String())
 
-	slog.Info("shutting down...")
+	// Second signal = force quit. Keeps operators from staring at a hung
+	// shutdown when a long-running in-flight request is blocking drain.
+	go func() {
+		<-quit
+		slog.Warn("second signal received — forcing exit")
+		os.Exit(1)
+	}()
 
-	// Graceful shutdown
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Graceful shutdown sequence (30s total budget):
+	//   1. server.Shutdown — stop accepting new HTTP, drain in-flight (1001 for WS).
+	//   2. hub.Stop       — close WebSocket client channels (the hub's Run loop
+	//                       exits and sockets get proper close frames via the
+	//                       HTTP server's own drain above).
+	//   3. webhooksSvc.Stop — halt dispatcher goroutine + close its DB. Jobs
+	//                         already mid-deliver complete; queued-but-unpicked
+	//                         jobs are dropped (documented behaviour).
+	//   4. cancel()       — signal the main context so every ctx-aware
+	//                       background goroutine (poller, scheduler, migration
+	//                       monitor, metrics collector/rollup, reconciler,
+	//                       alarm evaluator, session cleanup, update checker)
+	//                       exits before their owning DBs close via defer.
+	//   5. brief wait for those goroutines to observe cancellation — keeps
+	//                     "database is closed" errors out of the tail of the log.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		slog.Error("server shutdown error", "error", err)
+		slog.Error("http server shutdown error", "error", err)
 	}
+	hub.Stop()
+	if err := webhooksSvc.Stop(); err != nil {
+		slog.Error("webhooks service stop error", "error", err)
+	}
+	cancel()
+	time.Sleep(200 * time.Millisecond)
 
 	slog.Info("goodbye!")
 }
