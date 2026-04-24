@@ -5457,14 +5457,25 @@ WantedBy=multi-user.target
 }
 
 // runSSHCmd runs a command on a remote host via SSH
+// sshHomeOpts returns the -o UserKnownHostsFile / IdentityFile arguments bound
+// to homeDir. OpenSSH's ~ expansion uses pw_dir, not $HOME, so passing HOME in
+// cmd.Env isn't sufficient under systemd's ProtectHome=true — see #56.
+func sshHomeOpts(homeDir string) []string {
+	return []string{
+		"-o", fmt.Sprintf("UserKnownHostsFile=%s/.ssh/known_hosts", homeDir),
+		"-o", fmt.Sprintf("IdentityFile=%s/.ssh/id_ed25519", homeDir),
+	}
+}
+
 func runSSHCmd(ctx context.Context, host, homeDir, command string) error {
-	cmd := exec.CommandContext(ctx, "ssh",
+	args := []string{
 		"-o", "BatchMode=yes",
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "ConnectTimeout=10",
-		fmt.Sprintf("root@%s", host),
-		command,
-	)
+	}
+	args = append(args, sshHomeOpts(homeDir)...)
+	args = append(args, fmt.Sprintf("root@%s", host), command)
+	cmd := exec.CommandContext(ctx, "ssh", args...)
 	cmd.Env = append(os.Environ(), "HOME="+homeDir)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -5475,13 +5486,14 @@ func runSSHCmd(ctx context.Context, host, homeDir, command string) error {
 
 // scpFile copies a local file to a remote host
 func scpFile(ctx context.Context, localPath, host, remotePath, homeDir string) error {
-	cmd := exec.CommandContext(ctx, "scp",
+	args := []string{
 		"-o", "BatchMode=yes",
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "ConnectTimeout=10",
-		localPath,
-		fmt.Sprintf("root@%s:%s", host, remotePath),
-	)
+	}
+	args = append(args, sshHomeOpts(homeDir)...)
+	args = append(args, localPath, fmt.Sprintf("root@%s:%s", host, remotePath))
+	cmd := exec.CommandContext(ctx, "scp", args...)
 	cmd.Env = append(os.Environ(), "HOME="+homeDir)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -5492,14 +5504,14 @@ func scpFile(ctx context.Context, localPath, host, remotePath, homeDir string) e
 
 // writeRemoteFile writes content to a file on a remote host via SSH
 func writeRemoteFile(ctx context.Context, host, remotePath, content, homeDir string) error {
-	// Use ssh with heredoc to write the file
-	cmd := exec.CommandContext(ctx, "ssh",
+	args := []string{
 		"-o", "BatchMode=yes",
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "ConnectTimeout=10",
-		fmt.Sprintf("root@%s", host),
-		fmt.Sprintf("cat > %s", remotePath),
-	)
+	}
+	args = append(args, sshHomeOpts(homeDir)...)
+	args = append(args, fmt.Sprintf("root@%s", host), fmt.Sprintf("cat > %s", remotePath))
+	cmd := exec.CommandContext(ctx, "ssh", args...)
 	cmd.Env = append(os.Environ(), "HOME="+homeDir)
 	cmd.Stdin = strings.NewReader(content)
 	output, err := cmd.CombinedOutput()

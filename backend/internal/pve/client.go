@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -21,8 +22,23 @@ import (
 	"github.com/moconnor/pcenter/internal/config"
 )
 
-// runSSHCommand executes a command on a remote host via SSH
-// RunSSHCommand executes a command on a remote host via SSH
+// sshHome returns the directory ssh(1) should treat as its home for
+// known_hosts / identity lookups. We can't rely on $HOME propagating to ssh's
+// ~ expansion — OpenSSH uses getpwuid() for pw_dir, which stays /root under
+// systemd's ProtectHome=true even when we override HOME in the unit file.
+// Callers pass this path explicitly via -o UserKnownHostsFile / IdentityFile.
+func sshHome() string {
+	if h := os.Getenv("HOME"); h != "" {
+		return h
+	}
+	return "/root"
+}
+
+// RunSSHCommand executes a command on a remote host via SSH.
+//
+// Known_hosts and the identity file are bound to $HOME/.ssh explicitly rather
+// than left to ssh's default ~ expansion, which resolves via pw_dir and breaks
+// under systemd ProtectHome=true (HOME override is ignored for ~). See #56.
 func RunSSHCommand(ctx context.Context, host string, command string) (string, error) {
 	slog.Info("running SSH command", "host", host, "command", command)
 
@@ -33,11 +49,15 @@ func RunSSHCommand(ctx context.Context, host string, command string) (string, er
 		defer cancel()
 	}
 
+	home := sshHome()
 	// accept-new: accept on first connection (TOFU), reject if key changes (MITM).
-	// Previously used StrictHostKeyChecking=no which silently accepts changed keys.
+	// BatchMode: never prompt for passwords — fail fast in non-interactive service context.
 	cmd := exec.CommandContext(ctx, "ssh",
 		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=10",
+		"-o", fmt.Sprintf("UserKnownHostsFile=%s/.ssh/known_hosts", home),
+		"-o", fmt.Sprintf("IdentityFile=%s/.ssh/id_ed25519", home),
 		fmt.Sprintf("root@%s", host),
 		command,
 	)
