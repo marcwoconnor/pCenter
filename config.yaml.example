@@ -1,19 +1,20 @@
 # pCenter Configuration
-# Copy to config.yaml and fill in your values
-
-# New multi-cluster format (recommended)
-clusters:
-  - name: default
-    discovery_node: 10.31.10.14:8006  # Any node in cluster - others auto-discovered
-    token_id: root@pam!pcenter
-    token_secret: ${PVE_TOKEN_SECRET}  # Set via environment variable
-    insecure: true  # Skip TLS verify for self-signed certs
-
-  # Add more clusters:
-  # - name: prod-dc2
-  #   discovery_node: 10.31.20.10:8006
-  #   token_id: root@pam!prodToken
-  #   token_secret: ${PVE_TOKEN_SECRET_PROD}
+# Copy to config.yaml and fill in your values.
+#
+# Recommended: leave `clusters:` unset and add hosts through the web UI. pCenter
+# probes /cluster/status on add and routes to a real PVE cluster or a standalone
+# host under a datacenter automatically.
+#
+# Legacy bootstrap — optional. Each entry is probed on first start: real PVE
+# clusters become pcenter clusters; single-node entries become standalone hosts
+# under the auto-created "Default" datacenter. The `name` field here is only a
+# legacy label; the pcenter cluster's real name comes from PVE's /cluster/status.
+# clusters:
+#   - name: legacy-bootstrap
+#     discovery_node: 10.31.10.14:8006
+#     token_id: root@pam!pcenter
+#     token_secret: ${PVE_TOKEN_SECRET}
+#     insecure: true
 
 # Background polling of PVE clusters (default: true when clusters configured)
 poller:

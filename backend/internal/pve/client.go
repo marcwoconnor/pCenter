@@ -2275,14 +2275,66 @@ func (c *Client) AuthHeader() string {
 
 // --- Cluster Discovery ---
 
-// ClusterStatusNode represents a node from /cluster/status
+// ClusterStatusNode represents an entry from /cluster/status (can be type=node or type=cluster)
 type ClusterStatusNode struct {
-	Name   string `json:"name"`
-	ID     string `json:"id"`
-	IP     string `json:"ip"`
-	Online int    `json:"online"` // 1 or 0
-	Local  int    `json:"local"`  // 1 if this is the node we queried
-	Type   string `json:"type"`   // "node" or "cluster"
+	Name    string `json:"name"`
+	ID      string `json:"id"`
+	IP      string `json:"ip"`
+	Online  int    `json:"online"` // 1 or 0 (node entries)
+	Local   int    `json:"local"`  // 1 if this is the node we queried (node entries)
+	Type    string `json:"type"`   // "node" or "cluster"
+	Nodes   int    `json:"nodes"`  // number of configured nodes (cluster entries)
+	Quorate int    `json:"quorate"` // 1 if quorate (cluster entries)
+}
+
+// ClusterMembership represents whether a PVE host is in a real cluster, and which one.
+// Determined from the /cluster/status response: a real multi-node cluster has a
+// type=cluster entry AND ≥2 type=node entries. Standalone single-node installs
+// either have no type=cluster entry or a cluster entry reporting nodes=1.
+type ClusterMembership struct {
+	IsCluster   bool                // true iff PVE reports a real multi-node cluster
+	ClusterName string              // from the type=cluster entry; "" if standalone
+	Quorate     bool                // quorum state from the type=cluster entry
+	Nodes       []ClusterStatusNode // all type=node entries
+	LocalNode   string              // name of the node we queried (local=1)
+}
+
+// ProbeClusterMembership queries /cluster/status and classifies the response.
+// Used at host-add time and by the promotion reconciler to decide whether to
+// file a host under a real cluster or as a standalone.
+func (c *Client) ProbeClusterMembership(ctx context.Context) (*ClusterMembership, error) {
+	items, err := get[[]ClusterStatusNode](c, ctx, "/cluster/status")
+	if err != nil {
+		return nil, err
+	}
+	return ClassifyClusterStatus(items), nil
+}
+
+// ClassifyClusterStatus turns raw /cluster/status entries into a ClusterMembership.
+// Exposed for unit testing.
+func ClassifyClusterStatus(items []ClusterStatusNode) *ClusterMembership {
+	m := &ClusterMembership{}
+	var clusterEntry *ClusterStatusNode
+	for i := range items {
+		item := items[i]
+		switch item.Type {
+		case "node":
+			m.Nodes = append(m.Nodes, item)
+			if item.Local == 1 {
+				m.LocalNode = item.Name
+			}
+		case "cluster":
+			clusterEntry = &items[i]
+		}
+	}
+
+	if clusterEntry != nil && len(m.Nodes) >= 2 {
+		m.IsCluster = true
+		m.ClusterName = clusterEntry.Name
+		m.Quorate = clusterEntry.Quorate == 1
+	}
+
+	return m
 }
 
 // DiscoverClusterNodes returns all nodes in the cluster via /cluster/status

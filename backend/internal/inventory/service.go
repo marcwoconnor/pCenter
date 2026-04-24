@@ -9,14 +9,34 @@ import (
 	"github.com/moconnor/pcenter/internal/pve"
 )
 
+// ClusterProber probes a PVE host to determine whether it's part of a real
+// cluster, and if so, what the cluster is called. Injected into the Service
+// so tests can supply a fake without hitting the network.
+type ClusterProber interface {
+	ProbeClusterMembership(ctx context.Context, cfg config.ClusterConfig) (*pve.ClusterMembership, error)
+}
+
+type pveClusterProber struct{}
+
+func (pveClusterProber) ProbeClusterMembership(ctx context.Context, cfg config.ClusterConfig) (*pve.ClusterMembership, error) {
+	client := pve.NewClientFromClusterConfig(cfg)
+	return client.ProbeClusterMembership(ctx)
+}
+
 // Service provides inventory operations with business logic
 type Service struct {
-	db *DB
+	db     *DB
+	prober ClusterProber
 }
 
 // NewService creates a new inventory service
 func NewService(db *DB) *Service {
-	return &Service{db: db}
+	return &Service{db: db, prober: pveClusterProber{}}
+}
+
+// NewServiceWithProber lets callers (tests) inject a fake prober.
+func NewServiceWithProber(db *DB, prober ClusterProber) *Service {
+	return &Service{db: db, prober: prober}
 }
 
 // === Datacenter Operations ===
@@ -459,6 +479,98 @@ func (s *Service) AddHostByClusterName(ctx context.Context, clusterName string, 
 	}
 
 	return s.AddHost(ctx, cluster.ID, req)
+}
+
+// AddHostAutoRoute resolves credentials, probes the target host's /cluster/status,
+// and routes the host to the correct destination:
+//
+//   - If PVE reports a real multi-node cluster, attach (or create) a pcenter
+//     cluster whose pve_cluster_name matches, then insert the host under it.
+//   - Otherwise, file the host as a standalone under the datacenter.
+//
+// The returned AddHostResult captures which branch was taken so callers (API,
+// migration, reconciler) can surface the decision. The tokenSecret is returned
+// separately because callers need it to wire up polling without re-decrypting.
+func (s *Service) AddHostAutoRoute(ctx context.Context, datacenterID string, req AddHostRequest) (*AddHostResult, string, error) {
+	// Validate datacenter exists
+	dc, err := s.db.GetDatacenter(ctx, datacenterID)
+	if err != nil {
+		return nil, "", fmt.Errorf("get datacenter: %w", err)
+	}
+	if dc == nil {
+		return nil, "", fmt.Errorf("datacenter not found")
+	}
+
+	// Resolve authentication (create token if using password)
+	tokenID, tokenSecret, err := s.resolveHostAuth(ctx, &req)
+	if err != nil {
+		return nil, "", err
+	}
+	req.TokenID = tokenID
+	req.TokenSecret = tokenSecret
+
+	// Probe PVE /cluster/status — the load-bearing decision for this flow.
+	probeCfg := config.ClusterConfig{
+		DiscoveryNode: req.Address,
+		TokenID:       tokenID,
+		TokenSecret:   tokenSecret,
+		Insecure:      req.Insecure,
+	}
+	membership, err := s.prober.ProbeClusterMembership(ctx, probeCfg)
+	if err != nil {
+		return nil, "", fmt.Errorf("probe cluster membership: %w", err)
+	}
+
+	if membership.IsCluster {
+		// Find or create a pcenter cluster correlated to this PVE cluster.
+		cluster, err := s.db.GetClusterByPVEName(ctx, membership.ClusterName)
+		if err != nil {
+			return nil, "", fmt.Errorf("lookup cluster: %w", err)
+		}
+		if cluster == nil {
+			// Name collision on display name is possible (e.g. a prior "default"
+			// exists); fall back to a suffixed name so CreateCluster's unique
+			// constraint holds.
+			name := membership.ClusterName
+			if existing, _ := s.db.GetClusterByName(ctx, name); existing != nil {
+				name = fmt.Sprintf("%s (%s)", membership.ClusterName, req.Address)
+			}
+			dcID := datacenterID
+			cluster, err = s.db.CreateCluster(ctx, CreateClusterRequest{
+				Name:           name,
+				DatacenterID:   &dcID,
+				PVEClusterName: membership.ClusterName,
+			})
+			if err != nil {
+				return nil, "", fmt.Errorf("create cluster: %w", err)
+			}
+		}
+
+		host, err := s.db.AddHost(ctx, cluster.ID, req)
+		if err != nil {
+			return nil, "", fmt.Errorf("add host: %w", err)
+		}
+		if cluster.Status == ClusterStatusEmpty {
+			s.db.SetClusterStatus(ctx, cluster.ID, ClusterStatusPending)
+			cluster.Status = ClusterStatusPending
+		}
+		return &AddHostResult{
+			Host:               host,
+			Cluster:            cluster,
+			DetectedPVECluster: membership.ClusterName,
+			Standalone:         false,
+		}, tokenSecret, nil
+	}
+
+	// Standalone — file directly under the datacenter.
+	host, err := s.db.AddDatacenterHost(ctx, datacenterID, req)
+	if err != nil {
+		return nil, "", fmt.Errorf("add datacenter host: %w", err)
+	}
+	return &AddHostResult{
+		Host:       host,
+		Standalone: true,
+	}, tokenSecret, nil
 }
 
 // AddDatacenterHost adds a standalone host directly to a datacenter (not in a cluster)
