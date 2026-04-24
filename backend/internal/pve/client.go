@@ -2302,6 +2302,212 @@ func (c *Client) DiscoverClusterNodes(ctx context.Context) ([]ClusterStatusNode,
 	return nodes, nil
 }
 
+// --- Cluster Formation ---
+
+// ClusterCreateOptions are params for creating a new PVE cluster on this node.
+type ClusterCreateOptions struct {
+	ClusterName string // required, 1-15 chars, [a-zA-Z0-9-]
+	NodeID      int    // optional 1..N; 0 = let PVE assign
+	Link0       string // optional ring0 addr; empty = node's default IP
+	Link1       string // reserved; non-goal for initial release
+}
+
+// ClusterCreate forms a 1-node cluster on this client's node.
+// Returns the task UPID for polling. API token auth is accepted here.
+func (c *Client) ClusterCreate(ctx context.Context, opts ClusterCreateOptions) (string, error) {
+	if opts.ClusterName == "" {
+		return "", fmt.Errorf("cluster_name is required")
+	}
+	params := map[string]string{"clustername": opts.ClusterName}
+	if opts.NodeID > 0 {
+		params["nodeid"] = fmt.Sprintf("%d", opts.NodeID)
+	}
+	if opts.Link0 != "" {
+		params["link0"] = opts.Link0
+	}
+	if opts.Link1 != "" {
+		params["link1"] = opts.Link1
+	}
+
+	data, err := c.post(ctx, "/cluster/config", params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return "", fmt.Errorf("parse cluster-create response: %w (body: %s)", err, string(data))
+	}
+	return resp.Data, nil
+}
+
+// ClusterJoinInfo is what a prospective joiner needs from the founder's
+// GET /cluster/config/join endpoint.
+type ClusterJoinInfo struct {
+	IPAddress    string                 `json:"ipAddress"`
+	Fingerprint  string                 `json:"fingerprint"`
+	Totem        map[string]interface{} `json:"totem"`
+	ConfigDigest string                 `json:"config_digest"`
+	Nodelist     []ClusterJoinNode      `json:"nodelist"`
+}
+
+// ClusterJoinNode describes a cluster member in the join-info payload.
+type ClusterJoinNode struct {
+	Name        string `json:"name"`
+	Nodeid      string `json:"nodeid"`
+	QuorumVotes string `json:"quorum_votes"`
+	Ring0Addr   string `json:"ring0_addr"`
+}
+
+// GetClusterJoinInfo fetches the join parameters a new node will need.
+// Must be called against the founder (or any existing member). API token auth is fine.
+func (c *Client) GetClusterJoinInfo(ctx context.Context) (*ClusterJoinInfo, error) {
+	info, err := get[ClusterJoinInfo](c, ctx, "/cluster/config/join")
+	if err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
+// ClusterJoinRequest are params for a node joining an existing cluster.
+// The target `address` is the joining node itself; Hostname is the founder's
+// address that the joiner will contact via SSH to fetch /etc/pve bits.
+type ClusterJoinRequest struct {
+	Hostname    string // founder IP (what PVE calls "hostname" in the form)
+	Fingerprint string // founder's SSL fingerprint from GetClusterJoinInfo
+	Password    string // root@pam password — PVE requires it in the body here
+	Link0       string // joining node's ring0 addr (usually its own IP)
+	Votes       int    // optional, default 1
+	Force       bool   // false — only true if overriding an existing /etc/pve
+	Nodeid      int    // 0 = let PVE assign
+}
+
+// ClusterJoin joins the target node (at `address`) to an existing cluster.
+//
+// Must use password auth: PVE's /cluster/config/join explicitly rejects API
+// tokens. Callers authenticate via AuthenticateWithPassword first and pass the
+// resulting AuthResult in.
+//
+// Returns the task UPID. On some PVE versions the endpoint returns `null` in
+// `data` rather than a UPID; callers should treat an empty return as "join
+// accepted, watch /cluster/status on the founder" and not as an error.
+func ClusterJoin(ctx context.Context, address string, auth *AuthResult, req ClusterJoinRequest, insecure bool) (string, error) {
+	if req.Hostname == "" {
+		return "", fmt.Errorf("hostname (founder address) is required")
+	}
+	if req.Fingerprint == "" {
+		return "", fmt.Errorf("fingerprint is required")
+	}
+	if req.Password == "" {
+		return "", fmt.Errorf("password is required")
+	}
+	if auth == nil {
+		return "", fmt.Errorf("auth ticket is required (call AuthenticateWithPassword first)")
+	}
+
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure},
+	}
+	httpClient := &http.Client{
+		Transport: transport,
+		// Join rewrites /etc/pve and restarts pveproxy; the HTTP request itself
+		// commonly drops mid-response. Bound the wait generously.
+		Timeout: 240 * time.Second,
+	}
+
+	reqURL := fmt.Sprintf("https://%s/api2/json/cluster/config/join", address)
+	form := url.Values{}
+	form.Set("hostname", req.Hostname)
+	form.Set("fingerprint", req.Fingerprint)
+	form.Set("password", req.Password)
+	if req.Link0 != "" {
+		form.Set("link0", req.Link0)
+	}
+	if req.Votes > 0 {
+		form.Set("votes", fmt.Sprintf("%d", req.Votes))
+	}
+	if req.Force {
+		form.Set("force", "1")
+	}
+	if req.Nodeid > 0 {
+		form.Set("nodeid", fmt.Sprintf("%d", req.Nodeid))
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", reqURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	httpReq.Header.Set("CSRFPreventionToken", auth.CSRFToken)
+	httpReq.AddCookie(&http.Cookie{Name: "PVEAuthCookie", Value: auth.Ticket})
+
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		// pveproxy restart during join can surface as a connection reset. Caller
+		// compensates by watching the founder's /cluster/status for membership.
+		return "", fmt.Errorf("join request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read response body: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("join failed (HTTP %d): %s", resp.StatusCode, string(body))
+	}
+
+	// Response is either {"data":"UPID:..."} or {"data":null}.
+	var parsed struct {
+		Data *string `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", fmt.Errorf("parse join response: %w (body: %s)", err, string(body))
+	}
+	if parsed.Data == nil {
+		return "", nil
+	}
+	return *parsed.Data, nil
+}
+
+// WaitForTask polls /nodes/{node}/tasks/{upid}/status until the task reaches a
+// terminal state or ctx is done. Returns the final Task. If the task failed,
+// the returned error message includes the task log error (via GetTaskError).
+//
+// pollInterval is clamped to a 1s minimum.
+func (c *Client) WaitForTask(ctx context.Context, upid string, pollInterval time.Duration) (*Task, error) {
+	if upid == "" {
+		return nil, fmt.Errorf("upid is required")
+	}
+	if pollInterval < time.Second {
+		pollInterval = time.Second
+	}
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		task, err := c.GetTaskStatus(ctx, upid)
+		if err == nil && task != nil && task.Status != "running" {
+			if task.Status == "stopped" && task.ExitCode != "OK" {
+				// Non-OK exit: include log tail for context.
+				logErr := c.GetTaskError(ctx, upid)
+				if logErr != "" {
+					return task, fmt.Errorf("task %s failed: %s", task.ExitCode, logErr)
+				}
+				return task, fmt.Errorf("task %s exited with status %q", upid, task.ExitCode)
+			}
+			return task, nil
+		}
+		// Transient GetTaskStatus errors (e.g. pveproxy restart during join) are
+		// tolerated: we keep polling until ctx deadline.
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 // --- HA Operations ---
 
 // HAManagerStatus represents the HA manager from /cluster/ha/status/manager_status
