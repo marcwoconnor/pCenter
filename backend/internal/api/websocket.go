@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -61,20 +62,27 @@ func NewHub(store *state.Store, allowedOrigins []string) *Hub {
 			// CheckOrigin validates the Origin header on WebSocket upgrade requests.
 			// SECURITY: Browsers send Origin on cross-origin WS requests but do NOT
 			// enforce the server's response (unlike CORS for HTTP). So the server MUST
-			// reject unauthorized origins here. If no origins configured, we use
-			// gorilla/websocket's default behavior: require Origin == Host (same-origin).
+			// reject unauthorized origins here. If no origins are configured, require
+			// Origin host == request Host (same-origin). Browsers always send Origin,
+			// so this is what makes a fresh install work without any cors_origins config.
 			CheckOrigin: func(r *http.Request) bool {
 				origin := r.Header.Get("Origin")
 				if origin == "" {
 					return true // No origin = same-origin or non-browser client
 				}
 				if len(originSet) == 0 {
-					return false // No configured origins = reject all cross-origin
+					u, err := url.Parse(origin)
+					if err != nil || u.Host != r.Host {
+						slog.Warn("websocket origin rejected", "origin", origin)
+						return false
+					}
+					return true
 				}
 				if !originSet[origin] {
 					slog.Warn("websocket origin rejected", "origin", origin)
+					return false
 				}
-				return originSet[origin]
+				return true
 			},
 		},
 		broadcast:  make(chan []byte, 256),

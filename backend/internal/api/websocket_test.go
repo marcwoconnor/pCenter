@@ -54,6 +54,30 @@ func TestWebSocketHub_NoOrigins_AllowsSameOrigin(t *testing.T) {
 	conn.Close()
 }
 
+// TestWebSocketHub_NoOrigins_AllowsMatchingOrigin verifies that when no
+// cors_origins are configured and the browser sends an Origin whose host
+// matches the request Host, the connection is allowed (same-origin).
+// This is the fresh-install scenario covered by issue #50.
+func TestWebSocketHub_NoOrigins_AllowsMatchingOrigin(t *testing.T) {
+	store := state.New()
+	hub := NewHub(store, nil)
+	go hub.Run()
+
+	server := httptest.NewServer(http.HandlerFunc(hub.HandleWebSocket))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	headers := http.Header{}
+	// Origin host == request Host (httptest listens on 127.0.0.1:PORT)
+	headers.Set("Origin", server.URL)
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, headers)
+	if err != nil {
+		t.Fatalf("same-origin with matching Origin header should connect, got error: %v", err)
+	}
+	conn.Close()
+}
+
 // TestWebSocketHub_ConfiguredOrigin_Allowed verifies that a connection from
 // an explicitly allowed origin succeeds.
 func TestWebSocketHub_ConfiguredOrigin_Allowed(t *testing.T) {
