@@ -309,6 +309,34 @@ export interface DRSRecommendation {
   created_at: string;
 }
 
+// Storage vMotion — per-disk/volume move across storage pools.
+// Shared by VM (qemu move_disk) and CT (lxc move_volume) endpoints; `format`
+// is VM-only and `from_storage` is display-only metadata.
+export interface MoveDiskRequest {
+  disk: string;           // scsi0/virtio0/... for VM, rootfs/mp0/... for CT
+  target_storage: string;
+  delete_source: boolean;
+  format?: string;        // VM only: raw|qcow2|vmdk; empty = PVE default
+  from_storage?: string;  // optional, stored for progress display
+}
+
+export interface DiskMoveProgress {
+  upid: string;
+  cluster: string;
+  vmid: number;
+  guest_name: string;
+  guest_type: 'vm' | 'ct';
+  node: string;
+  disk: string;
+  from_storage: string;
+  to_storage: string;
+  delete_source: boolean;
+  started_at: string;
+  progress: number;
+  status: 'running' | 'completed' | 'failed';
+  error?: string;
+}
+
 export interface GlobalSummary {
   clusters: ClusterInfo[];
   total: Summary;

@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+### Added
+- **Storage vMotion frontend + OpenAPI** (closes #28). Adds the "Move Storage…" context-menu action on VMs and containers, backed by the `POST /api/clusters/{c}/vms/{id}/disk/move` and `POST /api/clusters/{c}/containers/{id}/volume/move` endpoints that shipped in c916b31. New `MoveStorageDialog` parses disk/volume keys from the guest's raw config (scsi0/virtio0/ide0/sata0 for VMs, rootfs/mpN for containers), filters target storages to those that are active and accept the right content type (`images` for VMs, `rootdir` for CTs), and submits the move via the existing backend handler. Delete-source checkbox is checked by default (matches PVE webUI). VM moves happen online (no downtime); the dialog warns and blocks LXC moves while the container is running since PVE does not support online LXC volume moves. OpenAPI spec now documents the four storage-vMotion routes (`/disk/move`, `/volume/move`, `GET /disk-moves`, `DELETE /disk-moves/{upid}`) plus `MoveDiskRequest` and `DiskMoveProgress` schemas.
+
 ## v0.1.11 — 2026-04-24
 
 ### Fixed
