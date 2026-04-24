@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+### Added
+- **OpenAPI drift-checker test** (closes #35). New `internal/api/openapi_drift_test.go` regex-extracts every route registered in `router.go` and asserts each is either documented in `openapi.yaml` or explicitly allowlisted in `testdata/openapi_drift_allowlist.txt`. Failure mode is two-sided: adding a route to `router.go` without updating the spec fails the test, and deleting a route whose allowlist entry still lingers also fails — keeping the allowlist from rotting. Seed allowlist captures the 174 routes not yet in the spec (coverage tracker #32). Chose regex over mux-instrumentation because the latter would touch 190+ `HandleFunc` call sites for no runtime benefit; Go 1.22's stdlib mux syntax is stable enough that textual extraction is the right trade. As a bonus, the test parses the same embedded `openAPIYAML` bytes the production server uses, so YAML parse errors now fail tests instead of only surfacing at runtime `init()`.
+
 ### Fixed
 - **Graceful shutdown now drains WebSockets and the webhook dispatcher** (closes #34). `main.go` had `server.Shutdown()` wired to SIGINT/SIGTERM, but `hub.Stop()` and `webhooksSvc.Stop()` existed and were never called — WebSocket clients got TCP reset instead of a 1001 close frame, and the dispatcher goroutine was relying on ctx cancellation that fired *after* its DB closed (LIFO defer ordering, which was also causing latent "database is closed" races for the poller/scheduler/metrics goroutines). New shutdown sequence: `server.Shutdown(30s)` → `hub.Stop()` → `webhooksSvc.Stop()` → `cancel()` → 200ms pause before deferred DB closes. Bumped timeout from 10s → 30s (in-flight Ceph/metric queries can exceed 10s). Second SIGINT/SIGTERM during shutdown now force-exits instead of hanging. Removed duplicate `defer webhooksDB.Close()` since `webhooksSvc.Stop()` now owns the DB lifecycle.
 
