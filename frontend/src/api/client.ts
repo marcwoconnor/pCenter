@@ -30,6 +30,7 @@ import type {
   CreateClusterRequest,
   UpdateClusterRequest,
   AddHostRequest,
+  AddHostResult,
   UpdateHostRequest,
   DatacenterTreeResponse,
   CreateVMRequest,
@@ -573,8 +574,11 @@ export const api = {
   deleteDatacenter: (id: string) =>
     fetchAPI<void>(`/datacenters/${id}`, { method: 'DELETE' }),
   getDatacenterTree: () => fetchAPI<DatacenterTreeResponse>('/datacenters/tree'),
+  // Adds a host to a datacenter. Backend probes PVE /cluster/status and
+  // auto-routes under a real cluster (creating one if needed) or as a
+  // standalone — inspect AddHostResult.standalone / cluster to know which.
   addDatacenterHost: (datacenterID: string, req: AddHostRequest) =>
-    fetchAPI<InventoryHost>(`/datacenters/${datacenterID}/hosts`, {
+    fetchAPI<AddHostResult>(`/datacenters/${datacenterID}/hosts`, {
       method: 'POST',
       body: JSON.stringify(req),
     }),

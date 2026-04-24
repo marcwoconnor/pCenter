@@ -804,6 +804,7 @@ export interface InventoryCluster {
   id: string;
   name: string;
   agent_name?: string;  // What agents report as (for matching runtime data)
+  pve_cluster_name?: string;  // Name from PVE /cluster/status; empty = not correlated to a real PVE cluster
   datacenter_id?: string;
   datacenter_name?: string;
   status: ClusterStatus;
@@ -857,6 +858,15 @@ export interface AddHostRequest {
   // Method 2: Existing token (backward compat)
   token_id?: string;
   token_secret?: string;
+}
+
+// Response from POST /api/datacenters/{id}/hosts: the backend probes
+// /cluster/status on the target and auto-routes to a cluster or standalone.
+export interface AddHostResult {
+  host: InventoryHost;
+  cluster?: InventoryCluster;          // Populated when routed under a real PVE cluster
+  detected_pve_cluster?: string;       // Cluster name reported by PVE, if any
+  standalone: boolean;
 }
 
 export interface UpdateHostRequest {

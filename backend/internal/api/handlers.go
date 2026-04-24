@@ -46,6 +46,7 @@ type Handler struct {
 	folders         *folders.Service
 	activity        *activity.Service
 	inventory       *inventory.Service
+	reconciler      *inventory.Reconciler
 	library         *library.Service
 	tags            *tags.Service
 	alarms          *alarms.Service
@@ -112,6 +113,12 @@ func (h *Handler) SetActivityService(a *activity.Service) {
 // SetInventoryService sets the inventory service for datacenter/cluster management
 func (h *Handler) SetInventoryService(inv *inventory.Service) {
 	h.inventory = inv
+}
+
+// SetReconciler wires the cluster-membership reconciler so its RunOnce can be
+// exposed via /api/inventory/reconcile for opt-in cleanup of legacy state.
+func (h *Handler) SetReconciler(r *inventory.Reconciler) {
+	h.reconciler = r
 }
 
 // SetOnChange sets a callback for state changes (broadcasts to WebSocket)
@@ -4346,7 +4353,10 @@ func (h *Handler) ListClusterHosts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, hosts)
 }
 
-// AddClusterHost adds a host to a cluster
+// AddClusterHost adds a host to a named cluster. When the cluster is
+// correlated to a real PVE cluster (pve_cluster_name set), the host's probe
+// must report the same cluster name — otherwise we'd be stuffing a standalone
+// (or a different cluster's) node into the wrong bucket.
 func (h *Handler) AddClusterHost(w http.ResponseWriter, r *http.Request) {
 	if h.inventory == nil {
 		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
@@ -4365,8 +4375,33 @@ func (h *Handler) AddClusterHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+
+	cluster, err := h.inventory.GetClusterByName(ctx, clusterName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if cluster == nil {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	// If the target cluster is correlated to a real PVE cluster, verify the
+	// incoming host agrees. This prevents silently mis-routing a standalone
+	// node (or a node from a different cluster) into this bucket.
+	if cluster.PVEClusterName != "" {
+		mismatch, probeErr := h.verifyHostInPVECluster(ctx, &req, cluster.PVEClusterName)
+		if probeErr != nil {
+			writeError(w, http.StatusBadGateway, "probe failed: "+probeErr.Error())
+			return
+		}
+		if mismatch != "" {
+			writeError(w, http.StatusConflict, "host reports PVE cluster "+mismatch+", not "+cluster.PVEClusterName)
+			return
+		}
+	}
 
 	host, err := h.inventory.AddHostByClusterName(ctx, clusterName, req)
 	if err != nil {
@@ -4389,7 +4424,10 @@ func (h *Handler) AddClusterHost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, host)
 }
 
-// AddDatacenterHost adds a standalone host directly to a datacenter
+// AddDatacenterHost adds a host to a datacenter. It auto-detects whether the
+// target PVE node is part of a real cluster (via /cluster/status probe) and
+// routes accordingly: real cluster → create/attach pcenter cluster; standalone
+// → file directly under the datacenter.
 func (h *Handler) AddDatacenterHost(w http.ResponseWriter, r *http.Request) {
 	if h.inventory == nil {
 		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
@@ -4411,25 +4449,41 @@ func (h *Handler) AddDatacenterHost(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	host, tokenSecret, err := h.inventory.AddDatacenterHost(ctx, datacenterID, req)
+	result, tokenSecret, err := h.inventory.AddHostAutoRoute(ctx, datacenterID, req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	// For standalone hosts: store secret, test connection, auto-activate, start polling
+	host := result.Host
+
+	// Wire up polling. For real clusters we use the cluster's name as the
+	// poller key; for standalones we use the legacy "standalone:<id>" key so
+	// the rest of the system continues to treat them as pseudo-clusters.
 	if tokenSecret != "" && h.secrets != nil {
-		secretKey := "standalone:" + host.ID
+		var secretKey string
+		if result.Standalone {
+			secretKey = "standalone:" + host.ID
+		} else {
+			secretKey = result.Cluster.AgentName
+			if secretKey == "" {
+				secretKey = result.Cluster.Name
+			}
+		}
 		h.secrets[secretKey] = tokenSecret
 
-		// Test connection and activate
-		result := h.testPVEConnection(ctx, host.Address, host.TokenID, tokenSecret, host.Insecure)
-		if result.Success {
-			h.inventory.SetHostStatus(ctx, host.ID, inventory.HostStatusOnline, "", result.NodeName)
+		connTest := h.testPVEConnection(ctx, host.Address, host.TokenID, tokenSecret, host.Insecure)
+		if connTest.Success {
+			h.inventory.SetHostStatus(ctx, host.ID, inventory.HostStatusOnline, "", connTest.NodeName)
 			host.Status = inventory.HostStatusOnline
-			host.NodeName = result.NodeName
+			host.NodeName = connTest.NodeName
 
-			// Start polling immediately
+			// Mark the pcenter cluster active now that its first host is online.
+			if !result.Standalone && result.Cluster != nil {
+				h.inventory.SetClusterStatus(ctx, result.Cluster.ID, inventory.ClusterStatusActive)
+				result.Cluster.Status = inventory.ClusterStatusActive
+			}
+
 			if h.poller != nil {
 				cfg := config.ClusterConfig{
 					Name:          secretKey,
@@ -4439,28 +4493,39 @@ func (h *Handler) AddDatacenterHost(w http.ResponseWriter, r *http.Request) {
 					Insecure:      host.Insecure,
 				}
 				h.poller.AddCluster(cfg)
-				slog.Info("started polling standalone host", "address", host.Address, "node", result.NodeName)
+				if result.Standalone {
+					slog.Info("started polling standalone host", "address", host.Address, "node", connTest.NodeName)
+				} else {
+					slog.Info("started polling cluster", "cluster", result.Cluster.Name, "pve_cluster", result.DetectedPVECluster, "address", host.Address)
+				}
 			}
 		} else {
-			h.inventory.SetHostStatus(ctx, host.ID, inventory.HostStatusError, result.Message, "")
+			h.inventory.SetHostStatus(ctx, host.ID, inventory.HostStatusError, connTest.Message, "")
 			host.Status = inventory.HostStatusError
-			host.Error = result.Message
+			host.Error = connTest.Message
 		}
 	}
 
 	// Log activity
 	if h.activity != nil {
+		details := "standalone host"
+		var clusterName string
+		if !result.Standalone && result.Cluster != nil {
+			details = "host in PVE cluster " + result.DetectedPVECluster
+			clusterName = result.Cluster.Name
+		}
 		h.activity.Log(activity.Entry{
 			Action:       "host_add",
 			ResourceType: "host",
 			ResourceID:   host.ID,
 			ResourceName: req.Address,
-			Details:      "standalone host",
+			Cluster:      clusterName,
+			Details:      details,
 		})
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, host)
+	writeJSON(w, result)
 }
 
 // GetHost returns a host by ID
@@ -4676,6 +4741,80 @@ func (h *Handler) TestHostConnection(w http.ResponseWriter, r *http.Request) {
 
 	result := h.testPVEConnection(ctx, req.Address, req.TokenID, req.TokenSecret, req.Insecure)
 	writeJSON(w, result)
+}
+
+// ReconcileInventory runs the opt-in legacy-cluster cleanup pass.
+//
+// For each pcenter cluster that has no pve_cluster_name (typically migrated
+// from the old "everything is a cluster" config format), the host is probed
+// and either: (a) the cluster is correlated with the real PVE cluster name;
+// (b) a single-host "fake" cluster is demoted to a standalone under its
+// datacenter; or (c) the cluster is left alone.
+//
+// The response summarizes what changed so the UI can show the user exactly
+// which records moved.
+func (h *Handler) ReconcileInventory(w http.ResponseWriter, r *http.Request) {
+	if h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "inventory not enabled")
+		return
+	}
+	if h.reconciler == nil {
+		writeError(w, http.StatusServiceUnavailable, "reconciler not enabled")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	result, err := h.reconciler.ReconcileLegacy(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if h.activity != nil {
+		h.activity.Log(activity.Entry{
+			Action:       "inventory_reconcile",
+			ResourceType: "inventory",
+			Details: fmt.Sprintf("correlated=%d demoted=%d deleted=%d errors=%d",
+				len(result.CorrelatedClusters), len(result.DemotedHosts),
+				len(result.DeletedClusters), len(result.Errors)),
+		})
+	}
+
+	writeJSON(w, result)
+}
+
+// verifyHostInPVECluster probes the incoming host and returns "" if the host
+// belongs to the expected PVE cluster, or the conflicting PVE cluster name
+// (which may be empty for a standalone) if it doesn't. Credentials default to
+// existing token fields; if username/password were supplied instead we can't
+// probe pre-add without creating a token, so the caller skips verification in
+// that case (password flow is routed through AddHostAutoRoute anyway).
+func (h *Handler) verifyHostInPVECluster(ctx context.Context, req *inventory.AddHostRequest, expectedPVEName string) (string, error) {
+	if req.TokenID == "" || req.TokenSecret == "" {
+		// Password-only flow: skip verification; auto-route (on Add to
+		// Datacenter) is the canonical safe path for that case.
+		return "", nil
+	}
+	cfg := config.ClusterConfig{
+		DiscoveryNode: req.Address,
+		TokenID:       req.TokenID,
+		TokenSecret:   req.TokenSecret,
+		Insecure:      req.Insecure,
+	}
+	client := pve.NewClientFromClusterConfig(cfg)
+	membership, err := client.ProbeClusterMembership(ctx)
+	if err != nil {
+		return "", err
+	}
+	if !membership.IsCluster {
+		return "(standalone)", nil
+	}
+	if membership.ClusterName != expectedPVEName {
+		return membership.ClusterName, nil
+	}
+	return "", nil
 }
 
 // testPVEConnection tests connectivity to a Proxmox host and returns result

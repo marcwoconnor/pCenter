@@ -437,6 +437,9 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	// Host connection testing
 	protectedMux.HandleFunc("POST /api/inventory/test-connection", h.TestHostConnection)
 
+	// Opt-in reconciliation for legacy clusters predating the PVE-correlation model.
+	protectedMux.HandleFunc("POST /api/inventory/reconcile", h.ReconcileInventory)
+
 	// Wrap protected routes with auth middleware (if auth is enabled)
 	if authSvc != nil {
 		mux.Handle("/api/", authSvc.RequireAuth(authSvc.RequireFullAuth(protectedMux)))

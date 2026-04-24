@@ -46,13 +46,23 @@ cat > "${PKG_DIR}/etc/pcenter/config.yaml" << 'CONF'
 # Edit this file, then restart: systemctl restart pcenter
 #
 # Full reference: https://github.com/marcwoconnor/pCenter#configuration-reference
-
-clusters:
-  - name: default
-    discovery_node: "YOUR_PROXMOX_IP:8006"    # Change this
-    token_id: "root@pam!pcenter"              # Change this
-    token_secret: "${PVE_TOKEN_SECRET}"        # Set in /etc/pcenter/env or change this
-    insecure: true
+#
+# Fresh installs start with an empty inventory. Add your first datacenter and
+# Proxmox host through the web UI after pCenter is running — it will auto-detect
+# whether the host is part of a real PVE cluster (via /cluster/status) and file
+# it under a pcenter cluster or as a standalone accordingly.
+#
+# Legacy bootstrap: if you prefer to seed hosts from config, uncomment the
+# clusters: block below. Each entry is probed on first start; real PVE clusters
+# become pcenter clusters, standalone nodes become standalone hosts under
+# the auto-created "Default" datacenter.
+#
+# clusters:
+#   - name: legacy-bootstrap
+#     discovery_node: "YOUR_PROXMOX_IP:8006"
+#     token_id: "root@pam!pcenter"
+#     token_secret: "${PVE_TOKEN_SECRET}"
+#     insecure: true
 
 poller:
   enabled: true   # Set to false to disable background polling (dashboard will be empty)

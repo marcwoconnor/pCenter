@@ -39,14 +39,15 @@ type Datacenter struct {
 
 // Cluster represents a Proxmox cluster (container for hosts)
 type Cluster struct {
-	ID           string        `json:"id"`
-	Name         string        `json:"name"`                        // Display name (user-editable)
-	AgentName    string        `json:"agent_name,omitempty"`        // Name agents report (for matching runtime data)
-	DatacenterID *string       `json:"datacenter_id,omitempty"`     // nil = orphan cluster
-	Status       ClusterStatus `json:"status"`                      // empty, pending, active, error
-	Enabled      bool          `json:"enabled"`                     // polling enabled
-	CreatedAt    time.Time     `json:"created_at"`
-	UpdatedAt    time.Time     `json:"updated_at"`
+	ID             string        `json:"id"`
+	Name           string        `json:"name"`                        // Display name (user-editable)
+	AgentName      string        `json:"agent_name,omitempty"`        // Name agents report (for matching runtime data)
+	PVEClusterName string        `json:"pve_cluster_name,omitempty"`  // Name reported by PVE /cluster/status; empty = not correlated to a real PVE cluster
+	DatacenterID   *string       `json:"datacenter_id,omitempty"`     // nil = orphan cluster
+	Status         ClusterStatus `json:"status"`                      // empty, pending, active, error
+	Enabled        bool          `json:"enabled"`                     // polling enabled
+	CreatedAt      time.Time     `json:"created_at"`
+	UpdatedAt      time.Time     `json:"updated_at"`
 
 	// Computed fields for responses
 	DatacenterName string          `json:"datacenter_name,omitempty"`
@@ -83,8 +84,9 @@ type UpdateDatacenterRequest struct {
 
 // CreateClusterRequest is the request body for creating a cluster
 type CreateClusterRequest struct {
-	Name         string  `json:"name"`
-	DatacenterID *string `json:"datacenter_id,omitempty"`
+	Name           string  `json:"name"`
+	DatacenterID   *string `json:"datacenter_id,omitempty"`
+	PVEClusterName string  `json:"pve_cluster_name,omitempty"` // Set when auto-created from a real PVE cluster probe
 }
 
 // UpdateClusterRequest is the request body for updating a cluster
@@ -134,4 +136,15 @@ type TestConnectionResult struct {
 	NodeName  string   `json:"node_name,omitempty"`
 	NodeCount int      `json:"node_count,omitempty"`
 	Nodes     []string `json:"nodes,omitempty"`
+}
+
+// AddHostResult is the response body for AddHost auto-route endpoints.
+// When PVE reports the host is in a real cluster, Cluster is populated
+// (created or attached). When standalone, Cluster is nil and the host is
+// filed directly under the datacenter.
+type AddHostResult struct {
+	Host              *InventoryHost `json:"host"`
+	Cluster           *Cluster       `json:"cluster,omitempty"`
+	DetectedPVECluster string        `json:"detected_pve_cluster,omitempty"` // Name reported by PVE, if any
+	Standalone        bool           `json:"standalone"`
 }
