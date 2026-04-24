@@ -4,15 +4,16 @@ import "time"
 
 // Endpoint is an outbound webhook destination.
 type Endpoint struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	URL         string    `json:"url"`
-	Events      []string  `json:"events"` // empty/nil = all events
-	Enabled     bool      `json:"enabled"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	LastFiredAt time.Time `json:"last_fired_at,omitempty"`
-	LastStatus  string    `json:"last_status,omitempty"` // "success", "failure", or ""
+	ID                  string    `json:"id"`
+	Name                string    `json:"name"`
+	URL                 string    `json:"url"`
+	Events              []string  `json:"events"` // empty/nil = all events
+	Enabled             bool      `json:"enabled"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
+	LastFiredAt         time.Time `json:"last_fired_at,omitempty"`
+	LastStatus          string    `json:"last_status,omitempty"`          // "success", "failure", "auto_disabled", or ""
+	ConsecutiveFailures int       `json:"consecutive_failures,omitempty"` // reset to 0 on any successful delivery
 }
 
 // CreateRequest is the payload for creating an endpoint.

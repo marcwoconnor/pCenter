@@ -123,10 +123,14 @@ func (d *Dispatcher) deliver(ctx context.Context, e Event, t dispatchTarget) {
 			"attempt", attempt+1, "err", err)
 	}
 
-	d.db.RecordDelivery(t.endpointID, false, time.Now())
+	disabled, failures := d.db.RecordDelivery(t.endpointID, false, time.Now())
 	d.logger.Error("webhook gave up",
 		"endpoint", t.endpointID, "event", e.Event,
-		"attempts", attempts, "err", lastErr)
+		"attempts", attempts, "consecutive_failures", failures, "err", lastErr)
+	if disabled {
+		d.logger.Warn("webhook endpoint auto-disabled after consecutive failures",
+			"endpoint", t.endpointID, "threshold", AutoDisableThreshold)
+	}
 }
 
 // attempt performs a single POST. Returns error if the request failed or

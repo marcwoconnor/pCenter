@@ -55,7 +55,43 @@ func (db *DB) migrate() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_webhook_endpoints_enabled ON webhook_endpoints(enabled);
 	`
-	_, err := db.conn.Exec(schema)
+	if _, err := db.conn.Exec(schema); err != nil {
+		return err
+	}
+	// Schema evolution: consecutive_failures for auto-disable (#39). Added
+	// separately because ALTER TABLE...ADD COLUMN IF NOT EXISTS isn't
+	// supported by SQLite; we PRAGMA table_info and branch on presence.
+	if err := db.addColumnIfMissing("webhook_endpoints", "consecutive_failures", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("add consecutive_failures: %w", err)
+	}
+	return nil
+}
+
+// addColumnIfMissing is a SQLite-safe `ADD COLUMN IF NOT EXISTS`. SQLite's
+// own syntax lacks the IF NOT EXISTS form for ADD COLUMN, so we inspect
+// PRAGMA table_info and only run the ALTER when the column is absent.
+func (db *DB) addColumnIfMissing(table, column, colDef string) error {
+	rows, err := db.conn.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dfltValue sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.conn.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, colDef))
 	return err
 }
 
@@ -76,9 +112,10 @@ func scanRow(scanner interface {
 	var lastFired sql.NullInt64
 	var lastStatus sql.NullString
 	var enabled int
+	var consecutiveFailures int
 	if err := scanner.Scan(
 		&r.ID, &r.Name, &r.URL, &eventsJSON, &r.SecretEncrypted,
-		&enabled, &createdAt, &updatedAt, &lastFired, &lastStatus,
+		&enabled, &createdAt, &updatedAt, &lastFired, &lastStatus, &consecutiveFailures,
 	); err != nil {
 		return nil, err
 	}
@@ -96,10 +133,11 @@ func scanRow(scanner interface {
 	if lastStatus.Valid {
 		r.LastStatus = lastStatus.String
 	}
+	r.ConsecutiveFailures = consecutiveFailures
 	return &r, nil
 }
 
-const selectCols = `id, name, url, events, secret_encrypted, enabled, created_at, updated_at, last_fired_at, last_status`
+const selectCols = `id, name, url, events, secret_encrypted, enabled, created_at, updated_at, last_fired_at, last_status, consecutive_failures`
 
 // List returns all endpoints.
 func (db *DB) List() ([]*endpointRow, error) {
@@ -165,9 +203,9 @@ func (db *DB) Insert(r *endpointRow) error {
 		enabled = 1
 	}
 	_, err = db.conn.Exec(
-		`INSERT INTO webhook_endpoints (`+selectCols+`) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO webhook_endpoints (`+selectCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 		r.ID, r.Name, r.URL, string(eventsJSON), r.SecretEncrypted,
-		enabled, r.CreatedAt.Unix(), r.UpdatedAt.Unix(), nil, nil,
+		enabled, r.CreatedAt.Unix(), r.UpdatedAt.Unix(), nil, nil, 0,
 	)
 	return err
 }
@@ -219,21 +257,77 @@ func (db *DB) Delete(id string) error {
 	return nil
 }
 
+// AutoDisableThreshold is the consecutive-failure count at which an endpoint
+// is marked disabled. Set low enough to stop spamming a broken receiver but
+// high enough to ride through brief outages (a few minutes of retries).
+//
+// With the current retry schedule (5s / 30s / 2min for each delivery), 10
+// consecutive *full* failures represents at least ~25 minutes of sustained
+// breakage — well past a transient blip but short enough that a misconfigured
+// endpoint gets flagged the same day.
+const AutoDisableThreshold = 10
+
 // RecordDelivery updates last_fired_at + last_status after a dispatch attempt.
-func (db *DB) RecordDelivery(id string, success bool, when time.Time) {
+// On success it resets consecutive_failures to 0.
+// On failure it increments consecutive_failures; when the counter reaches
+// AutoDisableThreshold the endpoint is disabled and last_status is set to
+// "auto_disabled" so the UI can explain why.
+//
+// Returns (autoDisabled, newFailureCount) so the caller can log the
+// transition explicitly. autoDisabled is true only on the single call that
+// tipped the counter over the threshold.
+func (db *DB) RecordDelivery(id string, success bool, when time.Time) (autoDisabled bool, failures int) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	status := "failure"
 	if success {
-		status = "success"
+		if _, err := db.conn.Exec(
+			`UPDATE webhook_endpoints
+			 SET last_fired_at=?, last_status='success', consecutive_failures=0
+			 WHERE id=?`,
+			when.Unix(), id,
+		); err != nil {
+			slog.Warn("webhook: failed to record delivery", "id", id, "err", err)
+		}
+		return false, 0
 	}
-	if _, err := db.conn.Exec(
-		`UPDATE webhook_endpoints SET last_fired_at=?, last_status=? WHERE id=?`,
-		when.Unix(), status, id,
-	); err != nil {
+
+	// Failure: increment counter in SQL, then read back the new value and
+	// decide if we've just crossed the threshold.
+	row := db.conn.QueryRow(
+		`UPDATE webhook_endpoints
+		 SET last_fired_at=?, last_status='failure', consecutive_failures=consecutive_failures+1
+		 WHERE id=?
+		 RETURNING consecutive_failures`,
+		when.Unix(), id,
+	)
+	var newCount int
+	if err := row.Scan(&newCount); err != nil {
 		slog.Warn("webhook: failed to record delivery", "id", id, "err", err)
+		return false, 0
 	}
+
+	if newCount < AutoDisableThreshold {
+		return false, newCount
+	}
+
+	// Tipped over — mark the row disabled + status auto_disabled. Guarded by
+	// `enabled=1` so repeat calls after disable (unusual but possible if a
+	// job was already in-flight when disable happened) don't re-trigger the
+	// disable path. Caller's logging branches on the returned bool, which
+	// must reflect whether this specific call transitioned the state.
+	res, err := db.conn.Exec(
+		`UPDATE webhook_endpoints
+		 SET enabled=0, last_status='auto_disabled'
+		 WHERE id=? AND enabled=1`,
+		id,
+	)
+	if err != nil {
+		slog.Warn("webhook: failed to auto-disable endpoint", "id", id, "err", err)
+		return false, newCount
+	}
+	affected, _ := res.RowsAffected()
+	return affected > 0, newCount
 }
 
 // sanitizeName returns a non-empty display name.

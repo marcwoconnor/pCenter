@@ -332,3 +332,157 @@ func newTestDB(t *testing.T) *DB {
 	}
 	return db
 }
+
+// insertTestEndpoint seeds an enabled endpoint for RecordDelivery tests.
+func insertTestEndpoint(t *testing.T, db *DB, id string) {
+	t.Helper()
+	row := &endpointRow{
+		Endpoint: Endpoint{
+			ID:        id,
+			Name:      "t",
+			URL:       "https://example.com/h",
+			Events:    []string{"vm.create"},
+			Enabled:   true,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+		SecretEncrypted: "plain-secret",
+	}
+	if err := db.Insert(row); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+}
+
+func TestRecordDelivery_SuccessResetsCounter(t *testing.T) {
+	db := newTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	insertTestEndpoint(t, db, "ep-1")
+
+	// Build up some failures.
+	for i := 0; i < 3; i++ {
+		disabled, count := db.RecordDelivery("ep-1", false, time.Now())
+		if disabled {
+			t.Fatalf("unexpected auto-disable at %d failures", i+1)
+		}
+		if count != i+1 {
+			t.Errorf("after %d failures, count = %d, want %d", i+1, count, i+1)
+		}
+	}
+
+	// Success wipes the counter.
+	disabled, count := db.RecordDelivery("ep-1", true, time.Now())
+	if disabled {
+		t.Error("success should never auto-disable")
+	}
+	if count != 0 {
+		t.Errorf("success count = %d, want 0", count)
+	}
+
+	row, err := db.Get("ep-1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if row.ConsecutiveFailures != 0 {
+		t.Errorf("persisted counter = %d, want 0", row.ConsecutiveFailures)
+	}
+	if row.LastStatus != "success" {
+		t.Errorf("last_status = %q, want success", row.LastStatus)
+	}
+}
+
+func TestRecordDelivery_AutoDisableAtThreshold(t *testing.T) {
+	db := newTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	insertTestEndpoint(t, db, "ep-2")
+
+	// Push the counter to threshold-1 — still enabled.
+	for i := 0; i < AutoDisableThreshold-1; i++ {
+		disabled, _ := db.RecordDelivery("ep-2", false, time.Now())
+		if disabled {
+			t.Fatalf("auto-disabled too early at failure %d", i+1)
+		}
+	}
+	row, err := db.Get("ep-2")
+	if err != nil || !row.Enabled {
+		t.Fatalf("expected still-enabled at threshold-1; enabled=%v err=%v", row != nil && row.Enabled, err)
+	}
+
+	// The next failure tips it over.
+	disabled, count := db.RecordDelivery("ep-2", false, time.Now())
+	if !disabled {
+		t.Error("expected auto-disable on threshold failure")
+	}
+	if count != AutoDisableThreshold {
+		t.Errorf("count at tip = %d, want %d", count, AutoDisableThreshold)
+	}
+	row, err = db.Get("ep-2")
+	if err != nil {
+		t.Fatalf("get after disable: %v", err)
+	}
+	if row.Enabled {
+		t.Error("endpoint should be disabled after threshold")
+	}
+	if row.LastStatus != "auto_disabled" {
+		t.Errorf("last_status = %q, want auto_disabled", row.LastStatus)
+	}
+
+	// Further failures don't re-trigger the disable path (idempotent).
+	disabled, _ = db.RecordDelivery("ep-2", false, time.Now())
+	if disabled {
+		t.Error("auto-disable should only fire once per breakage streak")
+	}
+}
+
+func TestRecordDelivery_DisabledEndpointNotListedForDispatch(t *testing.T) {
+	db := newTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	insertTestEndpoint(t, db, "ep-3")
+
+	// Force auto-disable by blasting past the threshold.
+	for i := 0; i < AutoDisableThreshold; i++ {
+		db.RecordDelivery("ep-3", false, time.Now())
+	}
+
+	enabled, err := db.ListEnabled()
+	if err != nil {
+		t.Fatalf("ListEnabled: %v", err)
+	}
+	for _, r := range enabled {
+		if r.ID == "ep-3" {
+			t.Error("auto-disabled endpoint should not appear in ListEnabled")
+		}
+	}
+}
+
+// TestSchemaMigration_AddConsecutiveFailures verifies that opening a DB whose
+// schema predates the #39 column upgrades cleanly instead of failing. We
+// simulate an old DB by creating the table without the new column, then
+// calling Open() which runs migrate() and should add the column.
+func TestSchemaMigration_AddConsecutiveFailures(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+
+	// Seed a "legacy" DB by opening once with the current code then dropping
+	// the column — simpler than re-implementing the old schema inline, and
+	// exercises the same codepath that would run on a real upgrade.
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("initial open: %v", err)
+	}
+	if _, err := db.conn.Exec(`ALTER TABLE webhook_endpoints DROP COLUMN consecutive_failures`); err != nil {
+		t.Skipf("this SQLite build doesn't support DROP COLUMN (%v); migration still covered by real upgrade paths", err)
+	}
+	db.Close()
+
+	// Re-open: migrate() must detect the missing column and re-add it.
+	db2, err := Open(path)
+	if err != nil {
+		t.Fatalf("re-open with legacy schema: %v", err)
+	}
+	t.Cleanup(func() { db2.Close() })
+
+	// Insert + record must now succeed through the full path.
+	insertTestEndpoint(t, db2, "legacy")
+	if _, count := db2.RecordDelivery("legacy", false, time.Now()); count != 1 {
+		t.Errorf("counter after first failure on migrated DB = %d, want 1", count)
+	}
+}
