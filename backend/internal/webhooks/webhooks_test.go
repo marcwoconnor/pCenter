@@ -55,22 +55,49 @@ func TestSignTamperedBodyFailsVerification(t *testing.T) {
 
 func TestMatches(t *testing.T) {
 	cases := []struct {
+		name   string
 		filter []string
 		event  string
 		want   bool
 	}{
-		{nil, "vm.create", true},                               // nil filter = all
-		{[]string{}, "vm.create", true},                        // empty filter = all
-		{[]string{"vm.create"}, "vm.create", true},             // exact match
-		{[]string{"vm.create", "vm.delete"}, "vm.delete", true},
-		{[]string{"vm.create"}, "vm.delete", false},            // wrong event
-		{[]string{"VM.CREATE"}, "vm.create", true},             // case-insensitive
-		{[]string{"ct.start"}, "vm.start", false},              // wrong resource
+		{"nil filter = all", nil, "vm.create", true},
+		{"empty filter = all", []string{}, "vm.create", true},
+		{"exact match", []string{"vm.create"}, "vm.create", true},
+		{"multiple filters match one", []string{"vm.create", "vm.delete"}, "vm.delete", true},
+		{"wrong event", []string{"vm.create"}, "vm.delete", false},
+		{"case-insensitive exact", []string{"VM.CREATE"}, "vm.create", true},
+		{"wrong resource", []string{"ct.start"}, "vm.start", false},
+
+		// Wildcards — suffix (per-resource "all actions")
+		{"vm.* matches vm.create", []string{"vm.*"}, "vm.create", true},
+		{"vm.* matches vm.delete", []string{"vm.*"}, "vm.delete", true},
+		{"vm.* rejects ct.create", []string{"vm.*"}, "ct.create", false},
+
+		// Wildcards — prefix (per-action "across resources")
+		{"*.migrate matches vm.migrate", []string{"*.migrate"}, "vm.migrate", true},
+		{"*.migrate matches ct.migrate", []string{"*.migrate"}, "ct.migrate", true},
+		{"*.migrate rejects vm.create", []string{"*.migrate"}, "vm.create", false},
+
+		// Wildcards — multiple components
+		{"*.* matches two-component event", []string{"*.*"}, "vm.create", true},
+		{"*.* rejects one-component event", []string{"*.*"}, "singleton", false},
+		{"bare * does NOT match two-component (documented)", []string{"*"}, "vm.create", false},
+
+		// Wildcards — case-insensitive
+		{"VM.* matches vm.create", []string{"VM.*"}, "vm.create", true},
+		{"*.MIGRATE matches vm.migrate", []string{"*.MIGRATE"}, "vm.migrate", true},
+
+		// Mixing exact + wildcard entries
+		{"exact+wildcard: exact wins", []string{"vm.create", "ct.*"}, "vm.create", true},
+		{"exact+wildcard: wildcard wins", []string{"vm.create", "ct.*"}, "ct.migrate", true},
+		{"exact+wildcard: neither matches", []string{"vm.create", "ct.*"}, "folder.rename", false},
 	}
 	for _, tc := range cases {
-		if got := matches(tc.filter, tc.event); got != tc.want {
-			t.Errorf("matches(%v, %q) = %v, want %v", tc.filter, tc.event, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if got := matches(tc.filter, tc.event); got != tc.want {
+				t.Errorf("matches(%v, %q) = %v, want %v", tc.filter, tc.event, got, tc.want)
+			}
+		})
 	}
 }
 

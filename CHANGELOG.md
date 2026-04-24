@@ -7,6 +7,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 ## Unreleased
 
 ### Added
+- **Webhook event filters now support per-component wildcards** (closes #38). `vm.*` matches every VM action, `*.migrate` matches migrations across resource types, `*.*` matches any two-component event. Bare `*` does NOT match a two-component event (component counts must agree — documented in `matches()` and in the OpenAPI `events` field description). Case-insensitive. Mixing exact + wildcard entries in one filter works as expected. 14 new sub-tests in `webhooks_test.go::TestMatches` cover the matrix.
 - **OpenAPI drift-checker test** (closes #35). New `internal/api/openapi_drift_test.go` regex-extracts every route registered in `router.go` and asserts each is either documented in `openapi.yaml` or explicitly allowlisted in `testdata/openapi_drift_allowlist.txt`. Failure mode is two-sided: adding a route to `router.go` without updating the spec fails the test, and deleting a route whose allowlist entry still lingers also fails — keeping the allowlist from rotting. Seed allowlist captures the 174 routes not yet in the spec (coverage tracker #32). Chose regex over mux-instrumentation because the latter would touch 190+ `HandleFunc` call sites for no runtime benefit; Go 1.22's stdlib mux syntax is stable enough that textual extraction is the right trade. As a bonus, the test parses the same embedded `openAPIYAML` bytes the production server uses, so YAML parse errors now fail tests instead of only surfacing at runtime `init()`.
 
 ### Fixed

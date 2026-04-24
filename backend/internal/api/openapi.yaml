@@ -870,6 +870,11 @@ components:
             Dotted event names (e.g. `vm.create`, `ct.migrate`). An empty array
             means the endpoint receives **all** events. Event names are derived
             from the activity log's `resource_type.action`.
+
+            Per-component wildcards are supported: `vm.*` matches every VM
+            action, `*.migrate` matches migrations across resource types, and
+            `*.*` matches any two-component event. A bare `*` does NOT match
+            a two-component event (component counts must agree).
         enabled: { type: boolean }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
