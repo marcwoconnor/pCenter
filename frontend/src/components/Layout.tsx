@@ -253,12 +253,22 @@ export function Layout({ children, sidebar }: LayoutProps) {
           <span>
             No Proxmox hosts connected yet. Add one to start managing nodes, VMs, and containers.
           </span>
-          <NavLink
-            to="/hosts"
+          <button
+            type="button"
+            onClick={() => {
+              const fire = () => window.dispatchEvent(new Event('pcenter:add-host'));
+              if (location.pathname !== '/hosts') {
+                navigate('/hosts');
+                // InventoryTree subscribes on mount; wait a tick so the listener is attached.
+                setTimeout(fire, 0);
+              } else {
+                fire();
+              }
+            }}
             className="ml-4 px-3 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium"
           >
             Add a host →
-          </NavLink>
+          </button>
         </div>
       ) : error ? (
         <div className="bg-yellow-500 text-yellow-900 px-4 py-2 text-sm flex-shrink-0">

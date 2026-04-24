@@ -277,6 +277,9 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
   const [createContainerDialog, setCreateContainerDialog] = useState<{ cluster: string; node: string } | null>(null);
   const [sshSetupDialog, setSshSetupDialog] = useState<{ hostId: string; hostAddress: string } | null>(null);
   const [deployingAgent, setDeployingAgent] = useState<string | null>(null); // hostId being deployed
+  // When true, the next successfully-created datacenter auto-chains into the Add Host dialog.
+  // Used by the "Add Host" root-menu item and the top banner when no datacenter exists yet.
+  const [chainAddHostAfterDC, setChainAddHostAfterDC] = useState(false);
 
   const filterLower = filter.toLowerCase();
 
@@ -296,6 +299,27 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
       fetchDatacenterTree();
     }
   }, [view, fetchDatacenterTree]);
+
+  // Unified "Add Host" entry point — used by the root context menu and the top banner.
+  // Fresh install (0 datacenters): create a datacenter first, then chain into Add Host.
+  // Otherwise: open Add Host scoped to the first datacenter (user can right-click a specific one to target).
+  const handleAddHostIntent = useCallback(() => {
+    if (datacenters.length === 0) {
+      setChainAddHostAfterDC(true);
+      setDatacenterDialog({ mode: 'create-dc' });
+    } else {
+      const dc = datacenters[0];
+      setAddHostDialog({ mode: 'datacenter', datacenterId: dc.id, datacenterName: dc.name });
+    }
+  }, [datacenters]);
+
+  // Let non-tree UI (e.g. the top banner in Layout) trigger the Add Host flow.
+  useEffect(() => {
+    if (view !== 'hosts') return;
+    const handler = () => handleAddHostIntent();
+    window.addEventListener('pcenter:add-host', handler);
+    return () => window.removeEventListener('pcenter:add-host', handler);
+  }, [view, handleAddHostIntent]);
 
   // Collect all resource IDs that are in folders (to exclude from default lists)
   const collectFolderMembers = (folders: Folder[]): Set<string> => {
@@ -960,6 +984,12 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
   const getRootHostsMenuItems = (): MenuItem[] => {
     return [
       {
+        label: 'Add Host',
+        icon: '🖥️',
+        action: handleAddHostIntent,
+      },
+      { label: '', action: () => {}, divider: true },
+      {
         label: 'New Folder',
         icon: '📁',
         action: () => setFolderDialog({ mode: 'create', treeView: 'hosts' }),
@@ -1434,11 +1464,20 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
             cluster={datacenterDialog.cluster}
             parentDatacenterId={datacenterDialog.parentDatacenterId}
             datacenters={datacenters}
-            onSubmit={async () => {
+            onSubmit={async (created) => {
+              const shouldChain = chainAddHostAfterDC && datacenterDialog.mode === 'create-dc';
+              setChainAddHostAfterDC(false);
               setDatacenterDialog(null);
               await fetchDatacenterTree();
+              if (shouldChain && created && 'name' in created) {
+                const dc = created as Datacenter;
+                setAddHostDialog({ mode: 'datacenter', datacenterId: dc.id, datacenterName: dc.name });
+              }
             }}
-            onClose={() => setDatacenterDialog(null)}
+            onClose={() => {
+              setChainAddHostAfterDC(false);
+              setDatacenterDialog(null);
+            }}
           />
         )}
         {addHostDialog && (

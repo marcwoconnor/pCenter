@@ -41,18 +41,19 @@ chmod 755 "${PKG_DIR}/opt/pcenter/pcenter"
 cp -r frontend/dist/* "${PKG_DIR}/opt/pcenter/frontend/"
 
 # Default config
+# Intentionally ships with no `clusters:` stanza: a fresh Proxmox install has no
+# cluster and no API token yet, so pre-filling this file would leave new users
+# editing placeholder values before they can even start the service. Instead,
+# the service boots clean and users add their first host through the UI, which
+# authenticates with username/password and auto-creates an API token.
 cat > "${PKG_DIR}/etc/pcenter/config.yaml" << 'CONF'
 # pCenter Configuration
 # Edit this file, then restart: systemctl restart pcenter
 #
 # Full reference: https://github.com/marcwoconnor/pCenter#configuration-reference
-
-clusters:
-  - name: default
-    discovery_node: "YOUR_PROXMOX_IP:8006"    # Change this
-    token_id: "root@pam!pcenter"              # Change this
-    token_secret: "${PVE_TOKEN_SECRET}"        # Set in /etc/pcenter/env or change this
-    insecure: true
+#
+# Hosts are configured through the web UI (Hosts & Clusters → Add a host),
+# not in this file. The section below covers server/storage settings only.
 
 poller:
   enabled: true   # Set to false to disable background polling (dashboard will be empty)
@@ -176,16 +177,16 @@ echo "  pCenter installed successfully!"
 echo "=========================================="
 echo ""
 echo "  Next steps:"
-echo "  1. Edit /etc/pcenter/config.yaml"
-echo "     - Set your Proxmox IP and API token"
+echo "  1. Start pCenter:"
+echo "       systemctl start pcenter"
 echo ""
-echo "  2. (Optional) Set token secret in /etc/pcenter/env:"
-echo "     PVE_TOKEN_SECRET=your-secret-here"
+echo "  2. Open http://$(hostname -I | awk '{print $1}'):8080"
 echo ""
-echo "  3. Start pCenter:"
-echo "     systemctl start pcenter"
+echo "  3. Register the first user (becomes admin)."
 echo ""
-echo "  4. Open http://$(hostname -I | awk '{print $1}'):8080"
+echo "  4. In the UI, click 'Add a host' and enter"
+echo "     your Proxmox address + root password."
+echo "     An API token is created for you."
 echo ""
 echo "=========================================="
 
