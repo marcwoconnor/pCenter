@@ -93,6 +93,8 @@ func TestOpenAPIRoutesWiredUnauthenticated(t *testing.T) {
 		{"/api/openapi.yaml", "application/yaml"},
 		{"/api/openapi.json", "application/json"},
 		{"/api/docs", "text/html"},
+		{"/api/swagger-ui/swagger-ui.css", "text/css"},
+		{"/api/swagger-ui/swagger-ui-bundle.js", "application/javascript"},
 	} {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
@@ -122,4 +124,45 @@ func TestServeSwaggerUI(t *testing.T) {
 	if !strings.Contains(body, "/api/openapi.yaml") {
 		t.Errorf("HTML missing spec URL")
 	}
+	// Air-gap guarantee: HTML must not reference jsdelivr or any external CDN.
+	// If this assertion fails, vendored assets have regressed — re-check the
+	// swaggerUIHTML template in openapi.go.
+	if strings.Contains(body, "cdn.jsdelivr.net") || strings.Contains(body, "unpkg.com") {
+		t.Error("HTML references an external CDN — air-gap deploys will break")
+	}
+	if !strings.Contains(body, "/api/swagger-ui/swagger-ui.css") {
+		t.Error("HTML missing local CSS path")
+	}
+	if !strings.Contains(body, "/api/swagger-ui/swagger-ui-bundle.js") {
+		t.Error("HTML missing local JS path")
+	}
+}
+
+func TestServeSwaggerAssets(t *testing.T) {
+	t.Run("css", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		serveSwaggerUICSS(rec, httptest.NewRequest(http.MethodGet, "/api/swagger-ui/swagger-ui.css", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/css") {
+			t.Errorf("Content-Type = %q, want text/css", ct)
+		}
+		if rec.Body.Len() < 10_000 {
+			t.Errorf("CSS body suspiciously small: %d bytes", rec.Body.Len())
+		}
+	})
+	t.Run("js", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		serveSwaggerUIJS(rec, httptest.NewRequest(http.MethodGet, "/api/swagger-ui/swagger-ui-bundle.js", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/javascript") {
+			t.Errorf("Content-Type = %q, want application/javascript", ct)
+		}
+		if rec.Body.Len() < 100_000 {
+			t.Errorf("JS body suspiciously small: %d bytes", rec.Body.Len())
+		}
+	})
 }

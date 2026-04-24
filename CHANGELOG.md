@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+### Added
+- **Swagger UI assets vendored for air-gap deploys** (closes #31). `/api/docs` previously loaded `swagger-ui.css` and `swagger-ui-bundle.js` from `cdn.jsdelivr.net`, which broke the docs page on deploys without outbound internet. The assets are now `go:embed`-ed into the binary and served from `/api/swagger-ui/swagger-ui.css` and `/api/swagger-ui/swagger-ui-bundle.js` (no auth — same rationale as `/api/docs`). Pinned to `swagger-ui-dist@5.32.4` (matches what the CDN was serving). Upgrade path + SHA256s are recorded in `backend/internal/api/swagger-ui/README.md`. Binary grows by ~2.6 MB stripped. The template test now asserts the HTML contains no external-CDN references — air-gap regressions fail in CI, not in production.
+
 ## v0.1.13 — 2026-04-24
 
 ### Added

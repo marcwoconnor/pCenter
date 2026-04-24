@@ -83,6 +83,37 @@ paths:
             application/json:
               schema: { type: object }
 
+  /api/swagger-ui/swagger-ui.css:
+    get:
+      tags: [meta]
+      summary: Vendored Swagger UI stylesheet
+      description: |
+        Static asset backing `/api/docs`. Vendored at build time so the docs
+        page works on air-gapped deploys without outbound internet access.
+        Pinned version lives in `backend/internal/api/swagger-ui/README.md`.
+      security: []
+      responses:
+        '200':
+          description: CSS
+          content:
+            text/css:
+              schema: { type: string }
+
+  /api/swagger-ui/swagger-ui-bundle.js:
+    get:
+      tags: [meta]
+      summary: Vendored Swagger UI bundle
+      description: |
+        Static asset backing `/api/docs`. Vendored at build time; see
+        `/api/swagger-ui/swagger-ui.css` for rationale.
+      security: []
+      responses:
+        '200':
+          description: JavaScript
+          content:
+            application/javascript:
+              schema: { type: string }
+
   /api/version:
     get:
       tags: [meta]
