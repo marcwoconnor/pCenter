@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+### Fixed
+- **systemd readiness probe eliminates deploy-script race on restart** (closes #36). Type=simple meant systemd marked the unit "active" the moment the Go process started — ~2s before the HTTP listener actually bound. Scripts running `systemctl restart pcenter && curl http://localhost:8080/health` were hitting the listener during that window and getting connection-refused. Fix: split `ListenAndServe` into an explicit `net.Listen` + goroutined `server.Serve`, call `sdNotifyReady()` between them, and switch the shipped systemd unit to `Type=notify` with `NotifyAccess=main` + `TimeoutStartSec=60s`. The sd_notify wire protocol (write `READY=1` to `$NOTIFY_SOCKET`) is inlined in ~15 lines rather than pulled in via a new dependency. No-op outside systemd (empty `NOTIFY_SOCKET`), so dev / foreground runs behave identically.
+
 ## v0.1.26 — 2026-04-25
 
 ### Fixed
