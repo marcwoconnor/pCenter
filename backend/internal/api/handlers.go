@@ -1,10 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/crypto/ssh"
 	"github.com/moconnor/pcenter/internal/activity"
 	"github.com/moconnor/pcenter/internal/agent"
 	"github.com/moconnor/pcenter/internal/config"
@@ -4893,7 +4897,6 @@ func (h *Handler) SetupHostSSH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Copy SSH key to the host using sshpass
 	result := copySSHKey(ctx, hostAddr, req.SSHPassword)
 
 	// Log activity
@@ -4950,48 +4953,64 @@ func ensureSSHKeypair() error {
 	return nil
 }
 
-// copySSHKey copies the SSH public key to a remote host using sshpass
+// copySSHKey installs the pCenter SSH public key on a remote Proxmox host using
+// password auth, then verifies that key-based auth works. Implemented with
+// golang.org/x/crypto/ssh so pCenter has no runtime dependency on sshpass or
+// ssh-copy-id — both are absent from minimal Debian/Ubuntu installs.
 func copySSHKey(ctx context.Context, host, password string) SetupHostSSHResponse {
-	// Get the key path
 	homeDir := os.Getenv("HOME")
 	if homeDir == "" {
 		homeDir = "/root"
 	}
-	keyPath := filepath.Join(homeDir, ".ssh", "id_ed25519.pub")
+	sshDir := filepath.Join(homeDir, ".ssh")
+	privKeyPath := filepath.Join(sshDir, "id_ed25519")
+	pubKeyPath := privKeyPath + ".pub"
+	knownHostsPath := filepath.Join(sshDir, "known_hosts")
 
-	// First, try ssh-copy-id with sshpass
-	cmd := exec.CommandContext(ctx, "sshpass", "-p", password,
-		"ssh-copy-id",
-		"-i", keyPath,
-		"-o", "StrictHostKeyChecking=accept-new",
-		"-o", "ConnectTimeout=10",
-		fmt.Sprintf("root@%s", host),
-	)
-	// Set HOME env so ssh-copy-id can create temp files
-	cmd.Env = append(os.Environ(), "HOME="+homeDir)
-
-	output, err := cmd.CombinedOutput()
+	pubKey, err := os.ReadFile(pubKeyPath)
 	if err != nil {
-		return SetupHostSSHResponse{
-			Success: false,
-			Message: fmt.Sprintf("ssh-copy-id failed: %v: %s", err, strings.TrimSpace(string(output))),
-		}
+		return SetupHostSSHResponse{Success: false, Message: fmt.Sprintf("read pubkey: %v", err)}
+	}
+	pubKey = bytes.TrimRight(pubKey, "\n")
+
+	addr := host
+	if _, _, splitErr := net.SplitHostPort(host); splitErr != nil {
+		addr = net.JoinHostPort(host, "22")
 	}
 
-	// Verify SSH works without password
-	testCmd := exec.CommandContext(ctx, "ssh",
-		"-o", "BatchMode=yes",
-		"-o", "ConnectTimeout=10",
-		fmt.Sprintf("root@%s", host),
-		"echo", "ssh_ok",
-	)
-	testCmd.Env = append(os.Environ(), "HOME="+homeDir)
+	// Capture the remote host key during the initial (password) handshake so we
+	// can persist it to known_hosts afterwards. This is TOFU, matching the
+	// prior StrictHostKeyChecking=accept-new behavior.
+	var remoteHostKey ssh.PublicKey
+	cfg := &ssh.ClientConfig{
+		User:            "root",
+		Auth:            []ssh.AuthMethod{ssh.Password(password)},
+		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			remoteHostKey = key
+			return nil
+		},
+		Timeout: 10 * time.Second,
+	}
 
-	testOutput, err := testCmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(testOutput), "ssh_ok") {
+	client, err := dialSSHWithContext(ctx, addr, cfg)
+	if err != nil {
+		return SetupHostSSHResponse{Success: false, Message: fmt.Sprintf("ssh connect: %v", err)}
+	}
+
+	if err := installAuthorizedKey(client, pubKey); err != nil {
+		client.Close()
+		return SetupHostSSHResponse{Success: false, Message: fmt.Sprintf("install key: %v", err)}
+	}
+	client.Close()
+
+	if err := appendKnownHost(knownHostsPath, host, remoteHostKey); err != nil {
+		slog.Warn("failed to persist known_hosts entry", "host", host, "error", err)
+	}
+
+	if err := verifyKeyAuth(ctx, addr, privKeyPath, remoteHostKey); err != nil {
 		return SetupHostSSHResponse{
 			Success: false,
-			Message: fmt.Sprintf("SSH key copied but verification failed: %v: %s", err, strings.TrimSpace(string(testOutput))),
+			Message: fmt.Sprintf("SSH key copied but verification failed: %v", err),
 		}
 	}
 
@@ -4999,6 +5018,106 @@ func copySSHKey(ctx context.Context, host, password string) SetupHostSSHResponse
 		Success: true,
 		Message: fmt.Sprintf("SSH key successfully deployed to %s", host),
 	}
+}
+
+// dialSSHWithContext dials SSH honoring ctx for the TCP connect and handshake.
+// golang.org/x/crypto/ssh has no ctx-aware Dial; we build one from net.Dialer +
+// ssh.NewClientConn so a cancelled ctx aborts a hung handshake.
+func dialSSHWithContext(ctx context.Context, addr string, cfg *ssh.ClientConfig) (*ssh.Client, error) {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+	c, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return ssh.NewClient(c, chans, reqs), nil
+}
+
+// installAuthorizedKey appends the given public key to the remote user's
+// ~/.ssh/authorized_keys, creating the file and directory as needed, and
+// skipping the append if the key line already exists. The key is piped via
+// stdin to avoid any shell quoting on the key material.
+func installAuthorizedKey(client *ssh.Client, pubKey []byte) error {
+	sess, err := client.NewSession()
+	if err != nil {
+		return err
+	}
+	defer sess.Close()
+	sess.Stdin = bytes.NewReader(pubKey)
+	script := `set -e
+umask 077
+mkdir -p ~/.ssh
+touch ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+KEY=$(cat)
+grep -qxF "$KEY" ~/.ssh/authorized_keys || printf '%s\n' "$KEY" >> ~/.ssh/authorized_keys`
+	out, err := sess.CombinedOutput(script)
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// appendKnownHost writes a TOFU entry for the given host into known_hosts if
+// not already present. Formats the line in the standard OpenSSH format so
+// subsequent CLI ssh/scp invocations in this codebase accept the host.
+func appendKnownHost(path, host string, key ssh.PublicKey) error {
+	if key == nil {
+		return fmt.Errorf("no host key captured")
+	}
+	line := fmt.Sprintf("%s %s %s\n", host, key.Type(), base64.StdEncoding.EncodeToString(key.Marshal()))
+
+	existing, err := os.ReadFile(path)
+	if err == nil && bytes.Contains(existing, []byte(line)) {
+		return nil
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(line)
+	return err
+}
+
+// verifyKeyAuth opens a second SSH connection using public-key auth to confirm
+// the key install succeeded. Pins the host key captured during the password
+// handshake.
+func verifyKeyAuth(ctx context.Context, addr, privKeyPath string, pinnedKey ssh.PublicKey) error {
+	privBytes, err := os.ReadFile(privKeyPath)
+	if err != nil {
+		return fmt.Errorf("read privkey: %w", err)
+	}
+	signer, err := ssh.ParsePrivateKey(privBytes)
+	if err != nil {
+		return fmt.Errorf("parse privkey: %w", err)
+	}
+	cfg := &ssh.ClientConfig{
+		User:            "root",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: ssh.FixedHostKey(pinnedKey),
+		Timeout:         10 * time.Second,
+	}
+	client, err := dialSSHWithContext(ctx, addr, cfg)
+	if err != nil {
+		return err
+	}
+	client.Close()
+	return nil
 }
 
 // --- Agent Deployment ---
