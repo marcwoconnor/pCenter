@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+## v0.1.13 — 2026-04-24
+
 ### Added
 - **Webhooks auto-disable after consecutive delivery failures** (closes #39). New `consecutive_failures` column on `webhook_endpoints` (added via SQLite-safe PRAGMA-then-ALTER migration — ADD COLUMN IF NOT EXISTS isn't supported, so we inspect `PRAGMA table_info` first). `RecordDelivery` now increments the counter on failure and resets it to 0 on success; when the counter reaches `AutoDisableThreshold` (10, representing ~25min of sustained breakage given the 5s/30s/2min retry schedule) the endpoint is marked `enabled=0` with `last_status='auto_disabled'`. The transition is logged once — further failures after disable don't re-fire the disable path. Old DBs without the column upgrade cleanly on Open() — covered by a migration test. Existing `success` / `failure` last_status semantics are preserved.
 - **Webhook event filters now support per-component wildcards** (closes #38). `vm.*` matches every VM action, `*.migrate` matches migrations across resource types, `*.*` matches any two-component event. Bare `*` does NOT match a two-component event (component counts must agree — documented in `matches()` and in the OpenAPI `events` field description). Case-insensitive. Mixing exact + wildcard entries in one filter works as expected. 14 new sub-tests in `webhooks_test.go::TestMatches` cover the matrix.
