@@ -5,21 +5,21 @@ Codename: stable
 Architectures: amd64
 Components: main
 Description: pCenter APT Repository
-Date: Sat, 18 Apr 2026 13:29:20 +0000
-Date: Sat, 18 Apr 2026 13:29:20 +0000
+Date: Fri, 24 Apr 2026 16:18:18 +0000
+Date: Fri, 24 Apr 2026 16:18:18 +0000
 MD5Sum:
- 3fb713592070e4f81cef979bb1cd50a1              212 Release
- 7c27642c33c06e460ff9ab3cf0eb3077             6877 main/binary-amd64/Packages
- 38c878b6c6834c2e68c8318692107437             1534 main/binary-amd64/Packages.gz
+ f06484e65eb27c7351cf975d17d70712              212 Release
+ 343b688b5a83e7eadde25dc20169a3c7             7504 main/binary-amd64/Packages
+ e61e8f0079d2974a3292f71849c6b51d             1637 main/binary-amd64/Packages.gz
 SHA1:
- 20fd91e4bab00057ee8694da99a8f095b68cd1db              212 Release
- 3f59ac8f93ec869f22c8f3c5062a1f0e5d757f6a             6877 main/binary-amd64/Packages
- b7642714a50918fe40b96d3aac14aa276c6074ad             1534 main/binary-amd64/Packages.gz
+ 4e09e6bd3ef0013a74ea1ba1d5a3fe80fa9c6590              212 Release
+ a8d481725f3b53e8224bccba72297db7a995d89c             7504 main/binary-amd64/Packages
+ 0655de65270f4f980beb4de4ca533ebff815ff4e             1637 main/binary-amd64/Packages.gz
 SHA256:
- 0e21f8282802b34b215a51dc4654022e5ae9a2029f0ba6fa74a51ef7fbc63eed              212 Release
- 6f39ffc4d017b6dc833fcfc9d1c8f1d98e37cbb4ed5bebf2806ec82e7f5b0844             6877 main/binary-amd64/Packages
- 99f522631c470b4b8b81e5b320aa2b1553ee71cee7571e694a7e2a553753a9bb             1534 main/binary-amd64/Packages.gz
+ 9776c2d0ff3ef95107ae0e295e542b33953aab1af6d5c7f9ec8561b8b5cb1be5              212 Release
+ b71771ae567a5e37017bcec028cd19b31702ca3e01b84e357b4ee606a0eedab6             7504 main/binary-amd64/Packages
+ 78b4ae72bce6636504a38fec2e21c9fafa9288647911a421d723fc9d6190a363             1637 main/binary-amd64/Packages.gz
 SHA512:
- 96ea5c496ffeba028093d72432298bda36d05b6e7e75f4d23edc348897b556bda7f965987ff8942c709a232fbdcc04b1482c5e8c162521ab035eb96a5c175943              212 Release
- 1361f640b54d25f75f6edd3455a4b82a6b72c510f7ecc8dca30939d12a035622515eed1ac0d20d821b3cdf0323351348e8c25169ec33fd25f4960af627786565             6877 main/binary-amd64/Packages
- 8f2986cfa827aa45d0c770f38bf45b4c1a348d3d60b25e9d40d4ed9b8cbd931a28c9f9c40610a92910f5d2d9b921308c6dc17a2295a72a140daba1eb1db159eb             1534 main/binary-amd64/Packages.gz
+ 08cb61ec61a0136d64cc498ca430ec642a6aba1c4bf71974fd2998b06fea12f2b71e4f65fe8c66974bccf980422ef09139b2b663dd5caef37d5815e414167396              212 Release
+ 254199b2dd075ba890b9f72432219d2254736b76846d96fced7cc707ba08abd4d9d815f02fffb61410e066192a96d9cf5585e6edd33cbee119adc7c4ec629cf9             7504 main/binary-amd64/Packages
+ 77ccc17ecae72b1b36e4c9d61a2c8e65f3d7a973238d2680f1157941ff7230c346ec4a8da3717fa039c2b6039393d63bff35009b041654e157138d250f75e9a5             1637 main/binary-amd64/Packages.gz
