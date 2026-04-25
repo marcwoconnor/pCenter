@@ -2,10 +2,33 @@ interface HAStatusBadgeProps {
   enabled: boolean;
   quorum: boolean;
   manager?: string;
+  // nodeCount and resourceCount let us suppress a misleading "HA: OK" on a
+  // single-node cluster (no failover possible) or when nothing is HA-managed.
+  nodeCount?: number;
+  resourceCount?: number;
   className?: string;
 }
 
-export function HAStatusBadge({ enabled, quorum, manager, className = '' }: HAStatusBadgeProps) {
+export function HAStatusBadge({
+  enabled,
+  quorum,
+  manager,
+  nodeCount,
+  resourceCount,
+  className = '',
+}: HAStatusBadgeProps) {
+  // Single-node cluster: HA is technically running but failover is impossible.
+  if (nodeCount !== undefined && nodeCount < 2) {
+    return (
+      <span
+        className={`px-1.5 py-0.5 text-xs rounded bg-gray-600/30 text-gray-400 ${className}`}
+        title="Single-node cluster — HA failover requires ≥2 nodes"
+      >
+        HA: N/A
+      </span>
+    );
+  }
+
   if (!enabled) {
     return (
       <span className={`px-1.5 py-0.5 text-xs rounded bg-gray-600/30 text-gray-400 ${className}`}>
@@ -18,6 +41,18 @@ export function HAStatusBadge({ enabled, quorum, manager, className = '' }: HASt
     return (
       <span className={`px-1.5 py-0.5 text-xs rounded bg-red-600/30 text-red-400 ${className}`} title="No quorum - HA services degraded">
         HA: No Quorum
+      </span>
+    );
+  }
+
+  // Quorate but nothing is HA-managed → don't claim "OK".
+  if (resourceCount !== undefined && resourceCount === 0) {
+    return (
+      <span
+        className={`px-1.5 py-0.5 text-xs rounded bg-gray-600/30 text-gray-400 ${className}`}
+        title="HA service running but no VMs/CTs are HA-managed"
+      >
+        HA: No Resources
       </span>
     );
   }

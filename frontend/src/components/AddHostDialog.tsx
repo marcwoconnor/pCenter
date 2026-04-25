@@ -39,10 +39,16 @@ export function AddHostDialog({
     setError(null);
     setStatus(null);
 
-    const addr = address.trim();
+    let addr = address.trim();
     if (!addr) {
       setError('Address is required');
       return;
+    }
+    // Default to Proxmox's API port if the user omits one. Detection is
+    // intentionally narrow: only append if there's no `:` after the last
+    // `/` (avoids stomping on IPv6 literals or full URLs the user pasted).
+    if (!/[:][0-9]+$/.test(addr) && !addr.includes('://')) {
+      addr = addr + ':8006';
     }
     if (!username.trim()) {
       setError('Username is required');

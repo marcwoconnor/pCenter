@@ -11,6 +11,8 @@ import { BackupDialog } from './BackupDialog';
 import { FolderDialog } from './FolderDialog';
 import { DatacenterDialog } from './DatacenterDialog';
 import { AddHostDialog } from './AddHostDialog';
+import { CreateProxmoxClusterDialog } from './CreateProxmoxClusterDialog';
+import { JoinPveClusterDialog } from './JoinPveClusterDialog';
 import { UploadDialog } from './UploadDialog';
 import { CreateVMDialog } from './CreateVMDialog';
 import { CreateContainerDialog } from './CreateContainerDialog';
@@ -155,8 +157,14 @@ function TreeNode({
 }
 
 // HA Status Badge component
-function HABadge({ ha }: { ha?: ClusterInfo['ha'] }) {
+//
+// A 1-node cluster has Proxmox's HA service running and quorate (1 vote =
+// majority of 1), so the raw flags would proudly say "OK" — but failover is
+// physically impossible without a second node. Hide the badge entirely in
+// that case rather than display a misleading green.
+function HABadge({ ha, nodeCount }: { ha?: ClusterInfo['ha']; nodeCount?: number }) {
   if (!ha?.enabled) return null;
+  if (nodeCount !== undefined && nodeCount < 2) return null;
 
   const isOk = ha.quorum;
   return (
@@ -279,6 +287,13 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
   const [createContainerDialog, setCreateContainerDialog] = useState<{ cluster: string; node: string } | null>(null);
   const [sshSetupDialog, setSshSetupDialog] = useState<{ hostId: string; hostAddress: string } | null>(null);
   const [deployingAgent, setDeployingAgent] = useState<string | null>(null); // hostId being deployed
+  // Open state for the Create Proxmox Cluster wizard, scoped to a datacenter.
+  const [createPveClusterDialog, setCreatePveClusterDialog] = useState<Datacenter | null>(null);
+  // Open state for the Add Member Node wizard, scoped to an existing cluster.
+  const [joinPveClusterDialog, setJoinPveClusterDialog] = useState<InventoryCluster | null>(null);
+  // When true, the next successfully-created datacenter auto-chains into the Add Host dialog.
+  // Used by the "Add Host" root-menu item and the top banner when no datacenter exists yet.
+  const [chainAddHostAfterDC, setChainAddHostAfterDC] = useState(false);
 
   const filterLower = filter.toLowerCase();
 
@@ -298,6 +313,27 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
       fetchDatacenterTree();
     }
   }, [view, fetchDatacenterTree]);
+
+  // Unified "Add Host" entry point — used by the root context menu and the top banner.
+  // Fresh install (0 datacenters): create a datacenter first, then chain into Add Host.
+  // Otherwise: open Add Host scoped to the first datacenter (user can right-click a specific one to target).
+  const handleAddHostIntent = useCallback(() => {
+    if (datacenters.length === 0) {
+      setChainAddHostAfterDC(true);
+      setDatacenterDialog({ mode: 'create-dc' });
+    } else {
+      const dc = datacenters[0];
+      setAddHostDialog({ mode: 'datacenter', datacenterId: dc.id, datacenterName: dc.name });
+    }
+  }, [datacenters]);
+
+  // Let non-tree UI (e.g. the top banner in Layout) trigger the Add Host flow.
+  useEffect(() => {
+    if (view !== 'hosts') return;
+    const handler = () => handleAddHostIntent();
+    window.addEventListener('pcenter:add-host', handler);
+    return () => window.removeEventListener('pcenter:add-host', handler);
+  }, [view, handleAddHostIntent]);
 
   // Collect all resource IDs that are in folders (to exclude from default lists)
   const collectFolderMembers = (folders: Folder[]): Set<string> => {
@@ -743,15 +779,13 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
 
   // Get datacenter context menu items
   const getDatacenterMenuItems = (dc: Datacenter): MenuItem[] => {
+    // "Create Proxmox Cluster" surfaces whenever there's ≥1 online standalone
+    // host — Proxmox supports forming a 1-node cluster and adding joiners
+    // later. No artificial ≥2 gate; the wizard adapts to the number of hosts.
+    const onlineStandaloneHosts = (dc.hosts || []).filter(h => h.status === 'online');
+    const canFormPveCluster = onlineStandaloneHosts.length >= 1;
+
     return [
-      {
-        label: 'Add Cluster',
-        icon: '➕',
-        action: () => setDatacenterDialog({
-          mode: 'create-cluster',
-          parentDatacenterId: dc.id,
-        }),
-      },
       {
         label: 'Add Host',
         icon: '🖥️',
@@ -761,6 +795,20 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
           datacenterName: dc.name,
         }),
       },
+      {
+        label: 'Add Cluster (label only)',
+        icon: '➕',
+        action: () => setDatacenterDialog({
+          mode: 'create-cluster',
+          parentDatacenterId: dc.id,
+        }),
+      },
+      ...(canFormPveCluster ? [{
+        label: 'Create Proxmox Cluster…',
+        icon: '🏗️',
+        action: () => setCreatePveClusterDialog(dc),
+      }] : []),
+      { label: '', action: () => {}, divider: true },
       {
         label: 'Edit Datacenter',
         icon: '✏️',
@@ -819,9 +867,21 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
       })),
     ];
 
+    // Collect all online standalone hosts across datacenters as candidates
+    // for joining this cluster. Filtering happens inside the dialog too,
+    // but we precompute here to decide whether to show the menu entry.
+    const standalonePool: InventoryHost[] = datacenters
+      .flatMap(dc => dc.hosts || [])
+      .filter(h => h.status === 'online' && !h.cluster_id);
+
     return [
+      ...(cluster.status === 'active' && standalonePool.length > 0 ? [{
+        label: 'Add Member Node…',
+        icon: '🔗',
+        action: () => setJoinPveClusterDialog(cluster),
+      }] : []),
       {
-        label: 'Add Host',
+        label: 'Add Host (inventory record only)',
         icon: '➕',
         action: () => setAddHostDialog({ mode: 'cluster', clusterName: cluster.name }),
       },
@@ -966,6 +1026,12 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
   // Get root menu items for hosts view
   const getRootHostsMenuItems = (): MenuItem[] => {
     return [
+      {
+        label: 'Add Host',
+        icon: '🖥️',
+        action: handleAddHostIntent,
+      },
+      { label: '', action: () => {}, divider: true },
       {
         label: 'New Folder',
         icon: '📁',
@@ -1313,7 +1379,7 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
             <span className="text-xs px-1.5 py-0.5 rounded bg-gray-600 text-gray-300">disabled</span>
           )}
           {getClusterStatusBadge()}
-          <HABadge ha={runtimeCluster?.ha} />
+          <HABadge ha={runtimeCluster?.ha} nodeCount={clusterNodes.length} />
         </>}
         isSelected={isSelected({ type: 'cluster', id: clusterName, name: clusterName, cluster: lookupName })}
         onClick={() => setSelectedObject({ type: 'cluster', id: clusterName, name: clusterName, cluster: lookupName })}
@@ -1450,11 +1516,20 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
             cluster={datacenterDialog.cluster}
             parentDatacenterId={datacenterDialog.parentDatacenterId}
             datacenters={datacenters}
-            onSubmit={async () => {
+            onSubmit={async (created) => {
+              const shouldChain = chainAddHostAfterDC && datacenterDialog.mode === 'create-dc';
+              setChainAddHostAfterDC(false);
               setDatacenterDialog(null);
               await fetchDatacenterTree();
+              if (shouldChain && created && 'name' in created) {
+                const dc = created as Datacenter;
+                setAddHostDialog({ mode: 'datacenter', datacenterId: dc.id, datacenterName: dc.name });
+              }
             }}
-            onClose={() => setDatacenterDialog(null)}
+            onClose={() => {
+              setChainAddHostAfterDC(false);
+              setDatacenterDialog(null);
+            }}
           />
         )}
         {addHostDialog && (
@@ -1468,6 +1543,21 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
               await fetchDatacenterTree();
             }}
             onClose={() => setAddHostDialog(null)}
+          />
+        )}
+        {createPveClusterDialog && (
+          <CreateProxmoxClusterDialog
+            datacenter={createPveClusterDialog}
+            onClose={() => setCreatePveClusterDialog(null)}
+            onSuccess={fetchDatacenterTree}
+          />
+        )}
+        {joinPveClusterDialog && (
+          <JoinPveClusterDialog
+            cluster={joinPveClusterDialog}
+            availableHosts={datacenters.flatMap(dc => dc.hosts || [])}
+            onClose={() => setJoinPveClusterDialog(null)}
+            onSuccess={fetchDatacenterTree}
           />
         )}
         {createVMDialog && (

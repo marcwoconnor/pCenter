@@ -28,6 +28,7 @@ import (
 	"github.com/moconnor/pcenter/internal/metrics"
 	"github.com/moconnor/pcenter/internal/poller"
 	"github.com/moconnor/pcenter/internal/pve"
+	"github.com/moconnor/pcenter/internal/pvecluster"
 	"github.com/moconnor/pcenter/internal/state"
 	"github.com/moconnor/pcenter/internal/alarms"
 	"github.com/moconnor/pcenter/internal/drs"
@@ -56,6 +57,7 @@ type Handler struct {
 	scheduler       *scheduler.Service
 	webhooks        *webhooks.Service
 	agentHub        *agent.Hub
+	pveClusterMgr   *pvecluster.Manager    // PVE cluster formation orchestrator (optional)
 	clusters        []config.ClusterConfig // For on-demand client creation
 	secrets         map[string]string      // Token secrets keyed by cluster/agent name
 	onChange        func()                 // Callback to broadcast state changes

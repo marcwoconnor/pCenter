@@ -441,6 +441,13 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	// Host connection testing
 	protectedMux.HandleFunc("POST /api/inventory/test-connection", h.TestHostConnection)
 
+	// PVE cluster formation (turn standalone hosts into a real Corosync cluster)
+	protectedMux.HandleFunc("POST /api/inventory/pve-cluster/preflight", h.PveClusterPreflight)
+	protectedMux.HandleFunc("POST /api/inventory/pve-cluster", h.CreatePveCluster)
+	protectedMux.HandleFunc("GET /api/inventory/pve-cluster-jobs/{id}", h.GetPveClusterJob)
+	// Add member nodes to an already-existing PVE cluster
+	protectedMux.HandleFunc("POST /api/inventory/pve-cluster/join/preflight", h.PveClusterJoinPreflight)
+	protectedMux.HandleFunc("POST /api/inventory/pve-cluster/join", h.JoinPveCluster)
 	// Opt-in reconciliation for legacy clusters predating the PVE-correlation model.
 	protectedMux.HandleFunc("POST /api/inventory/reconcile", h.ReconcileInventory)
 

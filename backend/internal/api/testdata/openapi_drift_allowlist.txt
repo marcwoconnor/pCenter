@@ -84,6 +84,7 @@ GET /api/inventory/clusters
 GET /api/inventory/clusters/{name}
 GET /api/inventory/clusters/{name}/hosts
 GET /api/inventory/hosts/{id}
+GET /api/inventory/pve-cluster-jobs/{id}
 GET /api/library
 GET /api/library/categories
 GET /api/library/{id}
@@ -150,6 +151,10 @@ POST /api/inventory/hosts/{id}/activate
 POST /api/inventory/hosts/{id}/deploy-agent
 POST /api/inventory/hosts/{id}/move
 POST /api/inventory/hosts/{id}/setup-ssh
+POST /api/inventory/pve-cluster
+POST /api/inventory/pve-cluster/join
+POST /api/inventory/pve-cluster/join/preflight
+POST /api/inventory/pve-cluster/preflight
 POST /api/inventory/reconcile
 POST /api/inventory/test-connection
 POST /api/library

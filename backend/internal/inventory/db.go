@@ -1105,6 +1105,184 @@ func (db *DB) SetHostStatus(ctx context.Context, id string, status HostStatus, e
 	return nil
 }
 
+// FormClusterFromHostsParams drives the FormClusterFromHosts transactional helper.
+// TokenUpdates is keyed by host ID; omitted entries leave the host's
+// token_id/token_secret unchanged (useful for the founder, whose creds don't
+// need refreshing since its node was the one we authenticated against).
+type FormClusterFromHostsParams struct {
+	Name         string
+	AgentName    string
+	DatacenterID *string // nil = orphan cluster
+	HostIDs      []string
+	TokenUpdates map[string]struct{ TokenID, TokenSecret string }
+}
+
+// FormClusterFromHosts atomically creates a new Cluster row, moves the given
+// hosts into it (clearing their DatacenterID), optionally refreshes each host's
+// API token credentials, and marks the cluster active. Used by the PVE cluster
+// formation orchestrator after the real Proxmox cluster has been built.
+//
+// All-or-nothing: uses a sql.Tx. Returns the created Cluster or rolls back.
+func (db *DB) FormClusterFromHosts(ctx context.Context, p FormClusterFromHostsParams) (*Cluster, error) {
+	if p.Name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	if len(p.HostIDs) == 0 {
+		return nil, fmt.Errorf("at least one host is required")
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	now := time.Now()
+	agentName := p.AgentName
+	if agentName == "" {
+		agentName = p.Name
+	}
+
+	cluster := &Cluster{
+		ID:           uuid.New().String(),
+		Name:         p.Name,
+		AgentName:    agentName,
+		DatacenterID: p.DatacenterID,
+		Status:       ClusterStatusActive,
+		Enabled:      true,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO clusters (id, name, agent_name, datacenter_id, status, enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		cluster.ID, cluster.Name, cluster.AgentName, cluster.DatacenterID,
+		string(cluster.Status), boolToInt(cluster.Enabled),
+		cluster.CreatedAt.Unix(), cluster.UpdatedAt.Unix(),
+	); err != nil {
+		return nil, fmt.Errorf("insert cluster: %w", err)
+	}
+
+	// Move each host into the new cluster. If TokenUpdates has an entry for
+	// this host, also refresh its creds in the same row update so there's no
+	// brief window where a host's cluster_id is set but its token is stale.
+	for _, hostID := range p.HostIDs {
+		update, hasUpdate := p.TokenUpdates[hostID]
+		var res sql.Result
+		var execErr error
+		if hasUpdate {
+			res, execErr = tx.ExecContext(ctx, `
+				UPDATE inventory_hosts
+				SET cluster_id = ?, datacenter_id = NULL,
+				    token_id = ?, token_secret = ?, updated_at = ?
+				WHERE id = ?`,
+				cluster.ID, update.TokenID, update.TokenSecret, now.Unix(), hostID,
+			)
+		} else {
+			res, execErr = tx.ExecContext(ctx, `
+				UPDATE inventory_hosts
+				SET cluster_id = ?, datacenter_id = NULL, updated_at = ?
+				WHERE id = ?`,
+				cluster.ID, now.Unix(), hostID,
+			)
+		}
+		if execErr != nil {
+			return nil, fmt.Errorf("move host %s: %w", hostID, execErr)
+		}
+		rows, _ := res.RowsAffected()
+		if rows == 0 {
+			return nil, fmt.Errorf("host %s not found", hostID)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	committed = true
+
+	return cluster, nil
+}
+
+// AddHostsToClusterParams drives AddHostsToCluster.
+type AddHostsToClusterParams struct {
+	ClusterID    string
+	HostIDs      []string
+	TokenUpdates map[string]struct{ TokenID, TokenSecret string }
+}
+
+// AddHostsToCluster moves a set of standalone hosts into an existing cluster
+// transactionally. Used by the "join existing PVE cluster" orchestrator after
+// the actual `pvecm add` calls have succeeded; we just need to flip the
+// inventory_hosts rows and refresh per-host API tokens (each joined node's
+// /etc/pve gets replaced, so tokens are re-minted post-join).
+func (db *DB) AddHostsToCluster(ctx context.Context, p AddHostsToClusterParams) error {
+	if p.ClusterID == "" {
+		return fmt.Errorf("cluster_id is required")
+	}
+	if len(p.HostIDs) == 0 {
+		return fmt.Errorf("at least one host is required")
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	now := time.Now().Unix()
+	for _, hostID := range p.HostIDs {
+		update, hasUpdate := p.TokenUpdates[hostID]
+		var res sql.Result
+		var execErr error
+		if hasUpdate {
+			res, execErr = tx.ExecContext(ctx, `
+				UPDATE inventory_hosts
+				SET cluster_id = ?, datacenter_id = NULL,
+				    token_id = ?, token_secret = ?, updated_at = ?
+				WHERE id = ?`,
+				p.ClusterID, update.TokenID, update.TokenSecret, now, hostID,
+			)
+		} else {
+			res, execErr = tx.ExecContext(ctx, `
+				UPDATE inventory_hosts
+				SET cluster_id = ?, datacenter_id = NULL, updated_at = ?
+				WHERE id = ?`,
+				p.ClusterID, now, hostID,
+			)
+		}
+		if execErr != nil {
+			return fmt.Errorf("move host %s: %w", hostID, execErr)
+		}
+		rows, _ := res.RowsAffected()
+		if rows == 0 {
+			return fmt.Errorf("host %s not found", hostID)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
 // === Helpers ===
 
 func boolToInt(b bool) int {

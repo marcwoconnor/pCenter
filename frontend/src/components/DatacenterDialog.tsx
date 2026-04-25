@@ -8,7 +8,8 @@ interface DatacenterDialogProps {
   cluster?: InventoryCluster;
   parentDatacenterId?: string;
   datacenters: Datacenter[];
-  onSubmit: () => Promise<void>;
+  // For create-dc / create-cluster, `created` is the newly-created entity so callers can chain follow-up actions.
+  onSubmit: (created?: Datacenter | InventoryCluster) => Promise<void>;
   onClose: () => void;
 }
 
@@ -47,6 +48,7 @@ export function DatacenterDialog({
     setSaving(true);
 
     try {
+      let created: Datacenter | InventoryCluster | undefined;
       if (isDatacenter) {
         const name = dcName.trim();
         if (!name) {
@@ -56,7 +58,7 @@ export function DatacenterDialog({
         }
 
         if (isCreate) {
-          await api.createDatacenter({ name, description: dcDescription.trim() || undefined });
+          created = await api.createDatacenter({ name, description: dcDescription.trim() || undefined });
         } else if (datacenter) {
           await api.updateDatacenter(datacenter.id, { name, description: dcDescription.trim() || undefined });
         }
@@ -70,7 +72,7 @@ export function DatacenterDialog({
         }
 
         if (isCreate) {
-          await api.createInventoryCluster({
+          created = await api.createInventoryCluster({
             name,
             datacenter_id: clusterDcId || undefined,
           });
@@ -83,7 +85,7 @@ export function DatacenterDialog({
         }
       }
 
-      await onSubmit();
+      await onSubmit(created);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Operation failed');
       setSaving(false);

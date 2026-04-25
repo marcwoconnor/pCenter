@@ -278,9 +278,11 @@ poller:
 	}
 }
 
-// TestLoad_PollerStaysOffWithNoClusters verifies the poller stays disabled
-// when no clusters are configured — nothing for it to poll.
-func TestLoad_PollerStaysOffWithNoClusters(t *testing.T) {
+// TestLoad_PollerDefaultsOnWithNoClusters verifies the poller defaults ON
+// even when no clusters are configured in config.yaml. Hosts are now added
+// through the UI (inventory DB), so the absence of `clusters:` in the
+// config file is no longer a signal that there's nothing to poll.
+func TestLoad_PollerDefaultsOnWithNoClusters(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
 
@@ -290,7 +292,7 @@ func TestLoad_PollerStaysOffWithNoClusters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
-	if cfg.Poller.Enabled {
-		t.Error("poller should stay disabled when no clusters are configured")
+	if !cfg.Poller.Enabled {
+		t.Error("poller should default to enabled (inventory may have clusters even when config.yaml does not)")
 	}
 }

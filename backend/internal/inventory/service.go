@@ -763,3 +763,79 @@ func (s *Service) GetClusterConfigs(ctx context.Context, secrets map[string]stri
 func (s *Service) ClusterCount(ctx context.Context) (int, error) {
 	return s.db.ClusterCount(ctx)
 }
+
+// FormClusterFromHostsRequest is the service-level input for FormClusterFromHosts.
+type FormClusterFromHostsRequest struct {
+	Name         string
+	AgentName    string // usually matches Name; poller uses this to key state
+	DatacenterID string
+	HostIDs      []string
+	TokenUpdates map[string]struct{ TokenID, TokenSecret string }
+}
+
+// AddHostsToClusterRequest is the service-level input for AddHostsToCluster.
+type AddHostsToClusterRequest struct {
+	ClusterID    string
+	HostIDs      []string
+	TokenUpdates map[string]struct{ TokenID, TokenSecret string }
+}
+
+// AddHostsToCluster moves standalone hosts into an existing cluster after
+// they've been joined to the real PVE cluster via `pvecm add`. Called by the
+// "Add Member Node" orchestrator. Validates the cluster exists.
+func (s *Service) AddHostsToCluster(ctx context.Context, req AddHostsToClusterRequest) error {
+	cluster, err := s.db.GetCluster(ctx, req.ClusterID)
+	if err != nil {
+		return fmt.Errorf("get cluster: %w", err)
+	}
+	if cluster == nil {
+		return fmt.Errorf("cluster not found")
+	}
+
+	return s.db.AddHostsToCluster(ctx, AddHostsToClusterParams{
+		ClusterID:    req.ClusterID,
+		HostIDs:      req.HostIDs,
+		TokenUpdates: req.TokenUpdates,
+	})
+}
+
+// FormClusterFromHosts is the post-join database update called by the PVE
+// cluster-formation orchestrator after the real Proxmox cluster is online.
+// Creates the Cluster row, moves hosts into it, optionally refreshes each
+// host's API token, and marks the cluster active — transactionally.
+func (s *Service) FormClusterFromHosts(ctx context.Context, req FormClusterFromHostsRequest) (*Cluster, error) {
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+
+	// Reject duplicate name before we do anything.
+	existing, err := s.db.GetClusterByName(ctx, req.Name)
+	if err != nil {
+		return nil, fmt.Errorf("check cluster name: %w", err)
+	}
+	if existing != nil {
+		return nil, fmt.Errorf("cluster with name %q already exists", req.Name)
+	}
+
+	// Validate datacenter exists if specified.
+	var dcID *string
+	if req.DatacenterID != "" {
+		dc, err := s.db.GetDatacenter(ctx, req.DatacenterID)
+		if err != nil {
+			return nil, fmt.Errorf("check datacenter: %w", err)
+		}
+		if dc == nil {
+			return nil, fmt.Errorf("datacenter not found")
+		}
+		dcID = &req.DatacenterID
+	}
+
+	return s.db.FormClusterFromHosts(ctx, FormClusterFromHostsParams{
+		Name:         req.Name,
+		AgentName:    req.AgentName,
+		DatacenterID: dcID,
+		HostIDs:      req.HostIDs,
+		TokenUpdates: req.TokenUpdates,
+	})
+}
