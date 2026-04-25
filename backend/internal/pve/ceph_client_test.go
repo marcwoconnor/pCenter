@@ -508,7 +508,7 @@ func TestCreateCephMON_DefaultBody(t *testing.T) {
 	if rec.method != "POST" {
 		t.Errorf("method: want POST, got %q", rec.method)
 	}
-	if want := "/api2/json/nodes/pve1/ceph/mon"; rec.path != want {
+	if want := "/api2/json/nodes/pve1/ceph/mon/pve1"; rec.path != want {
 		t.Errorf("path: want %q, got %q", want, rec.path)
 	}
 	if rec.body != "" {
@@ -569,7 +569,7 @@ func TestCreateCephMGR(t *testing.T) {
 	if !strings.HasPrefix(upid, "UPID:") {
 		t.Errorf("expected UPID, got %q", upid)
 	}
-	if rec.method != "POST" || rec.path != "/api2/json/nodes/pve1/ceph/mgr" {
+	if rec.method != "POST" || rec.path != "/api2/json/nodes/pve1/ceph/mgr/pve1" {
 		t.Errorf("unexpected request: %s %s", rec.method, rec.path)
 	}
 }
@@ -611,7 +611,7 @@ func TestCreateCephMDS(t *testing.T) {
 	if !strings.HasPrefix(upid, "UPID:") {
 		t.Errorf("expected UPID, got %q", upid)
 	}
-	if rec.method != "POST" || rec.path != "/api2/json/nodes/pve1/ceph/mds" {
+	if rec.method != "POST" || rec.path != "/api2/json/nodes/pve1/ceph/mds/pve1" {
 		t.Errorf("unexpected request: %s %s", rec.method, rec.path)
 	}
 	if !strings.Contains(rec.body, "hotstandby=1") {

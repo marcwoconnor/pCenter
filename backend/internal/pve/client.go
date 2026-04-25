@@ -1621,12 +1621,17 @@ func (c *Client) ScrubCephOSD(ctx context.Context, osdID int, deep bool) error {
 // monAddress is optional — when set, PVE binds the MON to that address
 // instead of auto-detecting (useful when the node has multiple interfaces
 // on the public network). Returns UPID.
+//
+// PVE's create endpoint requires the monid in the URL path
+// (POST /nodes/{node}/ceph/mon/{monid}); omitting it returns
+// 501 "Method not implemented". By convention the monid is the
+// hostname, matching what `pveceph mon create` does on the CLI.
 func (c *Client) CreateCephMON(ctx context.Context, monAddress string) (string, error) {
 	params := map[string]string{}
 	if monAddress != "" {
 		params["mon-address"] = monAddress
 	}
-	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/mon", c.nodeName), params)
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/mon/%s", c.nodeName, c.nodeName), params)
 	if err != nil {
 		return "", err
 	}
@@ -1655,8 +1660,11 @@ func (c *Client) DeleteCephMON(ctx context.Context, monID string) (string, error
 // CreateCephMGR creates a Ceph manager daemon on this client's node.
 // PVE allows multiple MGRs per cluster (one active + N standbys) — best
 // practice is to run an MGR alongside every MON. Returns UPID.
+//
+// Like /ceph/mon, PVE's create endpoint requires the id in the URL
+// path; the bare /ceph/mgr POST returns 501. Convention: id = hostname.
 func (c *Client) CreateCephMGR(ctx context.Context) (string, error) {
-	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/mgr", c.nodeName), nil)
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/mgr/%s", c.nodeName, c.nodeName), nil)
 	if err != nil {
 		return "", err
 	}
@@ -1722,12 +1730,16 @@ func (c *Client) InitCephCluster(ctx context.Context, opts InitCephClusterOption
 // CreateCephMDS creates a Ceph metadata server daemon on this client's node.
 // hotstandby toggles whether the MDS sits in standby-replay (warm cache, faster
 // failover at the cost of memory). Returns UPID.
+//
+// Like /ceph/mon and /ceph/mgr, PVE's create endpoint requires the id
+// in the URL path; the bare /ceph/mds POST returns 501. Convention:
+// id = hostname (one MDS per node from this orchestrator).
 func (c *Client) CreateCephMDS(ctx context.Context, hotstandby bool) (string, error) {
 	params := map[string]string{}
 	if hotstandby {
 		params["hotstandby"] = "1"
 	}
-	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/mds", c.nodeName), params)
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/mds/%s", c.nodeName, c.nodeName), params)
 	if err != nil {
 		return "", err
 	}
