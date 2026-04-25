@@ -1214,6 +1214,124 @@ func (c *Client) getHostFromURL() string {
 	return host
 }
 
+// --- Ceph topology read methods ---
+//
+// Each List/Get below targets a /nodes/{node}/ceph/* endpoint. The data is
+// cluster-wide (every MON returns the same view) so callers should pick any
+// healthy node — the poller is responsible for that choice.
+
+// ListCephOSDs returns a flat list of OSDs by walking the CRUSH tree returned
+// by /nodes/{node}/ceph/osd. The "host" parent is propagated onto each leaf
+// so the UI can group by node without a second lookup.
+func (c *Client) ListCephOSDs(ctx context.Context) ([]CephOSD, error) {
+	resp, err := get[CephOSDListResponse](c, ctx, fmt.Sprintf("/nodes/%s/ceph/osd", c.nodeName))
+	if err != nil {
+		return nil, err
+	}
+	var out []CephOSD
+	flattenCephOSDTree(&resp.Root, "", &out)
+	return out, nil
+}
+
+// flattenCephOSDTree walks the CRUSH tree depth-first, emitting one CephOSD
+// per leaf (type=="osd"). The current host's name is threaded through so leaves
+// inherit the host from their nearest "host" ancestor.
+func flattenCephOSDTree(node *CephOSDTreeNode, currentHost string, out *[]CephOSD) {
+	if node == nil {
+		return
+	}
+	host := currentHost
+	if node.Type == "host" {
+		host = node.Name
+	}
+	if node.Type == "osd" {
+		*out = append(*out, CephOSD{
+			ID:          node.ID,
+			Name:        node.Name,
+			Type:        node.Type,
+			Host:        host,
+			DeviceClass: node.DeviceClass,
+			Status:      node.Status,
+			In:          node.Reweight > 0,
+			CrushWeight: node.CrushWeight,
+			Reweight:    node.Reweight,
+		})
+	}
+	for i := range node.Children {
+		flattenCephOSDTree(&node.Children[i], host, out)
+	}
+}
+
+// ListCephMONs returns Ceph monitor daemons (cluster-wide).
+func (c *Client) ListCephMONs(ctx context.Context) ([]CephMON, error) {
+	return get[[]CephMON](c, ctx, fmt.Sprintf("/nodes/%s/ceph/mon", c.nodeName))
+}
+
+// ListCephMGRs returns Ceph manager daemons (cluster-wide).
+func (c *Client) ListCephMGRs(ctx context.Context) ([]CephMGR, error) {
+	return get[[]CephMGR](c, ctx, fmt.Sprintf("/nodes/%s/ceph/mgr", c.nodeName))
+}
+
+// ListCephMDSs returns Ceph metadata server daemons (cluster-wide).
+func (c *Client) ListCephMDSs(ctx context.Context) ([]CephMDS, error) {
+	return get[[]CephMDS](c, ctx, fmt.Sprintf("/nodes/%s/ceph/mds", c.nodeName))
+}
+
+// ListCephPools returns Ceph pools (cluster-wide).
+func (c *Client) ListCephPools(ctx context.Context) ([]CephPool, error) {
+	return get[[]CephPool](c, ctx, fmt.Sprintf("/nodes/%s/ceph/pool", c.nodeName))
+}
+
+// ListCephFS returns CephFS filesystems (cluster-wide).
+func (c *Client) ListCephFS(ctx context.Context) ([]CephFSEntry, error) {
+	return get[[]CephFSEntry](c, ctx, fmt.Sprintf("/nodes/%s/ceph/fs", c.nodeName))
+}
+
+// GetCephRules returns CRUSH rules (cluster-wide).
+func (c *Client) GetCephRules(ctx context.Context) ([]CephRule, error) {
+	return get[[]CephRule](c, ctx, fmt.Sprintf("/nodes/%s/ceph/rules", c.nodeName))
+}
+
+// GetCephFlags returns the cluster-wide OSD flags. PVE returns these as an
+// array of {name, value, description} objects from /cluster/ceph/flags;
+// translate to the typed struct callers expect.
+func (c *Client) GetCephFlags(ctx context.Context) (CephFlags, error) {
+	type rawFlag struct {
+		Name  string `json:"name"`
+		Value bool   `json:"value"`
+	}
+	raw, err := get[[]rawFlag](c, ctx, "/cluster/ceph/flags")
+	if err != nil {
+		return CephFlags{}, err
+	}
+	var flags CephFlags
+	for _, f := range raw {
+		switch f.Name {
+		case "noout":
+			flags.NoOut = f.Value
+		case "noin":
+			flags.NoIn = f.Value
+		case "noup":
+			flags.NoUp = f.Value
+		case "nodown":
+			flags.NoDown = f.Value
+		case "nobackfill":
+			flags.NoBackfill = f.Value
+		case "norebalance":
+			flags.NoRebalance = f.Value
+		case "norecover":
+			flags.NoRecover = f.Value
+		case "noscrub":
+			flags.NoScrub = f.Value
+		case "nodeep-scrub":
+			flags.NoDeepScrub = f.Value
+		case "pause":
+			flags.Pause = f.Value
+		}
+	}
+	return flags, nil
+}
+
 // GetSmartData fetches SMART data for all disks on this node
 func (c *Client) GetSmartData(ctx context.Context) ([]SmartDisk, error) {
 	host := c.getHostFromURL()
