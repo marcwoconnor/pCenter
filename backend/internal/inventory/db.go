@@ -1142,6 +1142,77 @@ func (db *DB) FormClusterFromHosts(ctx context.Context, p FormClusterFromHostsPa
 	return cluster, nil
 }
 
+// AddHostsToClusterParams drives AddHostsToCluster.
+type AddHostsToClusterParams struct {
+	ClusterID    string
+	HostIDs      []string
+	TokenUpdates map[string]struct{ TokenID, TokenSecret string }
+}
+
+// AddHostsToCluster moves a set of standalone hosts into an existing cluster
+// transactionally. Used by the "join existing PVE cluster" orchestrator after
+// the actual `pvecm add` calls have succeeded; we just need to flip the
+// inventory_hosts rows and refresh per-host API tokens (each joined node's
+// /etc/pve gets replaced, so tokens are re-minted post-join).
+func (db *DB) AddHostsToCluster(ctx context.Context, p AddHostsToClusterParams) error {
+	if p.ClusterID == "" {
+		return fmt.Errorf("cluster_id is required")
+	}
+	if len(p.HostIDs) == 0 {
+		return fmt.Errorf("at least one host is required")
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	now := time.Now().Unix()
+	for _, hostID := range p.HostIDs {
+		update, hasUpdate := p.TokenUpdates[hostID]
+		var res sql.Result
+		var execErr error
+		if hasUpdate {
+			res, execErr = tx.ExecContext(ctx, `
+				UPDATE inventory_hosts
+				SET cluster_id = ?, datacenter_id = NULL,
+				    token_id = ?, token_secret = ?, updated_at = ?
+				WHERE id = ?`,
+				p.ClusterID, update.TokenID, update.TokenSecret, now, hostID,
+			)
+		} else {
+			res, execErr = tx.ExecContext(ctx, `
+				UPDATE inventory_hosts
+				SET cluster_id = ?, datacenter_id = NULL, updated_at = ?
+				WHERE id = ?`,
+				p.ClusterID, now, hostID,
+			)
+		}
+		if execErr != nil {
+			return fmt.Errorf("move host %s: %w", hostID, execErr)
+		}
+		rows, _ := res.RowsAffected()
+		if rows == 0 {
+			return fmt.Errorf("host %s not found", hostID)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
 // === Helpers ===
 
 func boolToInt(b bool) int {

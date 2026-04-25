@@ -36,6 +36,8 @@ import type {
   PveClusterPreflightResponse,
   CreatePveClusterRequest,
   PveClusterJob,
+  PveClusterJoinPreflightRequest,
+  JoinPveClusterRequest,
   CreateVMRequest,
   CreateContainerRequest,
   Snapshot,
@@ -627,6 +629,18 @@ export const api = {
     }),
   getPveClusterJob: (jobId: string) =>
     fetchAPI<PveClusterJob>(`/inventory/pve-cluster-jobs/${jobId}`),
+
+  // Add new member nodes to an already-existing PVE cluster.
+  preflightJoinPveCluster: (req: PveClusterJoinPreflightRequest) =>
+    fetchAPI<PveClusterPreflightResponse>('/inventory/pve-cluster/join/preflight', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+  joinPveCluster: (req: JoinPveClusterRequest) =>
+    fetchAPI<{ job_id: string }>('/inventory/pve-cluster/join', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
 
   // Host setup actions
   setupHostSSH: (id: string, sshPassword: string) =>

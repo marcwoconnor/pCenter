@@ -158,6 +158,137 @@ func (m *Manager) StartJob(ctx context.Context, req StartJobRequest) (string, er
 	return job.ID, nil
 }
 
+// StartJoinHostsJobRequest is the input for adding new member nodes to an
+// already-existing PVE cluster (i.e. one pcenter is already managing).
+type StartJoinHostsJobRequest struct {
+	// ClusterID is the pcenter inventory cluster.id to add hosts to.
+	ClusterID string
+	// Joiners are the standalone hosts being promoted into that cluster.
+	Joiners []JoinerSpec
+}
+
+// StartJoinHostsJob validates, seeds a Job, and kicks off the join-existing
+// orchestration goroutine. Same job-tracking and progress API as StartJob.
+func (m *Manager) StartJoinHostsJob(ctx context.Context, req StartJoinHostsJobRequest) (string, error) {
+	if req.ClusterID == "" {
+		return "", fmt.Errorf("cluster_id is required")
+	}
+	if len(req.Joiners) == 0 {
+		return "", fmt.Errorf("at least one joiner is required")
+	}
+	for i, j := range req.Joiners {
+		if j.HostID == "" || j.Password == "" {
+			return "", fmt.Errorf("joiner[%d] missing host_id or password", i)
+		}
+	}
+
+	cluster, err := m.deps.Inventory.GetCluster(ctx, req.ClusterID)
+	if err != nil {
+		return "", fmt.Errorf("get cluster: %w", err)
+	}
+	if cluster == nil {
+		return "", fmt.Errorf("cluster not found")
+	}
+	if cluster.Status != inventory.ClusterStatusActive {
+		return "", fmt.Errorf("cluster %q is not active (status=%s)", cluster.Name, cluster.Status)
+	}
+
+	// Pick any online member as the source for fetching join info. Token
+	// auth is fine for /cluster/config/join GET (only the create/join POSTs
+	// demand root@pam password).
+	clusterHosts, err := m.deps.Inventory.ListHostsByCluster(ctx, cluster.ID)
+	if err != nil {
+		return "", fmt.Errorf("list cluster hosts: %w", err)
+	}
+	var sourceHost *inventory.InventoryHost
+	for i := range clusterHosts {
+		if clusterHosts[i].Status == inventory.HostStatusOnline {
+			h := clusterHosts[i]
+			sourceHost = &h
+			break
+		}
+	}
+	if sourceHost == nil {
+		return "", fmt.Errorf("cluster %q has no online member to fetch join info from", cluster.Name)
+	}
+
+	// Resolve and validate joiner host records.
+	var joiners []*inventory.InventoryHost
+	for _, j := range req.Joiners {
+		h, err := m.deps.Inventory.GetHost(ctx, j.HostID)
+		if err != nil || h == nil {
+			return "", fmt.Errorf("joiner host %s not found", j.HostID)
+		}
+		if h.ClusterID != "" {
+			return "", fmt.Errorf("host %s is already in a cluster", h.NodeName)
+		}
+		joiners = append(joiners, h)
+	}
+
+	// Seed job steps so the frontend renders the full plan from poll #1.
+	job := &Job{
+		ID:          uuid.New().String(),
+		ClusterName: cluster.Name,
+		State:       JobStateRunning,
+		StartedAt:   time.Now(),
+	}
+	if cluster.DatacenterID != nil {
+		job.DatacenterID = *cluster.DatacenterID
+	}
+	job.Steps = append(job.Steps, Step{
+		HostID: sourceHost.ID, Address: sourceHost.Address, NodeName: sourceHost.NodeName,
+		Role: RoleFounder, Phase: PhaseFetchJoinInfo, State: StepStatePending,
+	})
+	for _, j := range req.Joiners {
+		h := mustFindNew(joiners, j.HostID)
+		job.Steps = append(job.Steps, Step{
+			HostID: h.ID, Address: h.Address, NodeName: h.NodeName,
+			Role: RoleJoiner, Phase: PhaseJoin, State: StepStatePending,
+		})
+		job.Steps = append(job.Steps, Step{
+			HostID: h.ID, Address: h.Address, NodeName: h.NodeName,
+			Role: RoleJoiner, Phase: PhaseReauthToken, State: StepStatePending,
+		})
+	}
+	job.Steps = append(job.Steps, Step{
+		HostID: sourceHost.ID, Address: sourceHost.Address, NodeName: sourceHost.NodeName,
+		Role: RoleFounder, Phase: PhaseUpdateInventor, State: StepStatePending,
+	})
+
+	m.mu.Lock()
+	m.jobs[job.ID] = job
+	m.mu.Unlock()
+
+	if m.deps.Activity != nil {
+		m.deps.Activity.Log(activity.Entry{
+			Action:       "pve_cluster_join_start",
+			ResourceType: "cluster",
+			ResourceID:   cluster.ID,
+			ResourceName: cluster.Name,
+			Cluster:      cluster.Name,
+			Details:      fmt.Sprintf("source=%s joiners=%d", sourceHost.NodeName, len(req.Joiners)),
+		})
+	}
+
+	jobCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	go func() {
+		defer cancel()
+		m.runJoinHostsJob(jobCtx, job, cluster, sourceHost, joiners, req)
+	}()
+
+	return job.ID, nil
+}
+
+// mustFindNew is the join-existing analog of mustFind for the joiner list.
+func mustFindNew(hosts []*inventory.InventoryHost, id string) *inventory.InventoryHost {
+	for _, h := range hosts {
+		if h.ID == id {
+			return h
+		}
+	}
+	return &inventory.InventoryHost{ID: id}
+}
+
 // GetJob returns a safe snapshot of the given job, or ok=false if unknown.
 func (m *Manager) GetJob(id string) (JobSnapshot, bool) {
 	m.mu.Lock()

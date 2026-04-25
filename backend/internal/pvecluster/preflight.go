@@ -18,6 +18,14 @@ type PreflightRequest struct {
 	JoinerHostIDs []string
 }
 
+// JoinHostsPreflightRequest is the input for "add member node to existing
+// cluster". The version-homogeneity check pivots on existing members rather
+// than just within the request.
+type JoinHostsPreflightRequest struct {
+	ClusterID     string
+	JoinerHostIDs []string
+}
+
 // HostPreflightResult summarizes what we learned about a single target host.
 type HostPreflightResult struct {
 	HostID           string   `json:"host_id"`
@@ -148,6 +156,99 @@ func Preflight(
 		resp.CanProceed = false
 	}
 
+	return resp, nil
+}
+
+// JoinHostsPreflight is the join-existing-cluster analog of Preflight. It
+// probes each new joiner the same way (reachable, no guests, not already
+// clustered, version) and additionally enforces that the joiners' PVE major
+// version matches the existing cluster's online members.
+func JoinHostsPreflight(
+	ctx context.Context,
+	inv *inventory.Service,
+	req JoinHostsPreflightRequest,
+	newClient func(h *inventory.InventoryHost) *pve.Client,
+) (*PreflightResponse, error) {
+	resp := &PreflightResponse{
+		ClusterNameOK: true,
+		CanProceed:    true,
+		Hosts:         []HostPreflightResult{},
+	}
+
+	cluster, err := inv.GetCluster(ctx, req.ClusterID)
+	if err != nil {
+		return nil, fmt.Errorf("get cluster: %w", err)
+	}
+	if cluster == nil {
+		return nil, fmt.Errorf("cluster not found")
+	}
+
+	// Determine the existing members' major version (any online host).
+	existingHosts, err := inv.ListHostsByCluster(ctx, cluster.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list cluster hosts: %w", err)
+	}
+	var existingMajor string
+	for i := range existingHosts {
+		h := existingHosts[i]
+		if h.Status != inventory.HostStatusOnline {
+			continue
+		}
+		client := newClient(&h)
+		if client == nil {
+			continue
+		}
+		if details, err := client.GetNodeDetails(ctx); err == nil && details != nil {
+			existingMajor = majorVersion(details.PVEVersion)
+			if existingMajor != "" {
+				break
+			}
+		}
+	}
+
+	if len(req.JoinerHostIDs) == 0 {
+		return nil, fmt.Errorf("at least one joiner host id is required")
+	}
+	seen := map[string]bool{}
+	for _, id := range req.JoinerHostIDs {
+		if id == "" {
+			return nil, fmt.Errorf("empty host id in request")
+		}
+		if seen[id] {
+			return nil, fmt.Errorf("duplicate host %s", id)
+		}
+		seen[id] = true
+	}
+
+	for _, id := range req.JoinerHostIDs {
+		host, err := inv.GetHost(ctx, id)
+		if err != nil || host == nil {
+			return nil, fmt.Errorf("host %s not found", id)
+		}
+		if host.ClusterID != "" {
+			// Already clustered in pcenter — refuse cleanly.
+			result := HostPreflightResult{
+				HostID:   host.ID,
+				Address:  host.Address,
+				NodeName: host.NodeName,
+				Role:     RoleJoiner,
+				Blockers: []string{"host is already a member of a pcenter cluster"},
+			}
+			resp.Hosts = append(resp.Hosts, result)
+			resp.CanProceed = false
+			continue
+		}
+		result := probeHost(ctx, host, RoleJoiner, newClient)
+		// Compare against the existing cluster's major version.
+		if existingMajor != "" && result.PVEMajor != "" && result.PVEMajor != existingMajor {
+			result.Blockers = append(result.Blockers,
+				fmt.Sprintf("PVE major version %s doesn't match cluster's existing members (%s); rolling upgrades aren't supported during join", result.PVEMajor, existingMajor))
+		}
+		if len(result.Blockers) > 0 {
+			resp.CanProceed = false
+		}
+		resp.Hosts = append(resp.Hosts, result)
+	}
 	return resp, nil
 }
 

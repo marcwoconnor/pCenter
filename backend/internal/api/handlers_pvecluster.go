@@ -129,6 +129,104 @@ func (h *Handler) CreatePveCluster(w http.ResponseWriter, r *http.Request) {
 
 // --- Poll ---
 
+// --- Join existing cluster ---
+
+// pveClusterJoinPreflightRequest is the body shape for join-mode preflight.
+type pveClusterJoinPreflightRequest struct {
+	ClusterID     string   `json:"cluster_id"`
+	JoinerHostIDs []string `json:"joiner_host_ids"`
+}
+
+// PveClusterJoinPreflight runs read-only checks against the joiners and
+// validates their PVE major version matches the existing cluster's members.
+func (h *Handler) PveClusterJoinPreflight(w http.ResponseWriter, r *http.Request) {
+	if h.pveClusterMgr == nil || h.inventory == nil {
+		writeError(w, http.StatusServiceUnavailable, "cluster formation not enabled")
+		return
+	}
+	var req pveClusterJoinPreflightRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+
+	resp, err := pvecluster.JoinHostsPreflight(ctx, h.inventory, pvecluster.JoinHostsPreflightRequest{
+		ClusterID:     req.ClusterID,
+		JoinerHostIDs: req.JoinerHostIDs,
+	}, func(host *inventory.InventoryHost) *pve.Client {
+		if host.TokenID == "" || host.TokenSecret == "" {
+			return nil
+		}
+		c := pve.NewClientFromClusterConfig(config.ClusterConfig{
+			Name:          "preflight-join:" + host.ID,
+			DiscoveryNode: host.Address,
+			TokenID:       host.TokenID,
+			TokenSecret:   host.TokenSecret,
+			Insecure:      host.Insecure,
+		})
+		if host.NodeName != "" {
+			c.SetNodeName(host.NodeName)
+		}
+		return c
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, resp)
+}
+
+// pveClusterJoinRequest is the body for kicking off a join-existing job.
+type pveClusterJoinRequest struct {
+	ClusterID string `json:"cluster_id"`
+	Joiners   []struct {
+		HostID   string `json:"host_id"`
+		Password string `json:"password"`
+		Link0    string `json:"link0,omitempty"`
+	} `json:"joiners"`
+}
+
+// JoinPveCluster starts a job that runs `pvecm add` for each joiner against
+// an already-existing PVE cluster pcenter is managing.
+func (h *Handler) JoinPveCluster(w http.ResponseWriter, r *http.Request) {
+	if h.pveClusterMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "cluster formation not enabled")
+		return
+	}
+	var req pveClusterJoinRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	joiners := make([]pvecluster.JoinerSpec, 0, len(req.Joiners))
+	for _, j := range req.Joiners {
+		joiners = append(joiners, pvecluster.JoinerSpec{
+			HostID:   j.HostID,
+			Password: j.Password,
+			Link0:    j.Link0,
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	jobID, err := h.pveClusterMgr.StartJoinHostsJob(ctx, pvecluster.StartJoinHostsJobRequest{
+		ClusterID: req.ClusterID,
+		Joiners:   joiners,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+	writeJSON(w, map[string]string{"job_id": jobID})
+}
+
 // GetPveClusterJob returns the current snapshot of a job, or 404 if unknown
 // (pcenter may have been restarted — frontend handles the 404 by suggesting a
 // manual verification + rescan).

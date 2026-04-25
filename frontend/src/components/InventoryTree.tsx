@@ -11,6 +11,7 @@ import { FolderDialog } from './FolderDialog';
 import { DatacenterDialog } from './DatacenterDialog';
 import { AddHostDialog } from './AddHostDialog';
 import { CreateProxmoxClusterDialog } from './CreateProxmoxClusterDialog';
+import { JoinPveClusterDialog } from './JoinPveClusterDialog';
 import { UploadDialog } from './UploadDialog';
 import { CreateVMDialog } from './CreateVMDialog';
 import { CreateContainerDialog } from './CreateContainerDialog';
@@ -286,6 +287,8 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
   const [deployingAgent, setDeployingAgent] = useState<string | null>(null); // hostId being deployed
   // Open state for the Create Proxmox Cluster wizard, scoped to a datacenter.
   const [createPveClusterDialog, setCreatePveClusterDialog] = useState<Datacenter | null>(null);
+  // Open state for the Add Member Node wizard, scoped to an existing cluster.
+  const [joinPveClusterDialog, setJoinPveClusterDialog] = useState<InventoryCluster | null>(null);
   // When true, the next successfully-created datacenter auto-chains into the Add Host dialog.
   // Used by the "Add Host" root-menu item and the top banner when no datacenter exists yet.
   const [chainAddHostAfterDC, setChainAddHostAfterDC] = useState(false);
@@ -857,9 +860,21 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
       })),
     ];
 
+    // Collect all online standalone hosts across datacenters as candidates
+    // for joining this cluster. Filtering happens inside the dialog too,
+    // but we precompute here to decide whether to show the menu entry.
+    const standalonePool: InventoryHost[] = datacenters
+      .flatMap(dc => dc.hosts || [])
+      .filter(h => h.status === 'online' && !h.cluster_id);
+
     return [
+      ...(cluster.status === 'active' && standalonePool.length > 0 ? [{
+        label: 'Add Member Node…',
+        icon: '🔗',
+        action: () => setJoinPveClusterDialog(cluster),
+      }] : []),
       {
-        label: 'Add Host',
+        label: 'Add Host (inventory record only)',
         icon: '➕',
         action: () => setAddHostDialog({ mode: 'cluster', clusterName: cluster.name }),
       },
@@ -1518,6 +1533,14 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
           <CreateProxmoxClusterDialog
             datacenter={createPveClusterDialog}
             onClose={() => setCreatePveClusterDialog(null)}
+            onSuccess={fetchDatacenterTree}
+          />
+        )}
+        {joinPveClusterDialog && (
+          <JoinPveClusterDialog
+            cluster={joinPveClusterDialog}
+            availableHosts={datacenters.flatMap(dc => dc.hosts || [])}
+            onClose={() => setJoinPveClusterDialog(null)}
             onSuccess={fetchDatacenterTree}
           />
         )}

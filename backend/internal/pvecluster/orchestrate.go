@@ -236,10 +236,140 @@ func (m *Manager) runJob(ctx context.Context, job *Job, hosts []*inventory.Inven
 	}
 }
 
+// runJoinHostsJob is the orchestration goroutine for adding new member nodes
+// to an already-existing PVE cluster. Compared to runJob, it skips the
+// founder-create + password-auth-fetch-join-info phases — instead it uses
+// the existing cluster's stored API token to fetch join info, then runs the
+// per-joiner flow identically.
+func (m *Manager) runJoinHostsJob(
+	ctx context.Context,
+	job *Job,
+	cluster *inventory.Cluster,
+	sourceHost *inventory.InventoryHost,
+	joiners []*inventory.InventoryHost,
+	req StartJoinHostsJobRequest,
+) {
+	slog.Info("pvecluster join job starting",
+		"job", job.ID, "cluster", cluster.Name,
+		"source", sourceHost.NodeName, "joiners", len(joiners))
+
+	// Phase 1: Fetch join info from the existing member (token auth).
+	sourceClient, err := buildClient(sourceHost)
+	if err != nil {
+		m.fail(job, cluster.Name, fmt.Sprintf("build source-host client: %v", err))
+		return
+	}
+	job.startStep(sourceHost.ID, PhaseFetchJoinInfo)
+	var joinInfo *pve.ClusterJoinInfo
+	var lastErr error
+	for attempt := 1; attempt <= 5; attempt++ {
+		joinInfo, err = sourceClient.GetClusterJoinInfo(ctx, sourceHost.NodeName)
+		if err == nil && joinInfo != nil && joinInfo.Fingerprint != "" {
+			break
+		}
+		if err != nil {
+			lastErr = err
+		} else {
+			lastErr = fmt.Errorf("join info returned without fingerprint")
+		}
+		job.setStepMessage(sourceHost.ID, PhaseFetchJoinInfo,
+			fmt.Sprintf("retry %d/5: %v", attempt, lastErr))
+		select {
+		case <-ctx.Done():
+			m.fail(job, cluster.Name, "cancelled during join-info fetch")
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+	if joinInfo == nil || joinInfo.Fingerprint == "" {
+		msg := "join info never populated"
+		if lastErr != nil {
+			msg = lastErr.Error()
+		}
+		job.failStep(sourceHost.ID, PhaseFetchJoinInfo, msg)
+		m.fail(job, cluster.Name,
+			fmt.Sprintf("source %s: could not fetch join info: %s", sourceHost.NodeName, msg))
+		return
+	}
+	job.succeedStep(sourceHost.ID, PhaseFetchJoinInfo,
+		fmt.Sprintf("fingerprint %s", truncate(joinInfo.Fingerprint, 20)))
+
+	// Phase 2: Join each new node. Same per-joiner flow as the create path.
+	sourceIP := hostPart(sourceHost.Address)
+	tokenUpdates := map[string]struct{ TokenID, TokenSecret string }{}
+	for _, joinerReq := range req.Joiners {
+		joiner := findHost(joiners, joinerReq.HostID)
+		if joiner == nil {
+			m.fail(job, cluster.Name,
+				fmt.Sprintf("internal error: joiner %s not in hosts list", joinerReq.HostID))
+			return
+		}
+		if err := m.joinOne(ctx, job, sourceHost, sourceIP, joiner, joinerReq, joinInfo); err != nil {
+			m.fail(job, cluster.Name,
+				fmt.Sprintf("joiner %s: %v. Manual recovery: on %s run 'pvecm delnode %s' to drop any half-joined state, 'pvecm status' to verify quorum, then retry from pcenter after cleanup.",
+					joiner.NodeName, err, sourceHost.NodeName, joiner.NodeName))
+			return
+		}
+		if h, _ := m.deps.Inventory.GetHost(ctx, joiner.ID); h != nil {
+			tokenUpdates[joiner.ID] = struct{ TokenID, TokenSecret string }{
+				TokenID: h.TokenID, TokenSecret: h.TokenSecret,
+			}
+		}
+	}
+
+	// Phase 3: pcenter inventory update. Move the new hosts into the
+	// existing cluster row (no new cluster created).
+	job.startStep(sourceHost.ID, PhaseUpdateInventor)
+	hostIDs := make([]string, 0, len(req.Joiners))
+	for _, j := range req.Joiners {
+		hostIDs = append(hostIDs, j.HostID)
+	}
+	if err := m.deps.Inventory.AddHostsToCluster(ctx, inventory.AddHostsToClusterRequest{
+		ClusterID:    cluster.ID,
+		HostIDs:      hostIDs,
+		TokenUpdates: tokenUpdates,
+	}); err != nil {
+		job.failStep(sourceHost.ID, PhaseUpdateInventor, err.Error())
+		m.fail(job, cluster.Name,
+			fmt.Sprintf("PVE join completed but pcenter inventory update failed: %v. Recover by removing the standalone host rows in pcenter and rescanning — the cluster will rediscover them.", err))
+		return
+	}
+	job.succeedStep(sourceHost.ID, PhaseUpdateInventor,
+		fmt.Sprintf("%d host(s) added to %s", len(hostIDs), cluster.Name))
+
+	// Phase 4: Drop the obsolete per-host standalone pollers; the cluster
+	// itself is already polled, no need to AddCluster.
+	if m.deps.Poller != nil {
+		for _, id := range hostIDs {
+			m.deps.Poller.RemoveCluster("standalone:" + id)
+		}
+	}
+
+	job.markSucceeded(cluster.ID)
+	slog.Info("pvecluster join job succeeded", "job", job.ID, "cluster", cluster.Name)
+	if m.deps.Activity != nil {
+		m.deps.Activity.Log(activity.Entry{
+			Action:       "pve_cluster_join_success",
+			ResourceType: "cluster",
+			ResourceID:   cluster.ID,
+			ResourceName: cluster.Name,
+			Cluster:      cluster.Name,
+			Details:      fmt.Sprintf("%d host(s) added", len(hostIDs)),
+		})
+	}
+}
+
 // joinOne handles the per-joiner flow: authenticate with root@pam password,
 // POST /cluster/config/join, watch the founder's /cluster/status for
-// membership, then re-auth and mint a fresh pcenter API token. Updates the
+// membership, then update the joiner's stored credentials. Updates the
 // joiner's job steps along the way.
+//
+// IMPORTANT: after a successful PVE join, /etc/pve is shared across all
+// cluster members via pmxcfs — including /etc/pve/priv/token.cfg. Calling
+// CreateAPIToken on the joiner here would delete-and-recreate the `pcenter`
+// token cluster-wide, invalidating the founder/source's stored secret too.
+// Instead we copy the source's existing token into the joiner's record:
+// after join the joiner can authenticate with that same token.
 func (m *Manager) joinOne(
 	ctx context.Context,
 	job *Job,
@@ -289,51 +419,27 @@ func (m *Manager) joinOne(
 	}
 	job.succeedStep(joiner.ID, PhaseJoin, "joined cluster")
 
-	// Refresh credentials on the joined node — /etc/pve got replaced.
+	// Phase: update the joiner's stored credentials to use the source's
+	// existing token. Now that /etc/pve is shared, that same token works
+	// against the joiner. We don't recreate — see the function comment.
 	job.startStep(joiner.ID, PhaseReauthToken)
-	// Retry AuthenticateWithPassword briefly: pveproxy may still be
-	// restarting after join.
-	var reauth *pve.AuthResult
-	for attempt := 1; attempt <= 6; attempt++ {
-		reauth, err = pve.AuthenticateWithPassword(ctx, joiner.Address, "root@pam", req.Password, joiner.Insecure)
-		if err == nil {
-			break
-		}
-		job.setStepMessage(joiner.ID, PhaseReauthToken, fmt.Sprintf("waiting for pveproxy (retry %d/6)", attempt))
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(5 * time.Second):
-		}
+	if founder.TokenID == "" || founder.TokenSecret == "" {
+		job.failStep(joiner.ID, PhaseReauthToken, "source host has no stored token")
+		return fmt.Errorf("source host %s has no stored API token to copy", founder.NodeName)
 	}
-	if err != nil {
-		job.failStep(joiner.ID, PhaseReauthToken, err.Error())
-		return fmt.Errorf("re-auth after join: %w", err)
-	}
-
-	tok, err := pve.CreateAPIToken(ctx, joiner.Address, reauth, "pcenter", joiner.Insecure)
-	if err != nil {
-		job.failStep(joiner.ID, PhaseReauthToken, err.Error())
-		return fmt.Errorf("re-create pcenter token: %w", err)
-	}
-
-	// Persist to DB immediately. The FormClusterFromHosts call at the end
-	// will read these back through TokenUpdates.
 	if err := m.deps.Inventory.UpdateHost(ctx, joiner.ID, inventory.UpdateHostRequest{
 		Address:     joiner.Address,
-		TokenID:     tok.TokenID,
-		TokenSecret: tok.Secret,
+		TokenID:     founder.TokenID,
+		TokenSecret: founder.TokenSecret,
 		Insecure:    joiner.Insecure,
 	}); err != nil {
-		// This is non-fatal for the cluster join itself but leaves pcenter in
-		// a broken state for this host. Surface it loudly.
 		job.failStep(joiner.ID, PhaseReauthToken, err.Error())
-		return fmt.Errorf("persist fresh token: %w", err)
+		return fmt.Errorf("persist token: %w", err)
 	}
-	// Mutate the in-memory host struct so the caller reads the fresh values.
-	joiner.TokenID = tok.TokenID
-	joiner.TokenSecret = tok.Secret
-	job.succeedStep(joiner.ID, PhaseReauthToken, "token refreshed")
+	// Mirror the in-memory record so subsequent steps see the new creds.
+	joiner.TokenID = founder.TokenID
+	joiner.TokenSecret = founder.TokenSecret
+	job.succeedStep(joiner.ID, PhaseReauthToken, "shared cluster token applied")
 
 	return nil
 }

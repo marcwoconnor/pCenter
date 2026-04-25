@@ -2390,13 +2390,60 @@ type ClusterJoinNode struct {
 }
 
 // GetClusterJoinInfo fetches the join parameters a new node will need.
-// Must be called against the founder (or any existing member). API token auth is fine.
-func (c *Client) GetClusterJoinInfo(ctx context.Context) (*ClusterJoinInfo, error) {
-	info, err := get[ClusterJoinInfo](c, ctx, "/cluster/config/join")
+// Must be called against the founder (or any existing member). API token auth
+// is fine here — only /cluster/config (the create endpoint) demands password.
+//
+// nodeName selects which member to fetch info ABOUT (used by PVE 8+ to pick
+// the per-node fingerprint and ring0 address). Pass empty string to let PVE
+// use the connected node.
+func (c *Client) GetClusterJoinInfo(ctx context.Context, nodeName string) (*ClusterJoinInfo, error) {
+	path := "/cluster/config/join"
+	if nodeName != "" {
+		path = path + "?node=" + url.QueryEscape(nodeName)
+	}
+	info, err := get[ClusterJoinInfo](c, ctx, path)
 	if err != nil {
 		return nil, err
 	}
+	normalizeJoinInfo(&info, nodeName)
+	if info.Fingerprint == "" {
+		return &info, fmt.Errorf("PVE returned join info without a fingerprint (top-level or per-node)")
+	}
 	return &info, nil
+}
+
+// normalizeJoinInfo lifts per-node `pve_fp` / `ring0_addr` (PVE 8+) onto the
+// top-level Fingerprint / IPAddress fields when the older top-level fields are
+// empty, so callers don't have to care about the version difference.
+func normalizeJoinInfo(info *ClusterJoinInfo, preferredNode string) {
+	if info == nil {
+		return
+	}
+	if info.Fingerprint != "" && info.IPAddress != "" {
+		return
+	}
+	target := info.PreferredNode
+	if target == "" {
+		target = preferredNode
+	}
+	var entry *ClusterJoinNode
+	for i := range info.Nodelist {
+		if info.Nodelist[i].Name == target {
+			entry = &info.Nodelist[i]
+			break
+		}
+	}
+	if entry == nil && len(info.Nodelist) > 0 {
+		entry = &info.Nodelist[0]
+	}
+	if entry != nil {
+		if info.Fingerprint == "" {
+			info.Fingerprint = entry.PveFP
+		}
+		if info.IPAddress == "" {
+			info.IPAddress = entry.Ring0Addr
+		}
+	}
 }
 
 // ClusterJoinRequest are params for a node joining an existing cluster.
@@ -2564,37 +2611,7 @@ func GetClusterJoinInfoWithPassword(ctx context.Context, address string, auth *A
 		return nil, fmt.Errorf("parse join-info response: %w (body: %s)", err, string(body))
 	}
 	info := &resp.Data
-
-	// PVE 8+ delivers fingerprint and IP per-node in nodelist[].pve_fp /
-	// ring0_addr instead of at the top level. Find the founder's row
-	// (preferred_node, or fall back to the requested nodeName, or the
-	// first nodelist entry) and lift those into the top-level fields the
-	// rest of the code reads.
-	if info.Fingerprint == "" || info.IPAddress == "" {
-		preferred := info.PreferredNode
-		if preferred == "" {
-			preferred = nodeName
-		}
-		var founderEntry *ClusterJoinNode
-		for i := range info.Nodelist {
-			if info.Nodelist[i].Name == preferred {
-				founderEntry = &info.Nodelist[i]
-				break
-			}
-		}
-		if founderEntry == nil && len(info.Nodelist) > 0 {
-			founderEntry = &info.Nodelist[0]
-		}
-		if founderEntry != nil {
-			if info.Fingerprint == "" {
-				info.Fingerprint = founderEntry.PveFP
-			}
-			if info.IPAddress == "" {
-				info.IPAddress = founderEntry.Ring0Addr
-			}
-		}
-	}
-
+	normalizeJoinInfo(info, nodeName)
 	if info.Fingerprint == "" {
 		raw := string(body)
 		if len(raw) > 400 {

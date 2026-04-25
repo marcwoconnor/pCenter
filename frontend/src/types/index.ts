@@ -925,6 +925,17 @@ export interface CreatePveClusterRequest {
   joiners: PveClusterJoinerInput[];
 }
 
+// Join-existing-cluster variants
+export interface PveClusterJoinPreflightRequest {
+  cluster_id: string;
+  joiner_host_ids: string[];
+}
+
+export interface JoinPveClusterRequest {
+  cluster_id: string;
+  joiners: PveClusterJoinerInput[];
+}
+
 export interface PveClusterJobStep {
   host_id: string;
   address: string;

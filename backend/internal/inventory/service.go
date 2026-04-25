@@ -661,6 +661,32 @@ type FormClusterFromHostsRequest struct {
 	TokenUpdates map[string]struct{ TokenID, TokenSecret string }
 }
 
+// AddHostsToClusterRequest is the service-level input for AddHostsToCluster.
+type AddHostsToClusterRequest struct {
+	ClusterID    string
+	HostIDs      []string
+	TokenUpdates map[string]struct{ TokenID, TokenSecret string }
+}
+
+// AddHostsToCluster moves standalone hosts into an existing cluster after
+// they've been joined to the real PVE cluster via `pvecm add`. Called by the
+// "Add Member Node" orchestrator. Validates the cluster exists.
+func (s *Service) AddHostsToCluster(ctx context.Context, req AddHostsToClusterRequest) error {
+	cluster, err := s.db.GetCluster(ctx, req.ClusterID)
+	if err != nil {
+		return fmt.Errorf("get cluster: %w", err)
+	}
+	if cluster == nil {
+		return fmt.Errorf("cluster not found")
+	}
+
+	return s.db.AddHostsToCluster(ctx, AddHostsToClusterParams{
+		ClusterID:    req.ClusterID,
+		HostIDs:      req.HostIDs,
+		TokenUpdates: req.TokenUpdates,
+	})
+}
+
 // FormClusterFromHosts is the post-join database update called by the PVE
 // cluster-formation orchestrator after the real Proxmox cluster is online.
 // Creates the Cluster row, moves hosts into it, optionally refreshes each

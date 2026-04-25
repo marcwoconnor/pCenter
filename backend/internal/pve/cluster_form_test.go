@@ -81,7 +81,7 @@ func TestGetClusterJoinInfo_Unmarshals(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv, "pve01")
-	info, err := c.GetClusterJoinInfo(context.Background())
+	info, err := c.GetClusterJoinInfo(context.Background(), "pve01")
 	if err != nil {
 		t.Fatalf("GetClusterJoinInfo: %v", err)
 	}
