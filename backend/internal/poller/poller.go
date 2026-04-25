@@ -101,22 +101,31 @@ func (p *Poller) AddCluster(cfg config.ClusterConfig) *ClusterPoller {
 	return cp
 }
 
-// RemoveCluster stops polling for the named cluster and removes it from the
-// poller's registry. Used when standalone hosts get promoted into a real
-// PVE cluster: the per-host "standalone:<id>" pseudo-clusters are no longer
-// the right discovery path and should be torn down.
+// RemoveCluster stops polling for the named cluster, removes it from the
+// poller's registry, AND drops its accumulated state from the store. Used
+// when standalone hosts get promoted into a real PVE cluster (the per-host
+// "standalone:<id>" pseudo-clusters are no longer the right discovery path),
+// or when forcing a re-discovery after a join.
+//
+// Clearing state.Store is essential: otherwise the renderer keeps seeing
+// stale node/storage/VM entries from the removed cluster, which surface in
+// the UI as duplicates.
 //
 // Safe to call on an unknown name (no-op). If the poller was never Start()ed
 // (cancel == nil), the cluster is just removed from the map.
 func (p *Poller) RemoveCluster(name string) {
 	cp, ok := p.clusters[name]
 	if !ok {
+		// Still drop any stale state for that name — there may be leftover
+		// entries from a previous run that no longer have a poller.
+		p.store.RemoveCluster(name)
 		return
 	}
 	if cp.cancel != nil {
 		cp.cancel()
 	}
 	delete(p.clusters, name)
+	p.store.RemoveCluster(name)
 	slog.Info("removed cluster from poller", "cluster", name)
 }
 

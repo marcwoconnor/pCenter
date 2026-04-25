@@ -121,6 +121,16 @@ func (s *Store) GetOrCreateCluster(name string) *ClusterStore {
 	return cs
 }
 
+// RemoveCluster drops a cluster's accumulated state (nodes, VMs, storage,
+// etc.) from the store. Used when a cluster's poller is being torn down —
+// otherwise stale entries linger and surface as duplicate nodes/storage in
+// the UI (the renderer reads from state, not the live poller list).
+func (s *Store) RemoveCluster(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.clusters, name)
+}
+
 // GetCluster returns a cluster store by name
 func (s *Store) GetCluster(name string) (*ClusterStore, bool) {
 	s.mu.RLock()
