@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Layout } from '../components/Layout';
 import { InventoryTree } from '../components/InventoryTree';
 import { ObjectDetail } from '../components/ObjectDetail';
@@ -7,263 +7,38 @@ import { useCluster } from '../context/ClusterContext';
 import { formatBytes } from '../api/client';
 import type { SmartDisk } from '../types';
 
-// Known Ceph health check fixes with API command mappings
-const CEPH_FIXES: Record<string, {
-  description: string;
-  command: string;
-  apiCommand?: string;  // Command name for API
-  needsPgId?: boolean;  // Whether it needs a PG ID from the detail
-}> = {
-  OSD_SCRUB_ERRORS: {
-    description: 'Scrub errors indicate data inconsistencies between replicas. Run repair on the affected PG.',
-    command: 'ceph pg repair <pg_id>',
-    apiCommand: 'pg_repair',
-    needsPgId: true,
-  },
-  PG_DAMAGED: {
-    description: 'Placement group has inconsistent data. Repair will choose the authoritative copy.',
-    command: 'ceph pg repair <pg_id>',
-    apiCommand: 'pg_repair',
-    needsPgId: true,
-  },
-  PG_DEGRADED: {
-    description: 'Not enough replicas available. Check OSD status and ensure all OSDs are up.',
-    command: 'ceph osd tree',
-    apiCommand: 'osd_tree',
-  },
-  OSD_DOWN: {
-    description: 'One or more OSDs are down. Check the OSD service status.',
-    command: 'systemctl status ceph-osd@<id>',
-    // No API command - manual intervention required
-  },
-  MON_DOWN: {
-    description: 'Monitor(s) are down. Check monitor service status.',
-    command: 'systemctl status ceph-mon@<hostname>',
-    // No API command - manual intervention required
-  },
-  POOL_NO_REDUNDANCY: {
-    description: 'Pool has no redundancy configured. Consider increasing replica count.',
-    command: 'ceph osd pool set <pool> size <n>',
-    // No API command - requires pool name input
-  },
-};
-
-// Extract PG ID from detail message like "pg 4.3b is active+clean+inconsistent"
-function extractPgId(detail: string): string | null {
-  const match = detail.match(/pg\s+(\d+\.[0-9a-fA-F]+)/);
-  return match ? match[1] : null;
-}
-
-// Check if repair is already in progress from the PG state
-function isRepairInProgress(detail: string): boolean {
-  // State format: "pg 4.3b is active+clean+scrubbing+deep+inconsistent+repair, acting [4,7]"
-  return detail.includes('+repair');
-}
-
-interface CommandLog {
-  timestamp: Date;
-  command: string;
-  success: boolean;
-  output: string;
-}
-
+// Ceph management has its own top-level page (/ceph) with full topology,
+// pool/OSD/MON/MGR CRUD, and flag toggles. This Storage tab is a small
+// pointer rather than a duplicate UI.
 function CephDetailPanel() {
   const { ceph } = useCluster();
-  const [commandLogs, setCommandLogs] = useState<CommandLog[]>([]);
-  const [runningCommand, setRunningCommand] = useState<string | null>(null);
-
-  const runCommand = async (apiCommand: string, pgId?: string) => {
-    const cmdKey = `${apiCommand}-${pgId || 'none'}`;
-    setRunningCommand(cmdKey);
-
-    try {
-      const response = await fetch('/api/ceph/command', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: apiCommand, pg_id: pgId }),
-      });
-
-      const result = await response.json();
-
-      setCommandLogs(prev => [{
-        timestamp: new Date(),
-        command: pgId ? `ceph pg repair ${pgId}` : `ceph ${apiCommand.replace('_', ' ')}`,
-        success: result.success,
-        output: result.output || result.error || 'No output',
-      }, ...prev]);
-    } catch (err) {
-      setCommandLogs(prev => [{
-        timestamp: new Date(),
-        command: pgId ? `ceph pg repair ${pgId}` : `ceph ${apiCommand.replace('_', ' ')}`,
-        success: false,
-        output: `Request failed: ${err}`,
-      }, ...prev]);
-    } finally {
-      setRunningCommand(null);
-    }
-  };
-
-  if (!ceph) {
-    return (
-      <div className="p-6 text-gray-500">
-        Ceph not available
-      </div>
-    );
-  }
-
-  const hasIssues = ceph.health !== 'HEALTH_OK';
-
+  const status = ceph?.health || 'UNKNOWN';
+  const color =
+    status === 'HEALTH_OK' ? 'text-green-500' : status === 'HEALTH_WARN' ? 'text-yellow-500' : 'text-red-500';
   return (
-    <div className="p-6">
-      <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">Ceph Cluster Health</h2>
-
-      {/* Status Overview */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 mb-6">
+    <div className="p-6 space-y-4">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
         <div className="flex items-center justify-between">
           <div>
-            <div className={`text-3xl font-bold ${
-              ceph.health === 'HEALTH_OK' ? 'text-green-500' :
-              ceph.health === 'HEALTH_WARN' ? 'text-yellow-500' : 'text-red-500'
-            }`}>
-              {ceph.health}
-            </div>
-            <div className="text-sm text-gray-500 mt-1">
-              {formatBytes(ceph.bytes_used)} used of {formatBytes(ceph.bytes_total)} ({((ceph.bytes_used / ceph.bytes_total) * 100).toFixed(1)}%)
-            </div>
+            <div className={`text-2xl font-bold ${color}`}>{status}</div>
+            {ceph && (
+              <div className="text-sm text-gray-500 mt-1">
+                {formatBytes(ceph.bytes_used)} used of {formatBytes(ceph.bytes_total)}
+                {ceph.bytes_total > 0 && ` (${((ceph.bytes_used / ceph.bytes_total) * 100).toFixed(1)}%)`}
+              </div>
+            )}
           </div>
+          <Link
+            to="/ceph"
+            className="px-4 py-2 text-sm font-medium rounded bg-blue-600 hover:bg-blue-700 text-white"
+          >
+            Manage Ceph →
+          </Link>
         </div>
       </div>
-
-      {/* Health Checks */}
-      {hasIssues && ceph.checks && (
-        <div className="space-y-4">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Health Issues</h3>
-          {Object.entries(ceph.checks).map(([name, check]) => {
-            const fix = CEPH_FIXES[name];
-            const pgId = check.detail ? extractPgId(check.detail) : null;
-            const repairAlreadyRunning = check.detail ? isRepairInProgress(check.detail) : false;
-            const canRun = fix?.apiCommand && (!fix.needsPgId || pgId) && !repairAlreadyRunning;
-            const cmdKey = `${fix?.apiCommand}-${pgId || 'none'}`;
-            const isRunning = runningCommand === cmdKey;
-
-            return (
-              <div key={name} className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-                <div className="flex items-start gap-3">
-                  <div className={`mt-1 w-3 h-3 rounded-full flex-shrink-0 ${
-                    check.severity === 'HEALTH_ERR' ? 'bg-red-500' : 'bg-yellow-500'
-                  }`} />
-                  <div className="flex-1">
-                    <div className="font-medium text-gray-900 dark:text-white">
-                      {name.replace(/_/g, ' ')}
-                    </div>
-                    <div className={`text-sm ${
-                      check.severity === 'HEALTH_ERR' ? 'text-red-500' : 'text-yellow-500'
-                    }`}>
-                      {check.summary}
-                    </div>
-                    {check.detail && (
-                      <div className="text-sm text-gray-500 dark:text-gray-400 mt-1 font-mono bg-gray-100 dark:bg-gray-900 p-2 rounded max-h-60 overflow-y-auto whitespace-pre-wrap">
-                        {check.detail}
-                      </div>
-                    )}
-                    {fix && (
-                      <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded border border-blue-200 dark:border-blue-800">
-                        <div className="text-sm text-gray-700 dark:text-gray-300">
-                          {fix.description}
-                        </div>
-                        <div className="mt-2 flex items-center gap-2">
-                          <div className="flex-1 font-mono text-sm bg-gray-900 text-green-400 p-2 rounded">
-                            $ {fix.needsPgId && pgId ? fix.command.replace('<pg_id>', pgId) : fix.command}
-                          </div>
-                          {repairAlreadyRunning ? (
-                            <>
-                              <button
-                                disabled
-                                className="px-3 py-2 text-sm font-medium rounded bg-yellow-600 text-white cursor-not-allowed animate-pulse"
-                              >
-                                Repairing...
-                              </button>
-                              {fix.needsPgId && pgId && (
-                                <button
-                                  onClick={() => runCommand('pg_query', pgId)}
-                                  disabled={runningCommand === `pg_query-${pgId}`}
-                                  className={`px-3 py-2 text-sm font-medium rounded ${
-                                    runningCommand === `pg_query-${pgId}`
-                                      ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
-                                      : 'bg-blue-600 hover:bg-blue-700 text-white'
-                                  }`}
-                                >
-                                  {runningCommand === `pg_query-${pgId}` ? 'Checking...' : 'Status'}
-                                </button>
-                              )}
-                            </>
-                          ) : canRun && (
-                            <>
-                              <button
-                                onClick={() => runCommand(fix.apiCommand!, pgId || undefined)}
-                                disabled={isRunning}
-                                className={`px-3 py-2 text-sm font-medium rounded ${
-                                  isRunning
-                                    ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
-                                    : 'bg-green-600 hover:bg-green-700 text-white'
-                                }`}
-                              >
-                                {isRunning ? 'Running...' : 'Run'}
-                              </button>
-                              {fix.needsPgId && pgId && (
-                                <button
-                                  onClick={() => runCommand('pg_query', pgId)}
-                                  disabled={runningCommand === `pg_query-${pgId}`}
-                                  className={`px-3 py-2 text-sm font-medium rounded ${
-                                    runningCommand === `pg_query-${pgId}`
-                                      ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
-                                      : 'bg-blue-600 hover:bg-blue-700 text-white'
-                                  }`}
-                                >
-                                  {runningCommand === `pg_query-${pgId}` ? 'Checking...' : 'Status'}
-                                </button>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {!hasIssues && (
-        <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-4 text-green-700 dark:text-green-400">
-          Ceph cluster is healthy. No issues detected.
-        </div>
-      )}
-
-      {/* Command Output Log */}
-      {commandLogs.length > 0 && (
-        <div className="mt-6">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">Command Log</h3>
-          <div className="bg-gray-900 rounded-lg p-4 max-h-80 overflow-y-auto">
-            {commandLogs.map((log, idx) => (
-              <div key={idx} className="mb-4 last:mb-0">
-                <div className="flex items-center gap-2 text-xs text-gray-400 mb-1">
-                  <span>{log.timestamp.toLocaleTimeString()}</span>
-                  <span className={log.success ? 'text-green-400' : 'text-red-400'}>
-                    {log.success ? '✓' : '✗'}
-                  </span>
-                  <span className="text-blue-400">$ {log.command}</span>
-                </div>
-                <pre className="text-sm text-gray-300 whitespace-pre-wrap font-mono pl-4 border-l-2 border-gray-700">
-                  {log.output}
-                </pre>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <p className="text-sm text-gray-500 dark:text-gray-400">
+        Full Ceph management — OSDs, pools, monitors, flags — moved to its own page. This tab now shows only a quick health summary.
+      </p>
     </div>
   );
 }
