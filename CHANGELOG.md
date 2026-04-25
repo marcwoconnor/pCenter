@@ -22,6 +22,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 - **CephFS lifecycle** — `POST /api/clusters/{cluster}/nodes/{node}/ceph/fs/{name}` (filesystem name in URL per PVE's contract; optional `pg_num` + `add_storage`), `DELETE .../ceph/fs/{name}?remove_storages=1&remove_pools=1`. New "CephFS" tab on the /ceph page with create dialog + delete (always removes underlying pools to avoid orphans). Disabled until at least one MDS exists.
 - **CRUSH viewer** — `GET /api/clusters/{cluster}/ceph/crush` returns the decompiled CRUSH map as plain text. New "CRUSH" tab shows the rules table (already cached in topology) plus the raw map for SSH-free reference. Editing remains via `ceph osd setcrushmap` — intentionally not exposed.
 
+### Added (PR 3 — install wizard)
+- **`POST /api/clusters/{cluster}/ceph/install/preflight`** — probes each target node (reachable, PVE version, Ceph already installed) and returns blockers per host plus a cluster-level can_proceed flag. The wizard renders this before letting the user submit.
+- **`POST /api/clusters/{cluster}/ceph/install`** — kicks off install orchestration as a background Job, returns `{job_id}`. Body: `{nodes: [...], network: "10.0.0.0/24", cluster_network?, pool_size?, min_size?}`. The first node is the founder (gets pveceph init + first MON + MGR); the rest are joiners.
+- **`GET /api/clusters/{cluster}/ceph/jobs[/{job_id}]`** — list jobs or fetch a single Job snapshot for progress polling.
+- **New `cephcluster` package** modeled on `pvecluster/`. Manager + Job + phased Step shape; install phases are `install_preflight → install_packages → ceph_init → create_mon (per node, serial) → create_mgr → wait_healthy`. Job state lives in memory; pcenter restart wipes it.
+- **`pve.Client.InitCephCluster`** — wraps PVE's `POST /nodes/{node}/ceph/init` with typed options (network, cluster_network, size, min_size, disable_cephx).
+- **Install Wizard UI** — invoked from the "Ceph not installed" empty state on `/ceph`. Three-step flow: configure (pick nodes from the cluster's discovered nodes, set CIDR + pool defaults) → preflight (per-host blocker table) → run (live job-progress poll every 2s with phase/host/state/detail rows). Routes to the topology view on success.
+
+**Install execution model (v1).** SSH-based `pveceph install -y` on each node (uses pcenter's existing root SSH key trust — same path `SetCephNoout` uses today), REST `POST /ceph/init` on the founder, then REST MON/MGR creation. No per-job password collection; consistent with the rest of pCenter's auth model. The pve-agent route + streamed apt progress are tracked as future enhancements in `docs/ceph-lifecycle-plan.md`.
+
 ## v0.1.15 — 2026-04-25
 
 ### Added

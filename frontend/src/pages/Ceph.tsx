@@ -11,6 +11,8 @@ import type {
   CephMGR,
   CephMDS,
   CephFlags,
+  CephInstallPreflightResponse,
+  CephJobSnapshot,
 } from '../types';
 
 type TabKey = 'status' | 'osds' | 'pools' | 'monitors' | 'cephfs' | 'crush' | 'flags';
@@ -143,7 +145,7 @@ export function CephPage() {
           {!activeCluster ? (
             <EmptyState message="No cluster selected." />
           ) : error ? (
-            <NotInstalled cluster={activeCluster} message={error} />
+            <NotInstalled cluster={activeCluster} message={error} onInstalled={fetchTopology} />
           ) : loading && !topology ? (
             <div className="text-gray-500 dark:text-gray-400">Loading Ceph topology…</div>
           ) : !topology ? (
@@ -181,24 +183,279 @@ function EmptyState({ message }: { message: string }) {
   return <div className="text-gray-500 dark:text-gray-400">{message}</div>;
 }
 
-function NotInstalled({ cluster, message }: { cluster: string; message: string }) {
+function NotInstalled({ cluster, message, onInstalled }: { cluster: string; message: string; onInstalled: () => void }) {
+  const [showWizard, setShowWizard] = useState(false);
   // 404 from /ceph means Ceph isn't installed (or hasn't been polled). Surface
   // it as a friendly empty-state rather than a red error.
   const isNotInstalled = message.includes('404') || message.includes('Ceph not installed');
   if (isNotInstalled) {
     return (
-      <div className="rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-8 text-center">
-        <p className="text-gray-700 dark:text-gray-200 font-medium mb-2">
-          Ceph is not installed on cluster <code className="font-mono">{cluster}</code>.
-        </p>
-        <p className="text-sm text-gray-500 dark:text-gray-400">
-          The install wizard ships in a later release. For now, install Ceph through the PVE web UI
-          (Datacenter → Cluster → Ceph), then return here.
-        </p>
-      </div>
+      <>
+        <div className="rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-8 text-center">
+          <p className="text-gray-700 dark:text-gray-200 font-medium mb-2">
+            Ceph is not installed on cluster <code className="font-mono">{cluster}</code>.
+          </p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+            Run the install wizard to bootstrap Ceph (pveceph install + init + first MON + first MGR).
+            Once it succeeds, OSDs and pools can be added from this page.
+          </p>
+          <button
+            onClick={() => setShowWizard(true)}
+            className="px-4 py-2 text-sm font-medium rounded bg-blue-600 hover:bg-blue-700 text-white"
+          >
+            Install Ceph…
+          </button>
+        </div>
+        {showWizard && (
+          <CephInstallWizard
+            cluster={cluster}
+            onClose={() => setShowWizard(false)}
+            onSuccess={() => { setShowWizard(false); onInstalled(); }}
+          />
+        )}
+      </>
     );
   }
   return <div className="bg-red-50 text-red-700 px-3 py-2 rounded text-sm">{message}</div>;
+}
+
+// --- Install wizard ---
+
+type WizardStep = 'configure' | 'preflight' | 'running';
+
+function CephInstallWizard({ cluster, onClose, onSuccess }: { cluster: string; onClose: () => void; onSuccess: () => void }) {
+  const { getNodesByCluster } = useCluster();
+  const clusterNodes = getNodesByCluster(cluster);
+  const [step, setStep] = useState<WizardStep>('configure');
+  const [selectedNodes, setSelectedNodes] = useState<string[]>(() => clusterNodes.map((n) => n.node));
+  const [network, setNetwork] = useState('');
+  const [clusterNetwork, setClusterNetwork] = useState('');
+  const [poolSize, setPoolSize] = useState('3');
+  const [minSize, setMinSize] = useState('2');
+  const [preflight, setPreflight] = useState<CephInstallPreflightResponse | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [job, setJob] = useState<CephJobSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const toggleNode = (name: string) => {
+    setSelectedNodes((cur) => (cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name]));
+  };
+
+  const runPreflight = async () => {
+    if (selectedNodes.length === 0) {
+      setError('Pick at least one node.');
+      return;
+    }
+    if (!network) {
+      setError('Network CIDR is required (e.g. 10.0.0.0/24).');
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    try {
+      const result = await api.preflightCephInstall(cluster, { nodes: selectedNodes });
+      setPreflight(result);
+      setStep('preflight');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const { job_id } = await api.startCephInstall(cluster, {
+        nodes: selectedNodes,
+        network,
+        cluster_network: clusterNetwork || undefined,
+        pool_size: Number(poolSize) || undefined,
+        min_size: Number(minSize) || undefined,
+      });
+      setJobId(job_id);
+      setStep('running');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  };
+
+  // Poll the job once we have its ID.
+  useEffect(() => {
+    if (!jobId) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const snap = await api.getCephJob(cluster, jobId);
+        if (cancelled) return;
+        setJob(snap);
+        if (snap.state !== 'running') {
+          // Stop polling on terminal state; user dismisses dialog manually.
+          return;
+        }
+        setTimeout(tick, 2000);
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    };
+    tick();
+    return () => { cancelled = true; };
+  }, [cluster, jobId]);
+
+  // Detect terminal success / failure to update parent.
+  const isTerminal = job?.state === 'succeeded' || job?.state === 'failed';
+  const handleClose = () => {
+    if (job?.state === 'succeeded') onSuccess();
+    else onClose();
+  };
+
+  return (
+    <Modal title={`Install Ceph on ${cluster}`} onClose={busy && !isTerminal ? () => {} : handleClose}>
+      {step === 'configure' && (
+        <div className="space-y-4">
+          <Field label="Nodes (founder is the first selected)">
+            <div className="border border-gray-300 dark:border-gray-600 rounded p-2 max-h-40 overflow-y-auto">
+              {clusterNodes.length === 0 ? (
+                <p className="text-sm text-gray-500">No nodes discovered for this cluster.</p>
+              ) : (
+                clusterNodes.map((n) => (
+                  <label key={n.node} className="flex items-center gap-2 text-sm py-0.5">
+                    <input
+                      type="checkbox"
+                      checked={selectedNodes.includes(n.node)}
+                      onChange={() => toggleNode(n.node)}
+                    />
+                    <span className="font-mono">{n.node}</span>
+                    <span className={`text-xs ${n.status === 'online' ? 'text-green-600' : 'text-red-600'}`}>{n.status}</span>
+                  </label>
+                ))
+              )}
+            </div>
+          </Field>
+          <Field label="Public network CIDR">
+            <input value={network} onChange={(e) => setNetwork(e.target.value)} className={inputCls} placeholder="10.0.0.0/24" />
+          </Field>
+          <Field label="Cluster network CIDR (optional, for OSD replication)">
+            <input value={clusterNetwork} onChange={(e) => setClusterNetwork(e.target.value)} className={inputCls} placeholder="10.10.0.0/24" />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Default pool size"><input type="number" min={1} value={poolSize} onChange={(e) => setPoolSize(e.target.value)} className={inputCls} /></Field>
+            <Field label="Default min_size"><input type="number" min={1} value={minSize} onChange={(e) => setMinSize(e.target.value)} className={inputCls} /></Field>
+          </div>
+          {error && <div className="bg-red-50 text-red-700 px-3 py-2 rounded text-sm">{error}</div>}
+          <DialogButtons onCancel={onClose} onSubmit={runPreflight} submitLabel="Run preflight" submitting={busy} />
+        </div>
+      )}
+
+      {step === 'preflight' && preflight && (
+        <div className="space-y-4">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 dark:bg-gray-900 text-xs uppercase text-gray-500 dark:text-gray-400">
+              <tr>
+                <th className="text-left px-2 py-1">Node</th>
+                <th className="text-left px-2 py-1">PVE</th>
+                <th className="text-left px-2 py-1">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+              {preflight.hosts.map((h) => (
+                <tr key={h.node}>
+                  <td className="px-2 py-1 font-mono">{h.node}</td>
+                  <td className="px-2 py-1">{h.pve_version || '—'}</td>
+                  <td className="px-2 py-1">
+                    {h.blockers.length === 0 ? (
+                      <span className="text-green-600">ready</span>
+                    ) : (
+                      <span className="text-red-600">{h.blockers.join('; ')}</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {preflight.message && (
+            <div className="bg-yellow-50 text-yellow-800 px-3 py-2 rounded text-sm">{preflight.message}</div>
+          )}
+          {error && <div className="bg-red-50 text-red-700 px-3 py-2 rounded text-sm">{error}</div>}
+          <div className="flex justify-between gap-2">
+            <button onClick={() => setStep('configure')} disabled={busy} className="px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200">
+              Back
+            </button>
+            <div className="flex gap-2">
+              <button onClick={onClose} disabled={busy} className="px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200">Cancel</button>
+              <button
+                onClick={submit}
+                disabled={busy || !preflight.can_proceed}
+                title={preflight.can_proceed ? 'Start install' : 'Resolve preflight blockers first'}
+                className="px-3 py-1.5 text-sm rounded bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-400"
+              >
+                {busy ? 'Working…' : 'Start install'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {step === 'running' && (
+        <div className="space-y-3">
+          <div className="text-sm">
+            Job state:{' '}
+            <span className={
+              job?.state === 'succeeded' ? 'text-green-600 font-medium' :
+              job?.state === 'failed' ? 'text-red-600 font-medium' :
+              'text-blue-600 font-medium'
+            }>
+              {job?.state || 'starting…'}
+            </span>
+          </div>
+          {job?.error && <div className="bg-red-50 text-red-700 px-3 py-2 rounded text-sm">{job.error}</div>}
+          <div className="border border-gray-200 dark:border-gray-700 rounded max-h-80 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 dark:bg-gray-900 text-gray-500 dark:text-gray-400">
+                <tr>
+                  <th className="text-left px-2 py-1">Phase</th>
+                  <th className="text-left px-2 py-1">Host</th>
+                  <th className="text-left px-2 py-1">State</th>
+                  <th className="text-left px-2 py-1">Detail</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                {(job?.steps || []).map((s, i) => (
+                  <tr key={i}>
+                    <td className="px-2 py-1 font-mono">{s.phase}</td>
+                    <td className="px-2 py-1 font-mono">{s.host || '—'}</td>
+                    <td className="px-2 py-1">
+                      <span className={
+                        s.state === 'succeeded' ? 'text-green-600' :
+                        s.state === 'failed' ? 'text-red-600' :
+                        s.state === 'running' ? 'text-blue-600' :
+                        'text-gray-500'
+                      }>{s.state}</span>
+                    </td>
+                    <td className="px-2 py-1 text-gray-600 dark:text-gray-400">{s.error || s.message || ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {error && <div className="bg-red-50 text-red-700 px-3 py-2 rounded text-sm">{error}</div>}
+          <div className="flex justify-end">
+            <button
+              onClick={handleClose}
+              disabled={!isTerminal && job !== null && job.state === 'running'}
+              className="px-3 py-1.5 text-sm rounded bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-400"
+            >
+              {isTerminal ? (job?.state === 'succeeded' ? 'Done' : 'Close') : 'Running…'}
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
 }
 
 function HealthBadge({ status }: { status?: string }) {

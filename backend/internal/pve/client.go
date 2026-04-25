@@ -1642,6 +1642,43 @@ func (c *Client) DeleteCephMGR(ctx context.Context, mgrID string) (string, error
 	return resp.Data, nil
 }
 
+// InitCephClusterOptions captures the params for POST /nodes/{node}/ceph/init.
+// Network is the public-network CIDR (required; e.g. "10.0.0.0/24");
+// ClusterNetwork is optional (used for OSD replication when set).
+// Size + MinSize seed the global Ceph defaults for newly-created pools.
+type InitCephClusterOptions struct {
+	Network        string // required: public network CIDR
+	ClusterNetwork string // optional: cluster network CIDR for OSD replication
+	Size           int    // default 3 if zero (PVE applies its own default)
+	MinSize        int    // default 2 if zero
+	DisableCephx   bool   // turns off Ceph's auth — virtually never wanted
+}
+
+// InitCephCluster bootstraps a fresh Ceph cluster on this client's node.
+// Must run on exactly one node — typically the first MON node. PVE writes
+// /etc/pve/ceph.conf and the initial keyrings; subsequent MONs just join.
+// Returns no UPID — the call is synchronous.
+func (c *Client) InitCephCluster(ctx context.Context, opts InitCephClusterOptions) error {
+	if opts.Network == "" {
+		return fmt.Errorf("network is required")
+	}
+	params := map[string]string{"network": opts.Network}
+	if opts.ClusterNetwork != "" {
+		params["cluster-network"] = opts.ClusterNetwork
+	}
+	if opts.Size > 0 {
+		params["size"] = fmt.Sprintf("%d", opts.Size)
+	}
+	if opts.MinSize > 0 {
+		params["min_size"] = fmt.Sprintf("%d", opts.MinSize)
+	}
+	if opts.DisableCephx {
+		params["disable_cephx"] = "1"
+	}
+	_, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/init", c.nodeName), params)
+	return err
+}
+
 // CreateCephMDS creates a Ceph metadata server daemon on this client's node.
 // hotstandby toggles whether the MDS sits in standby-replay (warm cache, faster
 // failover at the cost of memory). Returns UPID.

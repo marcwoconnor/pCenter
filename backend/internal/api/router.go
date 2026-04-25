@@ -213,6 +213,12 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/nodes/{node}/ceph/fs/{name}", h.DeleteClusterCephFS)
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/ceph/crush", h.GetClusterCephCrushMap)
 
+	// Ceph install/destroy orchestration (PR 3 + PR 4 of the lifecycle plan)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/ceph/install/preflight", h.PreflightCephInstall)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/ceph/install", h.StartCephInstall)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/ceph/jobs/{job_id}", h.GetCephJob)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/ceph/jobs", h.ListCephJobs)
+
 	// Cluster nodes
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes", h.GetClusterNodes)
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes/{node}/config", h.GetNodeConfig)

@@ -931,6 +931,136 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
 
+  /api/clusters/{cluster}/ceph/install/preflight:
+    post:
+      tags: [clusters]
+      summary: Preflight checks for a Ceph install
+      description: |
+        Probes each target node and returns a structured report. Each host
+        gets a `blockers` list (e.g. unreachable, Ceph already installed)
+        and the wizard refuses to submit if `can_proceed` is false.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nodes]
+              properties:
+                nodes:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200':
+          description: Preflight result
+          content:
+            application/json:
+              schema: { type: object }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/ceph/install:
+    post:
+      tags: [clusters]
+      summary: Start a Ceph install Job
+      description: |
+        Kicks off install orchestration as a background Job. The first node
+        in `nodes` becomes the founder (gets pveceph init + first MON +
+        first MGR); the rest get pveceph install + an additional MON each.
+        Returns a `job_id` immediately; poll
+        `GET /api/clusters/{cluster}/ceph/jobs/{job_id}` for progress.
+
+        v1 uses pcenter's existing SSH key trust to root@<node> for
+        `pveceph install` and the configured PVE API token for everything
+        else. No per-job passwords.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nodes, network]
+              properties:
+                nodes:
+                  type: array
+                  items: { type: string }
+                  description: Ordered list of PVE nodes; first is the founder.
+                network:
+                  type: string
+                  description: Public network CIDR for `pveceph init --network`
+                  example: "10.0.0.0/24"
+                cluster_network:
+                  type: string
+                  description: Optional separate cluster network for OSD replication.
+                pool_size:
+                  type: integer
+                  default: 3
+                min_size:
+                  type: integer
+                  default: 2
+      responses:
+        '200':
+          description: Job started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id: { type: string }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/ceph/jobs:
+    get:
+      tags: [clusters]
+      summary: List recent Ceph install/destroy jobs
+      description: |
+        Returns all known jobs (running + recently completed), newest-first.
+        Job state is in-memory — pcenter restart wipes the registry.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+      responses:
+        '200':
+          description: List of job snapshots
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+        '401': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/ceph/jobs/{job_id}:
+    get:
+      tags: [clusters]
+      summary: Snapshot of a single Ceph install/destroy job
+      description: |
+        Returns a JSON snapshot with state (running/succeeded/failed), the
+        ordered list of steps with per-step state + message + error, and
+        timestamps. 404 means the job ID is unknown — the operation
+        either landed or pcenter restarted and lost the registry.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: job_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Job snapshot
+          content:
+            application/json:
+              schema: { type: object }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
   /api/clusters/{cluster}/ceph/flags/{flag}:
     post:
       tags: [clusters]

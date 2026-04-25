@@ -6,6 +6,8 @@ import type {
   StorageVolume,
   CephStatus,
   CephCluster,
+  CephInstallPreflightResponse,
+  CephJobSnapshot,
   GlobalSummary,
   ClusterInfo,
   MigrationProgress,
@@ -330,6 +332,27 @@ export const api = {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
     return await resp.text();
   },
+  preflightCephInstall: (cluster: string, body: { nodes: string[] }) =>
+    fetchAPI<CephInstallPreflightResponse>(`/clusters/${cluster}/ceph/install/preflight`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  startCephInstall: (
+    cluster: string,
+    body: {
+      nodes: string[];
+      network: string;
+      cluster_network?: string;
+      pool_size?: number;
+      min_size?: number;
+    },
+  ) =>
+    fetchAPI<{ job_id: string }>(`/clusters/${cluster}/ceph/install`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  getCephJob: (cluster: string, jobId: string) =>
+    fetchAPI<CephJobSnapshot>(`/clusters/${cluster}/ceph/jobs/${jobId}`),
   getNodeConfig: (cluster: string, node: string) =>
     fetchAPI<NodeConfig>(`/clusters/${cluster}/nodes/${node}/config`),
   updateNodeDNS: (cluster: string, node: string, dns: { search: string; dns1: string; dns2?: string; dns3?: string }) =>

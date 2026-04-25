@@ -372,6 +372,50 @@ export interface CephCluster {
   last_updated: string;    // RFC3339
 }
 
+// Install/destroy orchestration (cephcluster package).
+
+export interface CephInstallPreflightHost {
+  node: string;
+  reachable: boolean;
+  pve_version?: string;
+  pve_major?: string;
+  ceph_already_installed: boolean;
+  blockers: string[];
+}
+
+export interface CephInstallPreflightResponse {
+  hosts: CephInstallPreflightHost[];
+  can_proceed: boolean;
+  network_ok: boolean;
+  message?: string;
+}
+
+export type CephJobState = 'running' | 'succeeded' | 'failed';
+export type CephJobKind = 'install' | 'destroy';
+export type CephStepState = 'pending' | 'running' | 'succeeded' | 'failed';
+
+export interface CephJobStep {
+  host: string;
+  phase: string;
+  state: CephStepState;
+  upid?: string;
+  message?: string;
+  error?: string;
+  started_at?: string;
+  ended_at?: string;
+}
+
+export interface CephJobSnapshot {
+  job_id: string;
+  kind: CephJobKind;
+  cluster: string;
+  state: CephJobState;
+  error?: string;
+  steps: CephJobStep[];
+  started_at: string;
+  ended_at?: string;
+}
+
 // Multi-cluster types
 
 export interface HAInfo {
