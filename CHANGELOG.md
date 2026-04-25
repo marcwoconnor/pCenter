@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+## v0.1.19 — 2026-04-25
+
 ### Fixed
 - **Ceph install fails at `create_mon` phase with PVE 501** — `POST /nodes/{node}/ceph/mon` returned `Method 'POST /nodes/{node}/ceph/mon' not implemented` because PVE's create endpoints require the daemon id in the URL path (`/ceph/mon/{monid}`, `/ceph/mgr/{id}`, `/ceph/mds/{name}`). The pcenter PVE client now sends the hostname as the id — matching what `pveceph mon create` does on the CLI — for MON, MGR, and MDS create. Day-2 daemon creation from the Ceph page hit the same bug; it works now too.
 
