@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+### Fixed
+- **Ceph install wizard: white screen on "Run preflight"** — the per-host `blockers` field came back as `null` (Go nil slice) for healthy hosts, and `h.blockers.length` then threw and unmounted the React tree. Backend now serializes `Blockers` as `[]`; the wizard also handles a missing array defensively.
+
 ## v0.1.17 — 2026-04-25
 
 Same payload as the would-be v0.1.16 (which failed CI on a leftover `mode` reference in `AddHostDialog.tsx` from PR #69 — caught by `tsc -b` in CI but not by `tsc --noEmit` locally) plus the one-line build fix.

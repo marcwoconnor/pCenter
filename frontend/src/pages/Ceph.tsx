@@ -364,19 +364,22 @@ function CephInstallWizard({ cluster, onClose, onSuccess }: { cluster: string; o
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-              {preflight.hosts.map((h) => (
-                <tr key={h.node}>
-                  <td className="px-2 py-1 font-mono">{h.node}</td>
-                  <td className="px-2 py-1">{h.pve_version || '—'}</td>
-                  <td className="px-2 py-1">
-                    {h.blockers.length === 0 ? (
-                      <span className="text-green-600">ready</span>
-                    ) : (
-                      <span className="text-red-600">{h.blockers.join('; ')}</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {preflight.hosts.map((h) => {
+                const blockers = h.blockers ?? [];
+                return (
+                  <tr key={h.node}>
+                    <td className="px-2 py-1 font-mono">{h.node}</td>
+                    <td className="px-2 py-1">{h.pve_version || '—'}</td>
+                    <td className="px-2 py-1">
+                      {blockers.length === 0 ? (
+                        <span className="text-green-600">ready</span>
+                      ) : (
+                        <span className="text-red-600">{blockers.join('; ')}</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           {preflight.message && (
