@@ -215,9 +215,47 @@ func AuthenticateWithPassword(ctx context.Context, address, username, password s
 	}, nil
 }
 
-// CreateAPIToken creates a new API token using a ticket from password auth
-// tokenName is just the suffix (e.g., "pcenter"), full token ID will be "user@realm!tokenName"
-func CreateAPIToken(ctx context.Context, address string, auth *AuthResult, tokenName string, insecure bool) (*TokenResult, error) {
+// probeAPIToken returns true if a GET against /version succeeds with the given
+// token credentials. PVE invalidates revoked tokens immediately on token.cfg
+// rewrite, so a 200 here proves the secret is current.
+func probeAPIToken(ctx context.Context, address, tokenID, secret string, insecure bool) bool {
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure},
+	}
+	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
+
+	reqURL := fmt.Sprintf("https://%s/api2/json/version", address)
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("PVEAPIToken=%s=%s", tokenID, secret))
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode == http.StatusOK
+}
+
+// CreateAPIToken creates a new API token using a ticket from password auth.
+// tokenName is just the suffix (e.g., "pcenter"); full token ID will be
+// "user@realm!tokenName".
+//
+// If existingSecret is non-empty, the function probes the token first and
+// reuses it on success — this avoids a delete-and-recreate cycle that would
+// invalidate sibling hosts sharing the same /etc/pve/priv/token.cfg in a PVE
+// cluster (see issue #59). Pass empty string for first-time creation.
+func CreateAPIToken(ctx context.Context, address string, auth *AuthResult, tokenName string, existingSecret string, insecure bool) (*TokenResult, error) {
+	fullID := auth.Username + "!" + tokenName
+
+	if existingSecret != "" && probeAPIToken(ctx, address, fullID, existingSecret, insecure) {
+		slog.Info("existing API token still valid, reusing", "token", tokenName)
+		return &TokenResult{TokenID: fullID, Secret: existingSecret}, nil
+	}
+
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: insecure,
@@ -257,7 +295,9 @@ func CreateAPIToken(ctx context.Context, address string, auth *AuthResult, token
 		return nil, fmt.Errorf("read response body: %w", err)
 	}
 	if resp.StatusCode >= 400 {
-		// If token already exists, delete and recreate
+		// If token already exists, delete and recreate. The probe above (when
+		// existingSecret was supplied) already proved the stored secret is
+		// stale, so recreating is the right call.
 		if strings.Contains(string(body), "already exists") {
 			slog.Info("API token already exists, recreating", "token", tokenName)
 			delURL := fmt.Sprintf("https://%s/api2/json/access/users/%s/token/%s",
@@ -266,8 +306,8 @@ func CreateAPIToken(ctx context.Context, address string, auth *AuthResult, token
 			delReq.Header.Set("CSRFPreventionToken", auth.CSRFToken)
 			delReq.AddCookie(&http.Cookie{Name: "PVEAuthCookie", Value: auth.Ticket})
 			client.Do(delReq)
-			// Retry creation
-			return CreateAPIToken(ctx, address, auth, tokenName, insecure)
+			// Retry creation; pass empty existingSecret to skip another probe.
+			return CreateAPIToken(ctx, address, auth, tokenName, "", insecure)
 		}
 		return nil, fmt.Errorf("create token failed: %s", string(body))
 	}
