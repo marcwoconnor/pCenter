@@ -5,6 +5,7 @@ import type {
   Storage,
   StorageVolume,
   CephStatus,
+  CephCluster,
   GlobalSummary,
   ClusterInfo,
   MigrationProgress,
@@ -172,6 +173,8 @@ export const api = {
     fetchAPI<Summary>(`/clusters/${cluster}/summary`),
   getClusterNodes: (cluster: string) =>
     fetchAPI<Node[]>(`/clusters/${cluster}/nodes`),
+  getClusterCeph: (cluster: string) =>
+    fetchAPI<CephCluster>(`/clusters/${cluster}/ceph`),
   getNodeConfig: (cluster: string, node: string) =>
     fetchAPI<NodeConfig>(`/clusters/${cluster}/nodes/${node}/config`),
   updateNodeDNS: (cluster: string, node: string, dns: { search: string; dns1: string; dns2?: string; dns3?: string }) =>

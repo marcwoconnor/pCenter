@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+### Added
+- **`GET /api/clusters/{cluster}/ceph` — cluster-wide Ceph topology snapshot.** Returns OSDs (with host attribution + in/up state), MONs, MGRs, MDSs, pools, CRUSH rules, CephFS instances, and OSD flags as a single JSON document. Backed by a new 30s `pollCephLoop` in the poller that picks any node responding to `/ceph/status` and fans out the topology fetch in parallel against it; partial-fetch errors on individual endpoints log at debug and don't blank the view. Returns 404 when Ceph isn't installed or hasn't been polled yet. Foundation for the day-2 Ceph management UI (see `docs/ceph-lifecycle-plan.md`); no UI consumer in this release.
+
 ## v0.1.15 — 2026-04-25
 
 ### Added

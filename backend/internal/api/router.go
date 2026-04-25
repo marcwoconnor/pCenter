@@ -190,6 +190,11 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	// Cluster summary
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/summary", h.GetClusterSummary)
 
+	// Cluster Ceph topology (OSDs, MONs, pools, ...). The global /api/ceph
+	// endpoint above only returns CephStatus; this returns the full topology
+	// snapshot used by the day-2 management UI.
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/ceph", h.GetClusterCeph)
+
 	// Cluster nodes
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes", h.GetClusterNodes)
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes/{node}/config", h.GetNodeConfig)

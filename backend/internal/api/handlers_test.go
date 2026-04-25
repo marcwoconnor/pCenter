@@ -283,3 +283,69 @@ func TestGetAllGuestsEmpty(t *testing.T) {
 		t.Errorf("expected 200, got %d", rec.Code)
 	}
 }
+
+// TestGetClusterCeph_404s covers the two distinct nil paths: the cluster
+// itself doesn't exist, and the cluster exists but has no Ceph topology
+// (not installed or not yet polled). Both surface as 404.
+func TestGetClusterCeph_404s(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	t.Run("unknown cluster", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/clusters/nope/ceph", nil)
+		req.SetPathValue("cluster", "nope")
+		rec := httptest.NewRecorder()
+		h.GetClusterCeph(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("cluster exists but no Ceph", func(t *testing.T) {
+		_, store := newTestHandler(t)
+		store.GetOrCreateCluster("test-cluster")
+		h := NewHandler(store, nil, nil)
+
+		req := httptest.NewRequest("GET", "/api/clusters/test-cluster/ceph", nil)
+		req.SetPathValue("cluster", "test-cluster")
+		rec := httptest.NewRecorder()
+		h.GetClusterCeph(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+// TestGetClusterCeph_ReturnsTopology populates the topology and verifies
+// the JSON round-trip preserves the cluster-wide shape.
+func TestGetClusterCeph_ReturnsTopology(t *testing.T) {
+	store := state.New()
+	cs := store.GetOrCreateCluster("prod")
+	cs.SetCephTopology(&pve.CephCluster{
+		MONs:  []pve.CephMON{{Name: "pve1", Quorum: true, State: "leader"}},
+		OSDs:  []pve.CephOSD{{ID: 0, Name: "osd.0", Status: "up", In: true, Host: "pve1"}},
+		Pools: []pve.CephPool{{Name: "rbd", Size: 3, MinSize: 2, PGNum: 128}},
+		Flags: pve.CephFlags{NoOut: true},
+	})
+	h := NewHandler(store, nil, nil)
+
+	req := httptest.NewRequest("GET", "/api/clusters/prod/ceph", nil)
+	req.SetPathValue("cluster", "prod")
+	rec := httptest.NewRecorder()
+	h.GetClusterCeph(rec, req)
+
+	var got pve.CephCluster
+	decodeJSON(t, rec, &got)
+
+	if len(got.MONs) != 1 || got.MONs[0].State != "leader" {
+		t.Errorf("MONs lost in roundtrip: %+v", got.MONs)
+	}
+	if len(got.OSDs) != 1 || got.OSDs[0].Host != "pve1" {
+		t.Errorf("OSDs lost in roundtrip: %+v", got.OSDs)
+	}
+	if len(got.Pools) != 1 || got.Pools[0].Name != "rbd" || got.Pools[0].Size != 3 {
+		t.Errorf("Pools lost in roundtrip: %+v", got.Pools)
+	}
+	if !got.Flags.NoOut {
+		t.Error("NoOut flag not preserved")
+	}
+}

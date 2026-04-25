@@ -354,6 +354,27 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
 
+  /api/clusters/{cluster}/ceph:
+    get:
+      tags: [clusters]
+      summary: Cluster-wide Ceph topology snapshot
+      description: |
+        Returns the full Ceph topology cached by the poller — OSDs, MONs,
+        MGRs, MDSs, pools, CRUSH rules, CephFS instances, and OSD flags.
+        Returns 404 when the cluster has no Ceph installed or hasn't been
+        polled yet. The cadence is ~30s; back-to-back calls within a tick
+        return identical responses.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+      responses:
+        '200':
+          description: Ceph topology
+          content:
+            application/json:
+              schema: { type: object }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
   # === Guests ===
 
   /api/guests:

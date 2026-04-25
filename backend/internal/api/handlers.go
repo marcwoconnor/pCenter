@@ -682,6 +682,27 @@ func (h *Handler) RunCephCommand(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GetClusterCeph returns the cached cluster-wide Ceph topology snapshot
+// (OSDs, MONs, MGRs, MDSs, pools, rules, fs, flags). Returns 404 if Ceph
+// is not installed on the cluster or hasn't been polled yet.
+//
+// The data is published by the poller's pollCephLoop on a 30s cadence;
+// callers polling more frequently should expect identical responses
+// between ticks. For real-time per-event push, subscribe to the WS hub.
+func (h *Handler) GetClusterCeph(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	if _, ok := h.store.GetCluster(clusterName); !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+	topology := h.store.GetCephTopology(clusterName)
+	if topology == nil {
+		writeError(w, http.StatusNotFound, "Ceph not installed on this cluster")
+		return
+	}
+	writeJSON(w, topology)
+}
+
 // GetSmart returns SMART data for all disks across all nodes
 func (h *Handler) GetSmart(w http.ResponseWriter, r *http.Request) {
 	if h.poller == nil {
