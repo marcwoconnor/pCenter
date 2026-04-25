@@ -484,6 +484,174 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
 
+  /api/clusters/{cluster}/nodes/{node}/ceph/osd:
+    post:
+      tags: [clusters]
+      summary: Create a Ceph OSD on a specific node
+      description: |
+        Creates a Ceph OSD on the named node. Required: `dev` (data device
+        path, e.g. /dev/sdb). Optional: separate `db_dev` / `wal_dev` for
+        BlueStore offload, `encrypted` for dm-crypt, `crush_device_class`
+        override, and `osds_per_device` to split a fast device into
+        multiple OSDs. The caller is responsible for wiping the device
+        first; PVE refuses to create on a device with existing
+        signatures. Returns the UPID of the create task.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dev]
+              properties:
+                dev: { type: string, example: "/dev/sdb" }
+                db_dev: { type: string }
+                wal_dev: { type: string }
+                db_dev_size: { type: integer, description: "DB partition size in GiB" }
+                wal_dev_size: { type: integer, description: "WAL partition size in GiB" }
+                encrypted: { type: boolean }
+                crush_device_class: { type: string, enum: [hdd, ssd, nvme] }
+                osds_per_device: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Task started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { upid: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/nodes/{node}/ceph/osd/{osdid}:
+    delete:
+      tags: [clusters]
+      summary: Destroy a Ceph OSD
+      description: |
+        Destroys an OSD on the named node. Pass `cleanup=1` to also remove
+        the underlying LVM volumes — required to re-use the device without
+        a manual zap. Returns the UPID of the destroy task.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+        - in: path
+          name: osdid
+          required: true
+          schema: { type: integer, minimum: 0 }
+        - in: query
+          name: cleanup
+          schema: { type: string, enum: ["1"] }
+      responses:
+        '200':
+          description: Task started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { upid: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/nodes/{node}/ceph/osd/{osdid}/in:
+    post:
+      tags: [clusters]
+      summary: Mark a Ceph OSD "in"
+      description: Marks an OSD CRUSH-eligible. The reverse of /out.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+        - in: path
+          name: osdid
+          required: true
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: OSD marked in
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/nodes/{node}/ceph/osd/{osdid}/out:
+    post:
+      tags: [clusters]
+      summary: Mark a Ceph OSD "out"
+      description: |
+        Marks an OSD out (typically the first step of a planned removal so
+        PGs migrate off cleanly).
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+        - in: path
+          name: osdid
+          required: true
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: OSD marked out
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/nodes/{node}/ceph/osd/{osdid}/scrub:
+    post:
+      tags: [clusters]
+      summary: Request a scrub of a Ceph OSD
+      description: |
+        Queues a scrub on the named OSD. Pass `deep=1` for a deep scrub.
+        Runs asynchronously inside Ceph; this endpoint returns immediately
+        once the request is accepted.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+        - in: path
+          name: osdid
+          required: true
+          schema: { type: integer, minimum: 0 }
+        - in: query
+          name: deep
+          schema: { type: string, enum: ["1"] }
+      responses:
+        '200':
+          description: Scrub queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
   /api/clusters/{cluster}/ceph/flags/{flag}:
     post:
       tags: [clusters]

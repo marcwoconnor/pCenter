@@ -367,3 +367,129 @@ func TestSetCephFlag_RequiresFlag(t *testing.T) {
 		t.Fatal("expected error when flag is empty")
 	}
 }
+
+func TestCreateCephOSD_FormsRequest(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":"UPID:pve1:0003:CAFE:CEPH_OSD_CREATE:/dev/sdb:root@pam:"}`)
+	c := newTestClient(srv, "pve1")
+
+	upid, err := c.CreateCephOSD(context.Background(), CephOSDCreateOptions{
+		Dev:              "/dev/sdb",
+		DBDev:            "/dev/nvme0n1",
+		WALDev:           "/dev/nvme0n1",
+		DBDevSize:        50,
+		Encrypted:        true,
+		CrushDeviceClass: "ssd",
+		OSDsPerDevice:    2,
+	})
+	if err != nil {
+		t.Fatalf("CreateCephOSD: %v", err)
+	}
+	if !strings.HasPrefix(upid, "UPID:") {
+		t.Errorf("expected UPID, got %q", upid)
+	}
+	if rec.method != "POST" {
+		t.Errorf("method: want POST, got %q", rec.method)
+	}
+	if want := "/api2/json/nodes/pve1/ceph/osd"; rec.path != want {
+		t.Errorf("path: want %q, got %q", want, rec.path)
+	}
+	for _, want := range []string{"dev=%2Fdev%2Fsdb", "db_dev=%2Fdev%2Fnvme0n1", "wal_dev=%2Fdev%2Fnvme0n1", "db_dev_size=50", "encrypted=1", "crush_device_class=ssd", "osds_per_device=2"} {
+		if !strings.Contains(rec.body, want) {
+			t.Errorf("body missing %q; got %q", want, rec.body)
+		}
+	}
+}
+
+func TestCreateCephOSD_RequiresDev(t *testing.T) {
+	c := newTestClient(httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("server should not be hit when dev is empty")
+	})), "pve1")
+	defer c.httpClient.CloseIdleConnections()
+
+	if _, err := c.CreateCephOSD(context.Background(), CephOSDCreateOptions{}); err == nil {
+		t.Fatal("expected error when dev is empty")
+	}
+}
+
+func TestDeleteCephOSD_PassesCleanupAsQuery(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":"UPID:pve1:0004:DEAD:CEPH_OSD_DESTROY:0:root@pam:"}`)
+	c := newTestClient(srv, "pve1")
+
+	upid, err := c.DeleteCephOSD(context.Background(), 0, true)
+	if err != nil {
+		t.Fatalf("DeleteCephOSD: %v", err)
+	}
+	if !strings.HasPrefix(upid, "UPID:") {
+		t.Errorf("expected UPID, got %q", upid)
+	}
+	if rec.method != "DELETE" {
+		t.Errorf("method: want DELETE, got %q", rec.method)
+	}
+	if want := "/api2/json/nodes/pve1/ceph/osd/0"; rec.path != want {
+		t.Errorf("path: want %q, got %q", want, rec.path)
+	}
+	if rec.query != "cleanup=1" {
+		t.Errorf("query: want cleanup=1, got %q", rec.query)
+	}
+}
+
+func TestDeleteCephOSD_NoCleanupOmitsQuery(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":"UPID:x"}`)
+	c := newTestClient(srv, "pve1")
+
+	if _, err := c.DeleteCephOSD(context.Background(), 1, false); err != nil {
+		t.Fatalf("DeleteCephOSD: %v", err)
+	}
+	if rec.query != "" {
+		t.Errorf("query should be empty when cleanup=false, got %q", rec.query)
+	}
+}
+
+func TestSetCephOSDIn(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":null}`)
+	c := newTestClient(srv, "pve1")
+
+	if err := c.SetCephOSDIn(context.Background(), 3); err != nil {
+		t.Fatalf("SetCephOSDIn: %v", err)
+	}
+	if rec.method != "POST" {
+		t.Errorf("method: want POST, got %q", rec.method)
+	}
+	if want := "/api2/json/nodes/pve1/ceph/osd/3/in"; rec.path != want {
+		t.Errorf("path: want %q, got %q", want, rec.path)
+	}
+}
+
+func TestSetCephOSDOut(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":null}`)
+	c := newTestClient(srv, "pve1")
+
+	if err := c.SetCephOSDOut(context.Background(), 5); err != nil {
+		t.Fatalf("SetCephOSDOut: %v", err)
+	}
+	if want := "/api2/json/nodes/pve1/ceph/osd/5/out"; rec.path != want {
+		t.Errorf("path: want %q, got %q", want, rec.path)
+	}
+}
+
+func TestScrubCephOSD(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":null}`)
+	c := newTestClient(srv, "pve1")
+
+	if err := c.ScrubCephOSD(context.Background(), 7, false); err != nil {
+		t.Fatalf("ScrubCephOSD shallow: %v", err)
+	}
+	if rec.body != "" {
+		t.Errorf("shallow scrub: body should be empty, got %q", rec.body)
+	}
+	if want := "/api2/json/nodes/pve1/ceph/osd/7/scrub"; rec.path != want {
+		t.Errorf("path: want %q, got %q", want, rec.path)
+	}
+
+	if err := c.ScrubCephOSD(context.Background(), 7, true); err != nil {
+		t.Fatalf("ScrubCephOSD deep: %v", err)
+	}
+	if !strings.Contains(rec.body, "deep=1") {
+		t.Errorf("deep scrub: body must contain deep=1, got %q", rec.body)
+	}
+}

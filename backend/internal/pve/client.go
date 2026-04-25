@@ -1480,6 +1480,103 @@ func (c *Client) SetCephFlag(ctx context.Context, flag string, enable bool) erro
 	return err
 }
 
+// CephOSDCreateOptions are the parameters PVE accepts on POST /nodes/{node}/ceph/osd.
+// Dev is the data device path (e.g. "/dev/sdb"); DBDev / WALDev are optional
+// separate-device offloads for the BlueStore RocksDB and WAL respectively.
+type CephOSDCreateOptions struct {
+	Dev              string // required: data device, e.g. "/dev/sdb"
+	DBDev            string // optional: separate DB device path
+	WALDev           string // optional: separate WAL device path
+	DBDevSize        int    // optional: DB partition size GiB (PVE-managed LVM); 0 = device-default
+	WALDevSize       int    // optional: WAL partition size GiB; 0 = device-default
+	Encrypted        bool   // when true, dm-crypt over the OSD
+	CrushDeviceClass string // optional override: "hdd" | "ssd" | "nvme" | ""
+	OSDsPerDevice    int    // optional: split a single device into N OSDs (NVMe); 0 = 1
+}
+
+// CreateCephOSD creates a Ceph OSD on this client's node. Returns UPID.
+//
+// Important: the caller is responsible for confirming the device is wiped /
+// has no signatures — PVE's pveceph osd create will refuse a device that
+// looks like it might already hold a filesystem. The agent's disk_zap
+// action handles that side; see docs/ceph-lifecycle-plan.md.
+func (c *Client) CreateCephOSD(ctx context.Context, opts CephOSDCreateOptions) (string, error) {
+	if opts.Dev == "" {
+		return "", fmt.Errorf("dev is required")
+	}
+	params := map[string]string{"dev": opts.Dev}
+	if opts.DBDev != "" {
+		params["db_dev"] = opts.DBDev
+	}
+	if opts.WALDev != "" {
+		params["wal_dev"] = opts.WALDev
+	}
+	if opts.DBDevSize > 0 {
+		params["db_dev_size"] = fmt.Sprintf("%d", opts.DBDevSize)
+	}
+	if opts.WALDevSize > 0 {
+		params["wal_dev_size"] = fmt.Sprintf("%d", opts.WALDevSize)
+	}
+	if opts.Encrypted {
+		params["encrypted"] = "1"
+	}
+	if opts.CrushDeviceClass != "" {
+		params["crush_device_class"] = opts.CrushDeviceClass
+	}
+	if opts.OSDsPerDevice > 0 {
+		params["osds_per_device"] = fmt.Sprintf("%d", opts.OSDsPerDevice)
+	}
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/osd", c.nodeName), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// DeleteCephOSD destroys an OSD. When cleanup=true PVE removes the LVM
+// volumes too — required for re-using the device without manual zap.
+// Returns UPID.
+func (c *Client) DeleteCephOSD(ctx context.Context, osdID int, cleanup bool) (string, error) {
+	path := fmt.Sprintf("/nodes/%s/ceph/osd/%d", c.nodeName, osdID)
+	if cleanup {
+		path += "?cleanup=1"
+	}
+	data, err := c.deleteWithData(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// SetCephOSDIn marks an OSD "in" (CRUSH eligible). PVE returns no UPID.
+func (c *Client) SetCephOSDIn(ctx context.Context, osdID int) error {
+	_, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/osd/%d/in", c.nodeName, osdID), nil)
+	return err
+}
+
+// SetCephOSDOut marks an OSD "out" — typically the first step of a planned
+// removal so PGs migrate off cleanly. PVE returns no UPID.
+func (c *Client) SetCephOSDOut(ctx context.Context, osdID int) error {
+	_, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/osd/%d/out", c.nodeName, osdID), nil)
+	return err
+}
+
+// ScrubCephOSD requests a scrub of an OSD. When deep=true, requests a deep
+// scrub instead. PVE returns no UPID — the request is queued by the OSD
+// itself and runs asynchronously.
+func (c *Client) ScrubCephOSD(ctx context.Context, osdID int, deep bool) error {
+	params := map[string]string{}
+	if deep {
+		params["deep"] = "1"
+	}
+	_, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/osd/%d/scrub", c.nodeName, osdID), params)
+	return err
+}
+
 // GetSmartData fetches SMART data for all disks on this node
 func (c *Client) GetSmartData(ctx context.Context) ([]SmartDisk, error) {
 	host := c.getHostFromURL()

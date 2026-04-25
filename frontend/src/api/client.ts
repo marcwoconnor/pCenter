@@ -227,6 +227,48 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ enable }),
     }),
+  createCephOSD: (
+    cluster: string,
+    node: string,
+    body: {
+      dev: string;
+      db_dev?: string;
+      wal_dev?: string;
+      db_dev_size?: number;
+      wal_dev_size?: number;
+      encrypted?: boolean;
+      crush_device_class?: 'hdd' | 'ssd' | 'nvme';
+      osds_per_device?: number;
+    },
+  ) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/nodes/${node}/ceph/osd`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  deleteCephOSD: (cluster: string, node: string, osdid: number, opts?: { cleanup?: boolean }) => {
+    const qs = opts?.cleanup ? '?cleanup=1' : '';
+    return fetchAPI<{ upid: string }>(
+      `/clusters/${cluster}/nodes/${node}/ceph/osd/${osdid}${qs}`,
+      { method: 'DELETE' },
+    );
+  },
+  setCephOSDIn: (cluster: string, node: string, osdid: number) =>
+    fetchAPI<{ status: string }>(
+      `/clusters/${cluster}/nodes/${node}/ceph/osd/${osdid}/in`,
+      { method: 'POST' },
+    ),
+  setCephOSDOut: (cluster: string, node: string, osdid: number) =>
+    fetchAPI<{ status: string }>(
+      `/clusters/${cluster}/nodes/${node}/ceph/osd/${osdid}/out`,
+      { method: 'POST' },
+    ),
+  scrubCephOSD: (cluster: string, node: string, osdid: number, opts?: { deep?: boolean }) => {
+    const qs = opts?.deep ? '?deep=1' : '';
+    return fetchAPI<{ status: string }>(
+      `/clusters/${cluster}/nodes/${node}/ceph/osd/${osdid}/scrub${qs}`,
+      { method: 'POST' },
+    );
+  },
   getNodeConfig: (cluster: string, node: string) =>
     fetchAPI<NodeConfig>(`/clusters/${cluster}/nodes/${node}/config`),
   updateNodeDNS: (cluster: string, node: string, dns: { search: string; dns1: string; dns2?: string; dns3?: string }) =>

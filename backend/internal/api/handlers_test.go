@@ -402,6 +402,74 @@ func TestUpdateClusterCephPool_RejectsEmptyPool(t *testing.T) {
 	}
 }
 
+// TestCreateClusterCephOSD_Validation covers the validation paths reachable
+// without a live PVE backend.
+func TestCreateClusterCephOSD_Validation(t *testing.T) {
+	tests := []struct {
+		name     string
+		node     string
+		body     string
+		wantCode int
+	}{
+		{name: "missing node path-param", node: "", body: `{"dev":"/dev/sdb"}`, wantCode: http.StatusBadRequest},
+		{name: "invalid JSON", node: "pve1", body: `{nope`, wantCode: http.StatusBadRequest},
+		{name: "missing dev", node: "pve1", body: `{"encrypted":true}`, wantCode: http.StatusBadRequest},
+		{name: "unknown cluster", node: "pve1", body: `{"dev":"/dev/sdb"}`, wantCode: http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, _ := newTestHandler(t)
+
+			req := httptest.NewRequest("POST", "/api/clusters/x/nodes/x/ceph/osd", strings.NewReader(tt.body))
+			req.SetPathValue("cluster", "test-cluster")
+			req.SetPathValue("node", tt.node)
+			rec := httptest.NewRecorder()
+			h.CreateClusterCephOSD(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Errorf("got status %d, want %d (body: %s)", rec.Code, tt.wantCode, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestOSDActionHandlers_RejectInvalidOSDID covers the parseOSDID guard
+// shared by DELETE / in / out / scrub.
+func TestOSDActionHandlers_RejectInvalidOSDID(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	handlers := map[string]func(http.ResponseWriter, *http.Request){
+		"delete": h.DeleteClusterCephOSD,
+		"in":     h.SetClusterCephOSDIn,
+		"out":    h.SetClusterCephOSDOut,
+		"scrub":  h.ScrubClusterCephOSD,
+	}
+	for name, fn := range handlers {
+		t.Run(name+"_non_numeric", func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/", nil)
+			req.SetPathValue("cluster", "c")
+			req.SetPathValue("node", "n")
+			req.SetPathValue("osdid", "abc")
+			rec := httptest.NewRecorder()
+			fn(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("%s: expected 400 for non-numeric osdid, got %d", name, rec.Code)
+			}
+		})
+		t.Run(name+"_negative", func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/", nil)
+			req.SetPathValue("cluster", "c")
+			req.SetPathValue("node", "n")
+			req.SetPathValue("osdid", "-1")
+			rec := httptest.NewRecorder()
+			fn(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("%s: expected 400 for negative osdid, got %d", name, rec.Code)
+			}
+		})
+	}
+}
+
 // TestGetClusterCeph_ReturnsTopology populates the topology and verifies
 // the JSON round-trip preserves the cluster-wide shape.
 func TestGetClusterCeph_ReturnsTopology(t *testing.T) {

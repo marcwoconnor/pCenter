@@ -881,6 +881,166 @@ func (h *Handler) ToggleClusterCephFlag(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
+// pickNodeClient returns the PVE client for a specific node in a cluster,
+// writing 404 + nil when either is missing. Used by node-scoped Ceph
+// mutations (OSD create + the OSD-id ops where the URL carries node).
+func (h *Handler) pickNodeClient(w http.ResponseWriter, cluster, node string) *pve.Client {
+	if _, ok := h.store.GetCluster(cluster); !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return nil
+	}
+	client, ok := h.getClient(cluster, node)
+	if !ok {
+		writeError(w, http.StatusNotFound, "node not found in cluster")
+		return nil
+	}
+	return client
+}
+
+// CephOSDCreateRequest is the JSON body for CreateClusterCephOSD.
+type CephOSDCreateRequest struct {
+	Dev              string `json:"dev"`
+	DBDev            string `json:"db_dev,omitempty"`
+	WALDev           string `json:"wal_dev,omitempty"`
+	DBDevSize        int    `json:"db_dev_size,omitempty"`
+	WALDevSize       int    `json:"wal_dev_size,omitempty"`
+	Encrypted        bool   `json:"encrypted,omitempty"`
+	CrushDeviceClass string `json:"crush_device_class,omitempty"`
+	OSDsPerDevice    int    `json:"osds_per_device,omitempty"`
+}
+
+// CreateClusterCephOSD creates a Ceph OSD on a specific node. Caller must
+// ensure the device is wiped (use the agent's disk_zap action first).
+// Returns {upid}.
+func (h *Handler) CreateClusterCephOSD(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+	if nodeName == "" {
+		writeError(w, http.StatusBadRequest, "node is required")
+		return
+	}
+	var req CephOSDCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Dev == "" {
+		writeError(w, http.StatusBadRequest, "dev is required")
+		return
+	}
+	client := h.pickNodeClient(w, clusterName, nodeName)
+	if client == nil {
+		return
+	}
+	upid, err := client.CreateCephOSD(r.Context(), pve.CephOSDCreateOptions{
+		Dev:              req.Dev,
+		DBDev:            req.DBDev,
+		WALDev:           req.WALDev,
+		DBDevSize:        req.DBDevSize,
+		WALDevSize:       req.WALDevSize,
+		Encrypted:        req.Encrypted,
+		CrushDeviceClass: req.CrushDeviceClass,
+		OSDsPerDevice:    req.OSDsPerDevice,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// parseOSDID extracts and validates the {osdid} path parameter. Writes 400
+// on parse failure and returns ok=false; callers should return immediately.
+func parseOSDID(w http.ResponseWriter, r *http.Request) (int, bool) {
+	osdStr := r.PathValue("osdid")
+	osdID, err := strconv.Atoi(osdStr)
+	if err != nil || osdID < 0 {
+		writeError(w, http.StatusBadRequest, "invalid osdid")
+		return 0, false
+	}
+	return osdID, true
+}
+
+// DeleteClusterCephOSD destroys an OSD. Query: cleanup=1 to remove the
+// LVM volumes too (required to re-use the device without manual zap).
+func (h *Handler) DeleteClusterCephOSD(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+	osdID, ok := parseOSDID(w, r)
+	if !ok {
+		return
+	}
+	client := h.pickNodeClient(w, clusterName, nodeName)
+	if client == nil {
+		return
+	}
+	cleanup := r.URL.Query().Get("cleanup") == "1"
+	upid, err := client.DeleteCephOSD(r.Context(), osdID, cleanup)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// SetClusterCephOSDIn marks an OSD in (CRUSH eligible).
+func (h *Handler) SetClusterCephOSDIn(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+	osdID, ok := parseOSDID(w, r)
+	if !ok {
+		return
+	}
+	client := h.pickNodeClient(w, clusterName, nodeName)
+	if client == nil {
+		return
+	}
+	if err := client.SetCephOSDIn(r.Context(), osdID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// SetClusterCephOSDOut marks an OSD out — typically a planned removal step.
+func (h *Handler) SetClusterCephOSDOut(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+	osdID, ok := parseOSDID(w, r)
+	if !ok {
+		return
+	}
+	client := h.pickNodeClient(w, clusterName, nodeName)
+	if client == nil {
+		return
+	}
+	if err := client.SetCephOSDOut(r.Context(), osdID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// ScrubClusterCephOSD requests a (deep) scrub of an OSD. Query: deep=1.
+func (h *Handler) ScrubClusterCephOSD(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+	osdID, ok := parseOSDID(w, r)
+	if !ok {
+		return
+	}
+	client := h.pickNodeClient(w, clusterName, nodeName)
+	if client == nil {
+		return
+	}
+	deep := r.URL.Query().Get("deep") == "1"
+	if err := client.ScrubCephOSD(r.Context(), osdID, deep); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
 // GetSmart returns SMART data for all disks across all nodes
 func (h *Handler) GetSmart(w http.ResponseWriter, r *http.Request) {
 	if h.poller == nil {
