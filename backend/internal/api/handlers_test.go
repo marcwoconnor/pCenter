@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/moconnor/pcenter/internal/pve"
@@ -313,6 +314,92 @@ func TestGetClusterCeph_404s(t *testing.T) {
 			t.Errorf("expected 404, got %d: %s", rec.Code, rec.Body.String())
 		}
 	})
+}
+
+// TestCreateClusterCephPool_Validation covers the request-validation paths
+// that don't require a live PVE backend: bad JSON, missing name, unknown
+// cluster, no poller (agent-only mode). The happy path is exercised via
+// the pve client's TestCreateCephPool_FormsRequest test.
+func TestCreateClusterCephPool_Validation(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(*state.Store)
+		body     string
+		wantCode int
+	}{
+		{
+			name:     "invalid JSON",
+			body:     `{not json`,
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "missing name",
+			body:     `{"size":3}`,
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "unknown cluster",
+			body:     `{"name":"rbd"}`,
+			wantCode: http.StatusNotFound,
+		},
+		{
+			name: "agent-only mode (no poller)",
+			setup: func(s *state.Store) {
+				s.GetOrCreateCluster("test-cluster")
+			},
+			body:     `{"name":"rbd"}`,
+			wantCode: http.StatusServiceUnavailable,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := state.New()
+			if tt.setup != nil {
+				tt.setup(store)
+			}
+			h := NewHandler(store, nil, nil)
+
+			req := httptest.NewRequest("POST", "/api/clusters/test-cluster/ceph/pool", strings.NewReader(tt.body))
+			req.SetPathValue("cluster", "test-cluster")
+			rec := httptest.NewRecorder()
+			h.CreateClusterCephPool(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Errorf("got status %d, want %d (body: %s)", rec.Code, tt.wantCode, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestToggleClusterCephFlag_RejectsUnsupportedFlag verifies the flag
+// allowlist gates obvious typos before any backend call.
+func TestToggleClusterCephFlag_RejectsUnsupportedFlag(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	req := httptest.NewRequest("POST", "/api/clusters/test/ceph/flags/sortbitwise", strings.NewReader(`{"enable":true}`))
+	req.SetPathValue("cluster", "test")
+	req.SetPathValue("flag", "sortbitwise")
+	rec := httptest.NewRecorder()
+	h.ToggleClusterCephFlag(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for unsupported flag, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUpdateClusterCephPool_RejectsEmptyPool covers the path-param check.
+func TestUpdateClusterCephPool_RejectsEmptyPool(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	req := httptest.NewRequest("PUT", "/api/clusters/test/ceph/pool/", strings.NewReader(`{"size":2}`))
+	req.SetPathValue("cluster", "test")
+	req.SetPathValue("pool", "")
+	rec := httptest.NewRecorder()
+	h.UpdateClusterCephPool(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for empty pool name, got %d: %s", rec.Code, rec.Body.String())
+	}
 }
 
 // TestGetClusterCeph_ReturnsTopology populates the topology and verifies

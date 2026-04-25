@@ -375,6 +375,153 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
 
+  /api/clusters/{cluster}/ceph/pool:
+    post:
+      tags: [clusters]
+      summary: Create a Ceph pool
+      description: |
+        Creates a Ceph pool. Required: name. Optional: size, min_size,
+        pg_num, pg_autoscale_mode (on/off/warn), application
+        (rbd/cephfs/rgw), crush_rule, add_storages. Zero-valued numeric
+        fields use PVE defaults. Returns the UPID of the create task.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                size: { type: integer }
+                min_size: { type: integer }
+                pg_num: { type: integer }
+                pg_autoscale_mode: { type: string, enum: [on, off, warn] }
+                application: { type: string, enum: [rbd, cephfs, rgw] }
+                crush_rule: { type: string }
+                add_storages: { type: boolean }
+      responses:
+        '200':
+          description: Task started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { upid: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/ceph/pool/{pool}:
+    put:
+      tags: [clusters]
+      summary: Update a Ceph pool's mutable fields
+      description: |
+        Updates an existing pool. At least one of size, min_size, pg_num,
+        pg_autoscale_mode, application, or crush_rule must be set.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: pool
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                size: { type: integer }
+                min_size: { type: integer }
+                pg_num: { type: integer }
+                pg_autoscale_mode: { type: string, enum: [on, off, warn] }
+                application: { type: string, enum: [rbd, cephfs, rgw] }
+                crush_rule: { type: string }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [clusters]
+      summary: Delete a Ceph pool
+      description: |
+        Deletes a pool. Use force=1 to override the "pool has data" check
+        and remove_storages=1 to also drop PVE Storage entries pointing at
+        this pool. Returns the UPID of the delete task.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: pool
+          required: true
+          schema: { type: string }
+        - in: query
+          name: force
+          schema: { type: string, enum: ["1"] }
+        - in: query
+          name: remove_storages
+          schema: { type: string, enum: ["1"] }
+      responses:
+        '200':
+          description: Task started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { upid: { type: string } }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/ceph/flags/{flag}:
+    post:
+      tags: [clusters]
+      summary: Set or unset a cluster-wide Ceph OSD flag
+      description: |
+        Toggles a cluster-wide OSD flag. Allowed flags: noout, noin, noup,
+        nodown, nobackfill, norebalance, norecover, noscrub, nodeep-scrub,
+        pause. Other PVE-accepted flags are intentionally not exposed.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: flag
+          required: true
+          schema:
+            type: string
+            enum: [noout, noin, noup, nodown, nobackfill, norebalance, norecover, noscrub, nodeep-scrub, pause]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enable]
+              properties:
+                enable: { type: boolean }
+      responses:
+        '200':
+          description: Flag toggled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
   # === Guests ===
 
   /api/guests:

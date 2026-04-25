@@ -175,6 +175,58 @@ export const api = {
     fetchAPI<Node[]>(`/clusters/${cluster}/nodes`),
   getClusterCeph: (cluster: string) =>
     fetchAPI<CephCluster>(`/clusters/${cluster}/ceph`),
+  createCephPool: (
+    cluster: string,
+    body: {
+      name: string;
+      size?: number;
+      min_size?: number;
+      pg_num?: number;
+      pg_autoscale_mode?: 'on' | 'off' | 'warn';
+      application?: 'rbd' | 'cephfs' | 'rgw';
+      crush_rule?: string;
+      add_storages?: boolean;
+    },
+  ) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/ceph/pool`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateCephPool: (
+    cluster: string,
+    pool: string,
+    body: {
+      size?: number;
+      min_size?: number;
+      pg_num?: number;
+      pg_autoscale_mode?: 'on' | 'off' | 'warn';
+      application?: 'rbd' | 'cephfs' | 'rgw';
+      crush_rule?: string;
+    },
+  ) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/ceph/pool/${pool}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  deleteCephPool: (
+    cluster: string,
+    pool: string,
+    opts?: { force?: boolean; remove_storages?: boolean },
+  ) => {
+    const q = new URLSearchParams();
+    if (opts?.force) q.set('force', '1');
+    if (opts?.remove_storages) q.set('remove_storages', '1');
+    const qs = q.toString();
+    return fetchAPI<{ upid: string }>(
+      `/clusters/${cluster}/ceph/pool/${pool}${qs ? '?' + qs : ''}`,
+      { method: 'DELETE' },
+    );
+  },
+  toggleCephFlag: (cluster: string, flag: string, enable: boolean) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/ceph/flags/${flag}`, {
+      method: 'POST',
+      body: JSON.stringify({ enable }),
+    }),
   getNodeConfig: (cluster: string, node: string) =>
     fetchAPI<NodeConfig>(`/clusters/${cluster}/nodes/${node}/config`),
   updateNodeDNS: (cluster: string, node: string, dns: { search: string; dns1: string; dns2?: string; dns3?: string }) =>

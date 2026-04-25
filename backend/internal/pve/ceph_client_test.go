@@ -184,3 +184,186 @@ func TestListCephFS(t *testing.T) {
 		t.Errorf("unexpected fs: %+v", fs)
 	}
 }
+
+// recordingSrv returns a server that captures method/path/body of every
+// request and replies with a fixed body. Used by the write-method tests.
+func recordingSrv(t *testing.T, body string) (*httptest.Server, *struct {
+	method string
+	path   string
+	body   string
+	query  string
+}) {
+	t.Helper()
+	rec := &struct {
+		method string
+		path   string
+		body   string
+		query  string
+	}{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.method = r.Method
+		rec.path = r.URL.Path
+		rec.query = r.URL.RawQuery
+		buf := make([]byte, r.ContentLength)
+		if r.ContentLength > 0 {
+			_, _ = r.Body.Read(buf)
+		}
+		rec.body = string(buf)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, rec
+}
+
+func TestCreateCephPool_FormsRequest(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":"UPID:pve1:0001:DEAD:CEPH_POOL_CREATE:rbd:root@pam:"}`)
+	c := newTestClient(srv, "pve1")
+
+	upid, err := c.CreateCephPool(context.Background(), CephPoolCreateOptions{
+		Name:            "rbd",
+		Size:            3,
+		MinSize:         2,
+		PGNum:           128,
+		PGAutoscaleMode: "on",
+		Application:     "rbd",
+		AddStorages:     true,
+	})
+	if err != nil {
+		t.Fatalf("CreateCephPool: %v", err)
+	}
+	if !strings.HasPrefix(upid, "UPID:") {
+		t.Errorf("expected UPID, got %q", upid)
+	}
+	if rec.method != "POST" {
+		t.Errorf("method: want POST, got %q", rec.method)
+	}
+	if want := "/api2/json/nodes/pve1/ceph/pool"; rec.path != want {
+		t.Errorf("path: want %q, got %q", want, rec.path)
+	}
+	for _, want := range []string{"name=rbd", "size=3", "min_size=2", "pg_num=128", "pg_autoscale_mode=on", "application=rbd", "add_storages=1"} {
+		if !strings.Contains(rec.body, want) {
+			t.Errorf("body missing %q; got %q", want, rec.body)
+		}
+	}
+}
+
+func TestCreateCephPool_RequiresName(t *testing.T) {
+	c := newTestClient(httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("server should not be hit when name is empty")
+		w.WriteHeader(http.StatusInternalServerError)
+	})), "pve1")
+	defer c.httpClient.CloseIdleConnections()
+
+	_, err := c.CreateCephPool(context.Background(), CephPoolCreateOptions{Size: 3})
+	if err == nil {
+		t.Fatal("expected error when name is empty")
+	}
+}
+
+func TestCreateCephPool_OmitsZeroValues(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":"UPID:x"}`)
+	c := newTestClient(srv, "pve1")
+
+	_, err := c.CreateCephPool(context.Background(), CephPoolCreateOptions{Name: "minimal"})
+	if err != nil {
+		t.Fatalf("CreateCephPool: %v", err)
+	}
+	for _, omit := range []string{"size=", "min_size=", "pg_num=", "pg_autoscale_mode=", "application=", "crush_rule=", "add_storages="} {
+		if strings.Contains(rec.body, omit) {
+			t.Errorf("body should not contain %q (omit defaults); got %q", omit, rec.body)
+		}
+	}
+	if !strings.Contains(rec.body, "name=minimal") {
+		t.Errorf("body must contain name=minimal; got %q", rec.body)
+	}
+}
+
+func TestUpdateCephPool_RequiresAtLeastOneField(t *testing.T) {
+	c := newTestClient(httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("server should not be hit when no fields are set")
+	})), "pve1")
+	defer c.httpClient.CloseIdleConnections()
+
+	if err := c.UpdateCephPool(context.Background(), "rbd", CephPoolUpdateOptions{}); err == nil {
+		t.Fatal("expected error when no fields are set")
+	}
+}
+
+func TestUpdateCephPool_PutsToNamedPath(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":null}`)
+	c := newTestClient(srv, "pve1")
+
+	if err := c.UpdateCephPool(context.Background(), "rbd", CephPoolUpdateOptions{Size: 2}); err != nil {
+		t.Fatalf("UpdateCephPool: %v", err)
+	}
+	if rec.method != "PUT" {
+		t.Errorf("method: want PUT, got %q", rec.method)
+	}
+	if want := "/api2/json/nodes/pve1/ceph/pool/rbd"; rec.path != want {
+		t.Errorf("path: want %q, got %q", want, rec.path)
+	}
+	if !strings.Contains(rec.body, "size=2") {
+		t.Errorf("body missing size=2; got %q", rec.body)
+	}
+}
+
+func TestDeleteCephPool_PassesOptionsAsQuery(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":"UPID:pve1:0002:BEEF:CEPH_POOL_DELETE:rbd:root@pam:"}`)
+	c := newTestClient(srv, "pve1")
+
+	upid, err := c.DeleteCephPool(context.Background(), "rbd", CephPoolDeleteOptions{Force: true, RemoveStorages: true})
+	if err != nil {
+		t.Fatalf("DeleteCephPool: %v", err)
+	}
+	if !strings.HasPrefix(upid, "UPID:") {
+		t.Errorf("expected UPID, got %q", upid)
+	}
+	if rec.method != "DELETE" {
+		t.Errorf("method: want DELETE, got %q", rec.method)
+	}
+	if want := "/api2/json/nodes/pve1/ceph/pool/rbd"; rec.path != want {
+		t.Errorf("path: want %q, got %q", want, rec.path)
+	}
+	for _, want := range []string{"force=1", "remove_storages=1"} {
+		if !strings.Contains(rec.query, want) {
+			t.Errorf("query missing %q; got %q", want, rec.query)
+		}
+	}
+}
+
+func TestSetCephFlag_TogglesViaCluster(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":null}`)
+	c := newTestClient(srv, "pve1")
+
+	if err := c.SetCephFlag(context.Background(), "noout", true); err != nil {
+		t.Fatalf("SetCephFlag enable: %v", err)
+	}
+	if want := "/api2/json/cluster/ceph/flags/noout"; rec.path != want {
+		t.Errorf("path: want %q, got %q", want, rec.path)
+	}
+	if rec.method != "PUT" {
+		t.Errorf("method: want PUT, got %q", rec.method)
+	}
+	if !strings.Contains(rec.body, "value=1") {
+		t.Errorf("body missing value=1; got %q", rec.body)
+	}
+
+	if err := c.SetCephFlag(context.Background(), "noout", false); err != nil {
+		t.Fatalf("SetCephFlag disable: %v", err)
+	}
+	if !strings.Contains(rec.body, "value=0") {
+		t.Errorf("body missing value=0 (disable); got %q", rec.body)
+	}
+}
+
+func TestSetCephFlag_RequiresFlag(t *testing.T) {
+	c := newTestClient(httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("server should not be hit when flag is empty")
+	})), "pve1")
+	defer c.httpClient.CloseIdleConnections()
+
+	if err := c.SetCephFlag(context.Background(), "", true); err == nil {
+		t.Fatal("expected error when flag is empty")
+	}
+}

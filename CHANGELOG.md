@@ -8,6 +8,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ### Added
 - **`GET /api/clusters/{cluster}/ceph` — cluster-wide Ceph topology snapshot.** Returns OSDs (with host attribution + in/up state), MONs, MGRs, MDSs, pools, CRUSH rules, CephFS instances, and OSD flags as a single JSON document. Backed by a new 30s `pollCephLoop` in the poller that picks any node responding to `/ceph/status` and fans out the topology fetch in parallel against it; partial-fetch errors on individual endpoints log at debug and don't blank the view. Returns 404 when Ceph isn't installed or hasn't been polled yet. Foundation for the day-2 Ceph management UI (see `docs/ceph-lifecycle-plan.md`); no UI consumer in this release.
+- **Ceph pool lifecycle endpoints** — `POST /api/clusters/{cluster}/ceph/pool` (create), `PUT /api/clusters/{cluster}/ceph/pool/{pool}` (update size/min_size/pg_num/autoscale/application/CRUSH rule), `DELETE .../pool/{pool}?force=1&remove_storages=1` (delete with optional force + storage cleanup). All route through PVE's REST API; create + delete return UPIDs for task tracking.
+- **`POST /api/clusters/{cluster}/ceph/flags/{flag}`** — toggles cluster-wide OSD flags (noout, noin, noup, nodown, nobackfill, norebalance, norecover, noscrub, nodeep-scrub, pause). Body: `{enable: bool}`. PVE accepts more flags than this list; the handler enforces an explicit allowlist so typos can't set obscure flags. Replaces the SSH-shelling-out path (`SetCephNoout`) for the new code path; the maintenance flow keeps using the old method until that handler migrates.
 
 ## v0.1.15 — 2026-04-25
 

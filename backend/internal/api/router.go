@@ -194,6 +194,10 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	// endpoint above only returns CephStatus; this returns the full topology
 	// snapshot used by the day-2 management UI.
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/ceph", h.GetClusterCeph)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/ceph/pool", h.CreateClusterCephPool)
+	protectedMux.HandleFunc("PUT /api/clusters/{cluster}/ceph/pool/{pool}", h.UpdateClusterCephPool)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/ceph/pool/{pool}", h.DeleteClusterCephPool)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/ceph/flags/{flag}", h.ToggleClusterCephFlag)
 
 	// Cluster nodes
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes", h.GetClusterNodes)

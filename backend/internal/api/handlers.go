@@ -703,6 +703,184 @@ func (h *Handler) GetClusterCeph(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, topology)
 }
 
+// pickClusterClient returns any healthy PVE client for a cluster, used
+// by cluster-wide Ceph mutations that PVE routes internally. Writes the
+// HTTP error and returns nil when no client is available; callers must
+// return after a nil result.
+func (h *Handler) pickClusterClient(w http.ResponseWriter, cluster string) *pve.Client {
+	if _, ok := h.store.GetCluster(cluster); !ok {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return nil
+	}
+	if h.poller == nil {
+		writeError(w, http.StatusServiceUnavailable, "no cluster connection available (agent-only mode)")
+		return nil
+	}
+	for _, c := range h.poller.GetClusterClients(cluster) {
+		return c
+	}
+	writeError(w, http.StatusServiceUnavailable, "no node available for cluster")
+	return nil
+}
+
+// CephPoolCreateRequest is the JSON body accepted by CreateClusterCephPool.
+// Mirrors pve.CephPoolCreateOptions but with explicit JSON tags so the
+// frontend doesn't have to know Go field-name conventions.
+type CephPoolCreateRequest struct {
+	Name              string `json:"name"`
+	Size              int    `json:"size,omitempty"`
+	MinSize           int    `json:"min_size,omitempty"`
+	PGNum             int    `json:"pg_num,omitempty"`
+	PGAutoscaleMode   string `json:"pg_autoscale_mode,omitempty"`
+	Application       string `json:"application,omitempty"`
+	CrushRule         string `json:"crush_rule,omitempty"`
+	AddStorages       bool   `json:"add_storages,omitempty"`
+}
+
+// CreateClusterCephPool creates a Ceph pool. Returns {upid} on success.
+func (h *Handler) CreateClusterCephPool(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	var req CephPoolCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	client := h.pickClusterClient(w, clusterName)
+	if client == nil {
+		return
+	}
+	upid, err := client.CreateCephPool(r.Context(), pve.CephPoolCreateOptions{
+		Name:            req.Name,
+		Size:            req.Size,
+		MinSize:         req.MinSize,
+		PGNum:           req.PGNum,
+		PGAutoscaleMode: req.PGAutoscaleMode,
+		Application:     req.Application,
+		CrushRule:       req.CrushRule,
+		AddStorages:     req.AddStorages,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// CephPoolUpdateRequest is the JSON body accepted by UpdateClusterCephPool.
+type CephPoolUpdateRequest struct {
+	Size            int    `json:"size,omitempty"`
+	MinSize         int    `json:"min_size,omitempty"`
+	PGNum           int    `json:"pg_num,omitempty"`
+	PGAutoscaleMode string `json:"pg_autoscale_mode,omitempty"`
+	Application     string `json:"application,omitempty"`
+	CrushRule       string `json:"crush_rule,omitempty"`
+}
+
+// UpdateClusterCephPool updates an existing pool's mutable fields.
+func (h *Handler) UpdateClusterCephPool(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	poolName := r.PathValue("pool")
+	if poolName == "" {
+		writeError(w, http.StatusBadRequest, "pool name is required")
+		return
+	}
+	var req CephPoolUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	client := h.pickClusterClient(w, clusterName)
+	if client == nil {
+		return
+	}
+	err := client.UpdateCephPool(r.Context(), poolName, pve.CephPoolUpdateOptions{
+		Size:            req.Size,
+		MinSize:         req.MinSize,
+		PGNum:           req.PGNum,
+		PGAutoscaleMode: req.PGAutoscaleMode,
+		Application:     req.Application,
+		CrushRule:       req.CrushRule,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// DeleteClusterCephPool deletes a pool. Query params: force, remove_storages.
+func (h *Handler) DeleteClusterCephPool(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	poolName := r.PathValue("pool")
+	if poolName == "" {
+		writeError(w, http.StatusBadRequest, "pool name is required")
+		return
+	}
+	client := h.pickClusterClient(w, clusterName)
+	if client == nil {
+		return
+	}
+	upid, err := client.DeleteCephPool(r.Context(), poolName, pve.CephPoolDeleteOptions{
+		Force:          r.URL.Query().Get("force") == "1",
+		RemoveStorages: r.URL.Query().Get("remove_storages") == "1",
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// CephFlagToggleRequest is the JSON body accepted by ToggleClusterCephFlag.
+type CephFlagToggleRequest struct {
+	Enable bool `json:"enable"`
+}
+
+// validCephFlags lists the cluster-wide OSD flags pCenter exposes via
+// the toggle endpoint. PVE accepts more (sortbitwise, recovery_deletes, ...)
+// but those aren't operator-facing toggles — keep the surface narrow so
+// typos can't set obscure flags.
+var validCephFlags = map[string]bool{
+	"noout":        true,
+	"noin":         true,
+	"noup":         true,
+	"nodown":       true,
+	"nobackfill":   true,
+	"norebalance":  true,
+	"norecover":    true,
+	"noscrub":      true,
+	"nodeep-scrub": true,
+	"pause":        true,
+}
+
+// ToggleClusterCephFlag sets or unsets a cluster-wide OSD flag.
+func (h *Handler) ToggleClusterCephFlag(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	flag := r.PathValue("flag")
+	if !validCephFlags[flag] {
+		writeError(w, http.StatusBadRequest, "unsupported flag")
+		return
+	}
+	var req CephFlagToggleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	client := h.pickClusterClient(w, clusterName)
+	if client == nil {
+		return
+	}
+	if err := client.SetCephFlag(r.Context(), flag, req.Enable); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
 // GetSmart returns SMART data for all disks across all nodes
 func (h *Handler) GetSmart(w http.ResponseWriter, r *http.Request) {
 	if h.poller == nil {

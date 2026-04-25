@@ -1332,6 +1332,154 @@ func (c *Client) GetCephFlags(ctx context.Context) (CephFlags, error) {
 	return flags, nil
 }
 
+// --- Ceph topology write methods ---
+//
+// Pool + flag mutations route through PVE REST. Write ops on Ceph pools
+// (POST/PUT/DELETE /nodes/{node}/ceph/pool) accept the same form-encoded
+// param shape as the rest of the PVE API; flag toggles use the cluster-
+// scoped /cluster/ceph/flags/{flag} endpoint introduced in PVE 7.
+
+// CephPoolCreateOptions are the parameters accepted by POST /nodes/{node}/ceph/pool.
+// Zero-valued numeric fields are omitted from the request so PVE applies its own
+// defaults (size=3, min_size=2, pg_num=128 at the time of writing).
+type CephPoolCreateOptions struct {
+	Name            string
+	Size            int    // replica count; 0 = PVE default
+	MinSize         int    // min replicas for I/O; 0 = PVE default
+	PGNum           int    // 0 = PVE default
+	PGAutoscaleMode string // "on" | "off" | "warn"; "" = PVE default ("on" since Octopus)
+	Application     string // "rbd" | "cephfs" | "rgw"; "" = no application tag
+	CrushRule       string // CRUSH rule NAME (PVE accepts both id and name); "" = default
+	AddStorages     bool   // when true, also creates a PVE Storage entry pointing at the pool
+}
+
+// CreateCephPool creates a Ceph pool. Returns a UPID for task tracking.
+func (c *Client) CreateCephPool(ctx context.Context, opts CephPoolCreateOptions) (string, error) {
+	if opts.Name == "" {
+		return "", fmt.Errorf("pool name is required")
+	}
+	params := map[string]string{"name": opts.Name}
+	if opts.Size > 0 {
+		params["size"] = fmt.Sprintf("%d", opts.Size)
+	}
+	if opts.MinSize > 0 {
+		params["min_size"] = fmt.Sprintf("%d", opts.MinSize)
+	}
+	if opts.PGNum > 0 {
+		params["pg_num"] = fmt.Sprintf("%d", opts.PGNum)
+	}
+	if opts.PGAutoscaleMode != "" {
+		params["pg_autoscale_mode"] = opts.PGAutoscaleMode
+	}
+	if opts.Application != "" {
+		params["application"] = opts.Application
+	}
+	if opts.CrushRule != "" {
+		params["crush_rule"] = opts.CrushRule
+	}
+	if opts.AddStorages {
+		params["add_storages"] = "1"
+	}
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/pool", c.nodeName), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// CephPoolUpdateOptions captures the subset of pool fields PVE allows to
+// be updated post-creation. Empty/zero values are omitted.
+type CephPoolUpdateOptions struct {
+	Size            int
+	MinSize         int
+	PGNum           int
+	PGAutoscaleMode string
+	Application     string
+	CrushRule       string
+}
+
+// UpdateCephPool updates an existing pool. PUT returns no UPID for any
+// field PVE supports today, so we surface only an error.
+func (c *Client) UpdateCephPool(ctx context.Context, name string, opts CephPoolUpdateOptions) error {
+	if name == "" {
+		return fmt.Errorf("pool name is required")
+	}
+	params := map[string]string{}
+	if opts.Size > 0 {
+		params["size"] = fmt.Sprintf("%d", opts.Size)
+	}
+	if opts.MinSize > 0 {
+		params["min_size"] = fmt.Sprintf("%d", opts.MinSize)
+	}
+	if opts.PGNum > 0 {
+		params["pg_num"] = fmt.Sprintf("%d", opts.PGNum)
+	}
+	if opts.PGAutoscaleMode != "" {
+		params["pg_autoscale_mode"] = opts.PGAutoscaleMode
+	}
+	if opts.Application != "" {
+		params["application"] = opts.Application
+	}
+	if opts.CrushRule != "" {
+		params["crush_rule"] = opts.CrushRule
+	}
+	if len(params) == 0 {
+		return fmt.Errorf("at least one field must be set")
+	}
+	_, err := c.put(ctx, fmt.Sprintf("/nodes/%s/ceph/pool/%s", c.nodeName, name), params)
+	return err
+}
+
+// CephPoolDeleteOptions controls the destructive side of pool removal.
+type CephPoolDeleteOptions struct {
+	Force          bool // override "pool has data" safety check
+	RemoveStorages bool // also delete PVE Storage entries pointing at this pool
+}
+
+// DeleteCephPool deletes a pool and returns a UPID. The query string carries
+// the options because PVE's DELETE handler reads them from the URL.
+func (c *Client) DeleteCephPool(ctx context.Context, name string, opts CephPoolDeleteOptions) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("pool name is required")
+	}
+	path := fmt.Sprintf("/nodes/%s/ceph/pool/%s", c.nodeName, name)
+	q := url.Values{}
+	if opts.Force {
+		q.Set("force", "1")
+	}
+	if opts.RemoveStorages {
+		q.Set("remove_storages", "1")
+	}
+	if encoded := q.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	data, err := c.deleteWithData(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// SetCephFlag toggles a single cluster-wide OSD flag via PVE's typed
+// endpoint. PVE accepts the canonical flag names (noout, norebalance,
+// noscrub, nodeep-scrub, ...). Unlike SetCephNoout (legacy SSH path),
+// this requires no shell access.
+func (c *Client) SetCephFlag(ctx context.Context, flag string, enable bool) error {
+	if flag == "" {
+		return fmt.Errorf("flag is required")
+	}
+	value := "0"
+	if enable {
+		value = "1"
+	}
+	_, err := c.put(ctx, fmt.Sprintf("/cluster/ceph/flags/%s", flag), map[string]string{"value": value})
+	return err
+}
+
 // GetSmartData fetches SMART data for all disks on this node
 func (c *Client) GetSmartData(ctx context.Context) ([]SmartDisk, error) {
 	host := c.getHostFromURL()
