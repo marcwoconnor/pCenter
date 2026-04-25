@@ -2,17 +2,13 @@ import { useState, useEffect, useRef } from 'react';
 import { api } from '../api/client';
 
 interface AddHostDialogProps {
-  mode: 'cluster' | 'datacenter';
-  clusterName?: string;
-  datacenterId?: string;
-  datacenterName?: string;
+  datacenterId: string;
+  datacenterName: string;
   onSubmit: () => Promise<void>;
   onClose: () => void;
 }
 
 export function AddHostDialog({
-  mode,
-  clusterName,
   datacenterId,
   datacenterName,
   onSubmit,
@@ -28,7 +24,7 @@ export function AddHostDialog({
   const [saving, setSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const targetName = mode === 'cluster' ? clusterName : datacenterName;
+  const targetName = datacenterName;
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -61,32 +57,23 @@ export function AddHostDialog({
 
     setSaving(true);
     try {
-      // Step 1: Add host to inventory (auto-creates API token)
+      // Step 1: Add host to inventory (auto-creates API token).
+      // Probe is server-side: if the address belongs to a real PVE cluster,
+      // the host is filed under a cluster; otherwise it lands as standalone
+      // under the datacenter.
       setStatus('Authenticating and creating API token...');
-      let host;
-      if (mode === 'cluster' && clusterName) {
-        host = await api.addClusterHost(clusterName, {
-          address: addr,
-          username: username.trim(),
-          password,
-          insecure,
-        });
-      } else if (mode === 'datacenter' && datacenterId) {
-        setStatus('Probing cluster membership...');
-        const result = await api.addDatacenterHost(datacenterId, {
-          address: addr,
-          username: username.trim(),
-          password,
-          insecure,
-        });
-        host = result.host;
-        if (!result.standalone && result.cluster) {
-          setStatus(`Detected PVE cluster "${result.detected_pve_cluster}" — filed under cluster "${result.cluster.name}"`);
-        } else {
-          setStatus('Standalone host added under datacenter');
-        }
+      setStatus('Probing cluster membership...');
+      const result = await api.addDatacenterHost(datacenterId, {
+        address: addr,
+        username: username.trim(),
+        password,
+        insecure,
+      });
+      const host = result.host;
+      if (!result.standalone && result.cluster) {
+        setStatus(`Detected PVE cluster "${result.detected_pve_cluster}" — filed under cluster "${result.cluster.name}"`);
       } else {
-        throw new Error('Invalid mode or missing target');
+        setStatus('Standalone host added under datacenter');
       }
 
       if (deployAgent) {

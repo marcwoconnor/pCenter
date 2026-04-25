@@ -624,11 +624,6 @@ export const api = {
   // Inventory Hosts (per-cluster)
   getClusterHosts: (clusterName: string) =>
     fetchAPI<InventoryHost[]>(`/inventory/clusters/${clusterName}/hosts`),
-  addClusterHost: (clusterName: string, req: AddHostRequest) =>
-    fetchAPI<InventoryHost>(`/inventory/clusters/${clusterName}/hosts`, {
-      method: 'POST',
-      body: JSON.stringify(req),
-    }),
   getHost: (id: string) => fetchAPI<InventoryHost>(`/inventory/hosts/${id}`),
   updateHost: (id: string, req: UpdateHostRequest) =>
     fetchAPI<void>(`/inventory/hosts/${id}`, { method: 'PUT', body: JSON.stringify(req) }),
