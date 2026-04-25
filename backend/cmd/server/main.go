@@ -27,6 +27,7 @@ import (
 	"github.com/moconnor/pcenter/internal/migration"
 	"github.com/moconnor/pcenter/internal/poller"
 	"github.com/moconnor/pcenter/internal/pve"
+	"github.com/moconnor/pcenter/internal/pvecluster"
 	"github.com/moconnor/pcenter/internal/rbac"
 	"github.com/moconnor/pcenter/internal/scheduler"
 	"github.com/moconnor/pcenter/internal/state"
@@ -528,6 +529,18 @@ func main() {
 	handler.SetSchedulerService(schedulerService)
 	go schedulerService.Start(ctx)
 	slog.Info("scheduler enabled", "database", "data/scheduler.db")
+
+	// Enable PVE cluster formation if inventory is available (it's how we find
+	// the target hosts). Manager owns job state in memory — no DB needed.
+	if inventoryService != nil {
+		pveClusterMgr := pvecluster.NewManager(pvecluster.Deps{
+			Inventory: inventoryService,
+			Poller:    p,
+			Activity:  activityService,
+		})
+		handler.SetPveClusterManager(pveClusterMgr)
+		slog.Info("PVE cluster formation enabled")
+	}
 
 	// Start server in goroutine
 	go func() {

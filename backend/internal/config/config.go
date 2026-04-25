@@ -229,10 +229,12 @@ func Load(path string) (*Config, error) {
 		}}
 	}
 
-	// Poller default: enabled when clusters are configured, unless the user
-	// explicitly set poller.enabled. Distinguishing "unset" from "false"
-	// requires a second pass because Go bool zero-value collapses both.
-	if !isPollerEnabledExplicit(expanded) && len(cfg.Clusters) > 0 {
+	// Poller default: enabled, unless the user explicitly set poller.enabled
+	// to false. Hosts are added via the UI now (inventory DB), not via the
+	// `clusters:` stanza in config.yaml — so we can no longer gate the
+	// default on `len(cfg.Clusters) > 0`. Distinguishing "unset" from "false"
+	// requires a second pass because Go's bool zero-value collapses both.
+	if !isPollerEnabledExplicit(expanded) {
 		cfg.Poller.Enabled = true
 	}
 

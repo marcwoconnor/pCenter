@@ -32,6 +32,10 @@ import type {
   AddHostRequest,
   UpdateHostRequest,
   DatacenterTreeResponse,
+  PveClusterPreflightRequest,
+  PveClusterPreflightResponse,
+  CreatePveClusterRequest,
+  PveClusterJob,
   CreateVMRequest,
   CreateContainerRequest,
   Snapshot,
@@ -609,6 +613,20 @@ export const api = {
     fetchAPI<void>(`/inventory/hosts/${id}`, { method: 'DELETE' }),
   moveHostToCluster: (hostId: string, clusterId: string) =>
     fetchAPI<{ status: string }>(`/inventory/hosts/${hostId}/move`, { method: 'POST', body: JSON.stringify({ cluster_id: clusterId }) }),
+
+  // PVE cluster formation — turn 2+ standalone hosts into a real Corosync cluster.
+  preflightPveCluster: (req: PveClusterPreflightRequest) =>
+    fetchAPI<PveClusterPreflightResponse>('/inventory/pve-cluster/preflight', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+  createPveCluster: (req: CreatePveClusterRequest) =>
+    fetchAPI<{ job_id: string }>('/inventory/pve-cluster', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+  getPveClusterJob: (jobId: string) =>
+    fetchAPI<PveClusterJob>(`/inventory/pve-cluster-jobs/${jobId}`),
 
   // Host setup actions
   setupHostSSH: (id: string, sshPassword: string) =>

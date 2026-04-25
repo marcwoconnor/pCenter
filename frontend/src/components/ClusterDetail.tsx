@@ -111,7 +111,29 @@ function ClusterSummary({ nodes, guests, ha }: { nodes: Node[]; guests: Guest[];
         <Card title="Nodes" value={`${onlineNodes.length}/${nodes.length}`} sub="online" color={onlineNodes.length === nodes.length ? 'green' : 'yellow'} />
         <Card title="VMs" value={`${runningVMs.length}/${totalVMs.length}`} sub="running" color="blue" />
         <Card title="Containers" value={`${runningCTs.length}/${totalCTs.length}`} sub="running" color="blue" />
-        <Card title="HA" value={ha?.enabled ? (ha.quorum ? 'OK' : 'No Quorum') : 'Disabled'} sub={ha?.manager ? `mgr: ${ha.manager}` : ''} color={ha?.enabled ? (ha.quorum ? 'green' : 'red') : 'gray'} />
+        <Card
+          title="HA"
+          // A 1-node cluster meets quorum (1 vote = majority of 1) and runs
+          // the HA service by default, but failover is impossible with only
+          // one node — calling it "OK" is misleading. Treat <2 nodes as N/A.
+          value={(() => {
+            if (nodes.length < 2) return 'N/A';
+            if (!ha?.enabled) return 'Disabled';
+            if (!ha.quorum) return 'No Quorum';
+            return 'OK';
+          })()}
+          sub={(() => {
+            if (nodes.length < 2) return 'single-node cluster';
+            if (ha?.manager) return `mgr: ${ha.manager}`;
+            return '';
+          })()}
+          color={(() => {
+            if (nodes.length < 2) return 'gray';
+            if (!ha?.enabled) return 'gray';
+            if (!ha.quorum) return 'red';
+            return 'green';
+          })()}
+        />
       </div>
 
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">

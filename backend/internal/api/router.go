@@ -437,6 +437,11 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	// Host connection testing
 	protectedMux.HandleFunc("POST /api/inventory/test-connection", h.TestHostConnection)
 
+	// PVE cluster formation (turn standalone hosts into a real Corosync cluster)
+	protectedMux.HandleFunc("POST /api/inventory/pve-cluster/preflight", h.PveClusterPreflight)
+	protectedMux.HandleFunc("POST /api/inventory/pve-cluster", h.CreatePveCluster)
+	protectedMux.HandleFunc("GET /api/inventory/pve-cluster-jobs/{id}", h.GetPveClusterJob)
+
 	// Wrap protected routes with auth middleware (if auth is enabled)
 	if authSvc != nil {
 		mux.Handle("/api/", authSvc.RequireAuth(authSvc.RequireFullAuth(protectedMux)))

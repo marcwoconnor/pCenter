@@ -96,6 +96,59 @@ func TestGetClusterJoinInfo_Unmarshals(t *testing.T) {
 	}
 }
 
+// TestGetClusterJoinInfoWithPassword_PerNodeFingerprint covers PVE 8+ shape
+// where ipAddress/fingerprint live on each nodelist entry as ring0_addr/pve_fp
+// instead of at the top level. We expect the helper to lift them onto the
+// top-level fields based on `preferred_node`.
+func TestGetClusterJoinInfoWithPassword_PerNodeFingerprint(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{
+		  "config_digest": "abc123",
+		  "preferred_node": "pmnode01",
+		  "totem": {"cluster_name":"CL1","version":"2"},
+		  "nodelist": [
+		    {"name":"pmnode01","nodeid":"1","quorum_votes":"1","ring0_addr":"10.0.0.11","pve_fp":"AA:BB:CC:DD"}
+		  ]
+		}}`))
+	}))
+	defer srv.Close()
+	addr := strings.TrimPrefix(srv.URL, "https://")
+
+	auth := &AuthResult{Ticket: "x", CSRFToken: "y", Username: "root@pam"}
+	info, err := GetClusterJoinInfoWithPassword(context.Background(), addr, auth, "pmnode01", true)
+	if err != nil {
+		t.Fatalf("GetClusterJoinInfoWithPassword: %v", err)
+	}
+	if info.Fingerprint != "AA:BB:CC:DD" {
+		t.Errorf("Fingerprint = %q, want AA:BB:CC:DD (lifted from nodelist[].pve_fp)", info.Fingerprint)
+	}
+	if info.IPAddress != "10.0.0.11" {
+		t.Errorf("IPAddress = %q, want 10.0.0.11 (lifted from nodelist[].ring0_addr)", info.IPAddress)
+	}
+}
+
+// TestGetClusterJoinInfoWithPassword_NoFingerprintAnywhere covers the failure
+// path so we surface a useful error.
+func TestGetClusterJoinInfoWithPassword_NoFingerprintAnywhere(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{
+		  "nodelist": [{"name":"pmnode01","ring0_addr":"10.0.0.11"}]
+		}}`))
+	}))
+	defer srv.Close()
+	addr := strings.TrimPrefix(srv.URL, "https://")
+	auth := &AuthResult{Ticket: "x", CSRFToken: "y"}
+	_, err := GetClusterJoinInfoWithPassword(context.Background(), addr, auth, "pmnode01", true)
+	if err == nil {
+		t.Fatal("expected error when no fingerprint is present")
+	}
+	if !strings.Contains(err.Error(), "without a fingerprint") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
 // TestClusterJoin_PasswordAuth verifies the package-level ClusterJoin sends
 // cookie+CSRF (not a token auth header) and submits the expected form fields.
 func TestClusterJoin_PasswordAuth(t *testing.T) {

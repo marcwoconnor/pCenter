@@ -37,6 +37,12 @@ type ClusterPoller struct {
 	interval     time.Duration
 	onChange     func()
 
+	// cancel stops this cluster's polling goroutines. Set when AddCluster
+	// is called after Start (or when Start fans out to pre-added clusters).
+	// RemoveCluster invokes it to drop a single cluster without stopping the
+	// whole poller.
+	cancel context.CancelFunc
+
 	mu sync.RWMutex
 }
 
@@ -83,14 +89,35 @@ func (p *Poller) AddCluster(cfg config.ClusterConfig) *ClusterPoller {
 
 	// If poller is already running, start this cluster's polling goroutine immediately
 	if p.ctx != nil {
+		childCtx, cancel := context.WithCancel(p.ctx)
+		cp.cancel = cancel
 		p.wg.Add(1)
 		go func() {
 			defer p.wg.Done()
-			cp.run(p.ctx)
+			cp.run(childCtx)
 		}()
 	}
 
 	return cp
+}
+
+// RemoveCluster stops polling for the named cluster and removes it from the
+// poller's registry. Used when standalone hosts get promoted into a real
+// PVE cluster: the per-host "standalone:<id>" pseudo-clusters are no longer
+// the right discovery path and should be torn down.
+//
+// Safe to call on an unknown name (no-op). If the poller was never Start()ed
+// (cancel == nil), the cluster is just removed from the map.
+func (p *Poller) RemoveCluster(name string) {
+	cp, ok := p.clusters[name]
+	if !ok {
+		return
+	}
+	if cp.cancel != nil {
+		cp.cancel()
+	}
+	delete(p.clusters, name)
+	slog.Info("removed cluster from poller", "cluster", name)
 }
 
 // GetClusterClients returns all clients for a cluster
@@ -132,11 +159,13 @@ func (p *Poller) Start(ctx context.Context) {
 	p.ctx, p.cancel = context.WithCancel(ctx)
 
 	for _, cp := range p.clusters {
+		childCtx, cancel := context.WithCancel(p.ctx)
+		cp.cancel = cancel
 		p.wg.Add(1)
-		go func(cluster *ClusterPoller) {
+		go func(cluster *ClusterPoller, runCtx context.Context) {
 			defer p.wg.Done()
-			cluster.run(p.ctx)
-		}(cp)
+			cluster.run(runCtx)
+		}(cp, childCtx)
 	}
 
 	// Start DRS loop if enabled

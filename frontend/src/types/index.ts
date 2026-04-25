@@ -871,6 +871,86 @@ export interface DatacenterTreeResponse {
   orphan_clusters: InventoryCluster[];
 }
 
+// PVE Cluster Formation types
+
+export type PveClusterRole = 'founder' | 'joiner';
+export type PveClusterJobState = 'running' | 'succeeded' | 'failed';
+export type PveStepState = 'pending' | 'running' | 'succeeded' | 'failed';
+export type PveStepPhase =
+  | 'create_cluster'
+  | 'fetch_join_info'
+  | 'join'
+  | 'reauth_token'
+  | 'update_inventory';
+
+export interface PveClusterPreflightRequest {
+  cluster_name: string;
+  founder_host_id: string;
+  joiner_host_ids: string[];
+}
+
+export interface PveClusterHostPreflight {
+  host_id: string;
+  address: string;
+  node_name?: string;
+  role: PveClusterRole;
+  reachable: boolean;
+  already_in_cluster: boolean;
+  vm_count: number;
+  ct_count: number;
+  pve_version?: string;
+  pve_major?: string;
+  blockers: string[];
+}
+
+export interface PveClusterPreflightResponse {
+  cluster_name_ok: boolean;
+  cluster_name_message?: string;
+  hosts: PveClusterHostPreflight[];
+  can_proceed: boolean;
+}
+
+export interface PveClusterJoinerInput {
+  host_id: string;
+  password: string;
+  link0?: string;
+}
+
+export interface CreatePveClusterRequest {
+  cluster_name: string;
+  datacenter_id: string;
+  founder_host_id: string;
+  founder_password: string;
+  founder_link0?: string;
+  joiners: PveClusterJoinerInput[];
+}
+
+export interface PveClusterJobStep {
+  host_id: string;
+  address: string;
+  node_name?: string;
+  role: PveClusterRole;
+  phase: PveStepPhase;
+  state: PveStepState;
+  upid?: string;
+  message?: string;
+  error?: string;
+  started_at?: string;
+  ended_at?: string;
+}
+
+export interface PveClusterJob {
+  job_id: string;
+  cluster_name: string;
+  datacenter_id: string;
+  state: PveClusterJobState;
+  inventory_cluster_id?: string;
+  error?: string;
+  steps: PveClusterJobStep[];
+  started_at: string;
+  ended_at?: string;
+}
+
 // VM/Container creation types
 
 export interface CreateVMRequest {

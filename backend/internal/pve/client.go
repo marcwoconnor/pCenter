@@ -11,7 +11,9 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,7 +24,13 @@ import (
 )
 
 // runSSHCommand executes a command on a remote host via SSH
-// RunSSHCommand executes a command on a remote host via SSH
+// RunSSHCommand executes a command on a remote host via SSH.
+//
+// Uses explicit -i and UserKnownHostsFile paths derived from $HOME so we don't
+// rely on OpenSSH's pw_dir lookup, which under systemd's ProtectHome=true
+// resolves to a read-only /root for uid 0 even when $HOME is overridden.
+// BatchMode=yes prevents ssh from blocking on a password prompt (which would
+// hang indefinitely since there's no terminal attached).
 func RunSSHCommand(ctx context.Context, host string, command string) (string, error) {
 	slog.Info("running SSH command", "host", host, "command", command)
 
@@ -33,10 +41,22 @@ func RunSSHCommand(ctx context.Context, host string, command string) (string, er
 		defer cancel()
 	}
 
+	home := os.Getenv("HOME")
+	if home == "" {
+		home = "/root"
+	}
+	sshDir := filepath.Join(home, ".ssh")
+	keyPath := filepath.Join(sshDir, "id_ed25519")
+	knownHostsPath := filepath.Join(sshDir, "known_hosts")
+
 	// accept-new: accept on first connection (TOFU), reject if key changes (MITM).
 	// Previously used StrictHostKeyChecking=no which silently accepts changed keys.
 	cmd := exec.CommandContext(ctx, "ssh",
+		"-i", keyPath,
+		"-o", "IdentitiesOnly=yes",
+		"-o", "UserKnownHostsFile="+knownHostsPath,
 		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=10",
 		fmt.Sprintf("root@%s", host),
 		command,
@@ -2313,7 +2333,12 @@ type ClusterCreateOptions struct {
 }
 
 // ClusterCreate forms a 1-node cluster on this client's node.
-// Returns the task UPID for polling. API token auth is accepted here.
+//
+// NOTE: on most Proxmox versions /cluster/config rejects API tokens with
+// "Permission check failed (user != root@pam)". Use ClusterCreateWithPassword
+// instead — pass an AuthResult obtained from AuthenticateWithPassword. This
+// method is kept for test coverage and compatibility with any PVE build that
+// does accept tokens here.
 func (c *Client) ClusterCreate(ctx context.Context, opts ClusterCreateOptions) (string, error) {
 	if opts.ClusterName == "" {
 		return "", fmt.Errorf("cluster_name is required")
@@ -2342,12 +2367,17 @@ func (c *Client) ClusterCreate(ctx context.Context, opts ClusterCreateOptions) (
 
 // ClusterJoinInfo is what a prospective joiner needs from the founder's
 // GET /cluster/config/join endpoint.
+//
+// Newer PVE versions (8.x+) return Fingerprint and IPAddress as per-node
+// fields inside Nodelist (`pve_fp`, `ring0_addr`) rather than at the top
+// level. GetClusterJoinInfoWithPassword normalizes both shapes.
 type ClusterJoinInfo struct {
-	IPAddress    string                 `json:"ipAddress"`
-	Fingerprint  string                 `json:"fingerprint"`
-	Totem        map[string]interface{} `json:"totem"`
-	ConfigDigest string                 `json:"config_digest"`
-	Nodelist     []ClusterJoinNode      `json:"nodelist"`
+	IPAddress     string                 `json:"ipAddress"`
+	Fingerprint   string                 `json:"fingerprint"`
+	Totem         map[string]interface{} `json:"totem"`
+	ConfigDigest  string                 `json:"config_digest"`
+	Nodelist      []ClusterJoinNode      `json:"nodelist"`
+	PreferredNode string                 `json:"preferred_node"`
 }
 
 // ClusterJoinNode describes a cluster member in the join-info payload.
@@ -2356,6 +2386,7 @@ type ClusterJoinNode struct {
 	Nodeid      string `json:"nodeid"`
 	QuorumVotes string `json:"quorum_votes"`
 	Ring0Addr   string `json:"ring0_addr"`
+	PveFP       string `json:"pve_fp"` // SSL fingerprint, set per-node in PVE 8+
 }
 
 // GetClusterJoinInfo fetches the join parameters a new node will need.
@@ -2467,6 +2498,169 @@ func ClusterJoin(ctx context.Context, address string, auth *AuthResult, req Clus
 		return "", nil
 	}
 	return *parsed.Data, nil
+}
+
+// ClusterCreateWithPassword forms a cluster using cookie+CSRF auth, which PVE
+// requires for /cluster/config — API tokens are rejected there ("Permission
+// check failed (user != root@pam)"). Caller obtains `auth` from
+// AuthenticateWithPassword.
+//
+// Returns the task UPID for polling (via WaitForTask against a token-auth
+// Client — task status endpoints do accept API tokens).
+func ClusterCreateWithPassword(ctx context.Context, address string, auth *AuthResult, opts ClusterCreateOptions, insecure bool) (string, error) {
+	if auth == nil {
+		return "", fmt.Errorf("auth ticket is required (call AuthenticateWithPassword first)")
+	}
+	if opts.ClusterName == "" {
+		return "", fmt.Errorf("cluster_name is required")
+	}
+
+	form := url.Values{}
+	form.Set("clustername", opts.ClusterName)
+	if opts.NodeID > 0 {
+		form.Set("nodeid", fmt.Sprintf("%d", opts.NodeID))
+	}
+	if opts.Link0 != "" {
+		form.Set("link0", opts.Link0)
+	}
+	if opts.Link1 != "" {
+		form.Set("link1", opts.Link1)
+	}
+
+	body, err := doPasswordAuthPost(ctx, address, auth, "/api2/json/cluster/config", form, insecure, 90*time.Second)
+	if err != nil {
+		return "", err
+	}
+
+	var resp APIResponse[string]
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("parse cluster-create response: %w (body: %s)", err, string(body))
+	}
+	return resp.Data, nil
+}
+
+// GetClusterJoinInfoWithPassword fetches the founder's join info using
+// password auth. Mirrors the GET side of ClusterCreateWithPassword — some PVE
+// versions also gate this endpoint behind the user-not-token check.
+//
+// nodeName is the PVE node we want join info ABOUT (typically the founder
+// itself). On a freshly-created 1-node cluster, omitting this parameter has
+// been observed to return a payload without a fingerprint; passing it
+// explicitly is the same path pvecm uses internally.
+func GetClusterJoinInfoWithPassword(ctx context.Context, address string, auth *AuthResult, nodeName string, insecure bool) (*ClusterJoinInfo, error) {
+	if auth == nil {
+		return nil, fmt.Errorf("auth ticket is required")
+	}
+	path := "/api2/json/cluster/config/join"
+	if nodeName != "" {
+		path = path + "?node=" + url.QueryEscape(nodeName)
+	}
+	body, err := doPasswordAuthGet(ctx, address, auth, path, insecure, 30*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("%w (body so far unread)", err)
+	}
+	var resp APIResponse[ClusterJoinInfo]
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("parse join-info response: %w (body: %s)", err, string(body))
+	}
+	info := &resp.Data
+
+	// PVE 8+ delivers fingerprint and IP per-node in nodelist[].pve_fp /
+	// ring0_addr instead of at the top level. Find the founder's row
+	// (preferred_node, or fall back to the requested nodeName, or the
+	// first nodelist entry) and lift those into the top-level fields the
+	// rest of the code reads.
+	if info.Fingerprint == "" || info.IPAddress == "" {
+		preferred := info.PreferredNode
+		if preferred == "" {
+			preferred = nodeName
+		}
+		var founderEntry *ClusterJoinNode
+		for i := range info.Nodelist {
+			if info.Nodelist[i].Name == preferred {
+				founderEntry = &info.Nodelist[i]
+				break
+			}
+		}
+		if founderEntry == nil && len(info.Nodelist) > 0 {
+			founderEntry = &info.Nodelist[0]
+		}
+		if founderEntry != nil {
+			if info.Fingerprint == "" {
+				info.Fingerprint = founderEntry.PveFP
+			}
+			if info.IPAddress == "" {
+				info.IPAddress = founderEntry.Ring0Addr
+			}
+		}
+	}
+
+	if info.Fingerprint == "" {
+		raw := string(body)
+		if len(raw) > 400 {
+			raw = raw[:400] + "…"
+		}
+		return info, fmt.Errorf("PVE returned join info without a fingerprint (top-level or per-node); body=%s", raw)
+	}
+	return info, nil
+}
+
+// doPasswordAuthPost is the shared HTTP plumbing for the cluster-formation
+// endpoints that demand cookie+CSRF auth.
+func doPasswordAuthPost(ctx context.Context, address string, auth *AuthResult, path string, form url.Values, insecure bool, timeout time.Duration) ([]byte, error) {
+	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure}}
+	client := &http.Client{Transport: transport, Timeout: timeout}
+
+	reqURL := fmt.Sprintf("https://%s%s", address, path)
+	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("CSRFPreventionToken", auth.CSRFToken)
+	req.AddCookie(&http.Cookie{Name: "PVEAuthCookie", Value: auth.Ticket})
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+	}
+	return body, nil
+}
+
+// doPasswordAuthGet mirrors doPasswordAuthPost for read endpoints.
+func doPasswordAuthGet(ctx context.Context, address string, auth *AuthResult, path string, insecure bool, timeout time.Duration) ([]byte, error) {
+	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure}}
+	client := &http.Client{Transport: transport, Timeout: timeout}
+
+	reqURL := fmt.Sprintf("https://%s%s", address, path)
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("CSRFPreventionToken", auth.CSRFToken)
+	req.AddCookie(&http.Cookie{Name: "PVEAuthCookie", Value: auth.Ticket})
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+	}
+	return body, nil
 }
 
 // WaitForTask polls /nodes/{node}/tasks/{upid}/status until the task reaches a
