@@ -1036,6 +1036,47 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
 
+  /api/clusters/{cluster}/ceph/destroy:
+    post:
+      tags: [clusters]
+      summary: Start a Ceph destroy Job
+      description: |
+        Tears Ceph down across the entire cluster: deletes pools (with PVE
+        Storage entries), CephFS instances, MDSs, MGRs, MONs, then runs
+        `pveceph purge --crash --logs` on every node. The destroy
+        continues past per-resource failures rather than bailing —
+        half-destroys are worse than mostly-clean ones.
+
+        IRREVERSIBLE. The body must include `confirm` equal to the cluster
+        name verbatim; the wizard's typed-confirmation field produces this.
+        Returns `{job_id}` immediately; poll
+        `GET /api/clusters/{cluster}/ceph/jobs/{job_id}` for progress.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm]
+              properties:
+                confirm:
+                  type: string
+                  description: Must equal the cluster name verbatim.
+      responses:
+        '200':
+          description: Job started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id: { type: string }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
   /api/clusters/{cluster}/ceph/jobs/{job_id}:
     get:
       tags: [clusters]

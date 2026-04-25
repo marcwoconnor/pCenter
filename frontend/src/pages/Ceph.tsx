@@ -152,7 +152,9 @@ export function CephPage() {
             <EmptyState message="No Ceph data available yet." />
           ) : (
             <>
-              {activeTab === 'status' && <StatusTab topology={topology} />}
+              {activeTab === 'status' && (
+                <StatusTab cluster={activeCluster} topology={topology} onDestroyed={fetchTopology} />
+              )}
               {activeTab === 'osds' && (
                 <OSDsTab cluster={activeCluster} topology={topology} onRefresh={fetchTopology} />
               )}
@@ -481,7 +483,8 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 
 // --- Tabs ---
 
-function StatusTab({ topology }: { topology: CephCluster }) {
+function StatusTab({ cluster, topology, onDestroyed }: { cluster: string; topology: CephCluster; onDestroyed: () => void }) {
+  const [showDestroy, setShowDestroy] = useState(false);
   const status = topology.status;
   const pgmap = status?.pgmap;
   const pct =
@@ -534,7 +537,163 @@ function StatusTab({ topology }: { topology: CephCluster }) {
           </ul>
         </div>
       )}
+
+      {/* Danger zone — collapsed at the bottom so it isn't an attractive nuisance. */}
+      <details className="rounded border border-red-200 dark:border-red-900 bg-red-50/30 dark:bg-red-900/10">
+        <summary className="px-4 py-2 text-sm font-medium text-red-700 dark:text-red-400 cursor-pointer">
+          Danger zone
+        </summary>
+        <div className="px-4 py-3 space-y-2">
+          <p className="text-sm text-gray-700 dark:text-gray-300">
+            Destroy Ceph on this cluster. Deletes all pools, CephFS, MDSs, MGRs, MONs, and runs <code>pveceph purge</code> on every node.
+            <strong className="text-red-700 dark:text-red-400"> Irreversible.</strong>
+          </p>
+          <button
+            onClick={() => setShowDestroy(true)}
+            className="px-3 py-1.5 text-sm rounded bg-red-600 hover:bg-red-700 text-white"
+          >
+            Destroy Ceph…
+          </button>
+        </div>
+      </details>
+
+      {showDestroy && (
+        <CephDestroyDialog
+          cluster={cluster}
+          onClose={() => setShowDestroy(false)}
+          onSuccess={() => { setShowDestroy(false); onDestroyed(); }}
+        />
+      )}
     </div>
+  );
+}
+
+function CephDestroyDialog({ cluster, onClose, onSuccess }: { cluster: string; onClose: () => void; onSuccess: () => void }) {
+  const [confirm, setConfirm] = useState('');
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [job, setJob] = useState<CephJobSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (confirm !== cluster) {
+      setError(`Type "${cluster}" exactly to confirm.`);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const { job_id } = await api.destroyCephCluster(cluster, { confirm });
+      setJobId(job_id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  };
+
+  // Poll the job once we have its ID.
+  useEffect(() => {
+    if (!jobId) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const snap = await api.getCephJob(cluster, jobId);
+        if (cancelled) return;
+        setJob(snap);
+        if (snap.state !== 'running') return;
+        setTimeout(tick, 2000);
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    };
+    tick();
+    return () => { cancelled = true; };
+  }, [cluster, jobId]);
+
+  const isTerminal = job?.state === 'succeeded' || job?.state === 'failed';
+  const handleClose = () => {
+    if (job?.state === 'succeeded') onSuccess();
+    else onClose();
+  };
+
+  return (
+    <Modal title={`Destroy Ceph on ${cluster}`} onClose={busy && !isTerminal ? () => {} : handleClose}>
+      {!jobId ? (
+        <div className="space-y-3">
+          <div className="bg-red-50 text-red-800 px-3 py-2 rounded text-sm">
+            <strong>This destroys all Ceph data on cluster <code>{cluster}</code>.</strong> Pools, CephFS, MDSs, MGRs, MONs, and OSD configs will be removed; <code>pveceph purge</code> runs on every node afterward. There is no undo.
+          </div>
+          <Field label={`Type "${cluster}" to confirm`}>
+            <input value={confirm} onChange={(e) => setConfirm(e.target.value)} className={inputCls} placeholder={cluster} autoFocus />
+          </Field>
+          {error && <div className="bg-red-50 text-red-700 px-3 py-2 rounded text-sm">{error}</div>}
+          <div className="flex justify-end gap-2 mt-4">
+            <button onClick={onClose} disabled={busy} className="px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200">Cancel</button>
+            <button
+              onClick={submit}
+              disabled={busy || confirm !== cluster}
+              className="px-3 py-1.5 text-sm rounded bg-red-600 hover:bg-red-700 text-white disabled:bg-gray-400"
+            >
+              {busy ? 'Working…' : 'Destroy'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="text-sm">
+            Job state:{' '}
+            <span className={
+              job?.state === 'succeeded' ? 'text-green-600 font-medium' :
+              job?.state === 'failed' ? 'text-red-600 font-medium' :
+              'text-blue-600 font-medium'
+            }>
+              {job?.state || 'starting…'}
+            </span>
+          </div>
+          {job?.error && <div className="bg-red-50 text-red-700 px-3 py-2 rounded text-sm">{job.error}</div>}
+          <div className="border border-gray-200 dark:border-gray-700 rounded max-h-80 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 dark:bg-gray-900 text-gray-500 dark:text-gray-400">
+                <tr>
+                  <th className="text-left px-2 py-1">Phase</th>
+                  <th className="text-left px-2 py-1">Host</th>
+                  <th className="text-left px-2 py-1">State</th>
+                  <th className="text-left px-2 py-1">Detail</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                {(job?.steps || []).map((s, i) => (
+                  <tr key={i}>
+                    <td className="px-2 py-1 font-mono">{s.phase}</td>
+                    <td className="px-2 py-1 font-mono">{s.host || '—'}</td>
+                    <td className="px-2 py-1">
+                      <span className={
+                        s.state === 'succeeded' ? 'text-green-600' :
+                        s.state === 'failed' ? 'text-red-600' :
+                        s.state === 'running' ? 'text-blue-600' :
+                        'text-gray-500'
+                      }>{s.state}</span>
+                    </td>
+                    <td className="px-2 py-1 text-gray-600 dark:text-gray-400">{s.error || s.message || ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {error && <div className="bg-red-50 text-red-700 px-3 py-2 rounded text-sm">{error}</div>}
+          <div className="flex justify-end">
+            <button
+              onClick={handleClose}
+              disabled={!isTerminal && job !== null && job.state === 'running'}
+              className="px-3 py-1.5 text-sm rounded bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-400"
+            >
+              {isTerminal ? (job?.state === 'succeeded' ? 'Done' : 'Close') : 'Running…'}
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }
 

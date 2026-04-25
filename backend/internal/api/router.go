@@ -218,6 +218,7 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/ceph/install", h.StartCephInstall)
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/ceph/jobs/{job_id}", h.GetCephJob)
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/ceph/jobs", h.ListCephJobs)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/ceph/destroy", h.StartCephDestroy)
 
 	// Cluster nodes
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes", h.GetClusterNodes)

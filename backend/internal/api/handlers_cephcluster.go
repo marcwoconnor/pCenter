@@ -121,3 +121,39 @@ func (h *Handler) ListCephJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, h.cephClusterMgr.ListJobs())
 }
+
+// cephDestroyRequest is the JSON body for StartCephDestroy. confirm must
+// equal the cluster name verbatim — guards against fat-finger destruction.
+type cephDestroyRequest struct {
+	Confirm string `json:"confirm"`
+}
+
+// StartCephDestroy kicks off a destroy Job: deletes pools, FS, MDSs, MGRs,
+// MONs, then runs `pveceph purge --crash --logs` on every node. Returns
+// {job_id} immediately; clients poll /ceph/jobs/{id} for progress.
+//
+// This is destructive and irreversible. The destroy Job continues past
+// per-resource failures rather than bailing — half-destroys are worse than
+// successful destroys with one stuck pool to clean up manually.
+func (h *Handler) StartCephDestroy(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	if h.cephClusterMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "Ceph install orchestration not enabled")
+		return
+	}
+	var req cephDestroyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	jobID, err := h.cephClusterMgr.StartDestroy(r.Context(), cephcluster.DestroyRequest{
+		Cluster: clusterName,
+		Confirm: req.Confirm,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"job_id": jobID})
+}

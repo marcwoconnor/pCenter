@@ -32,6 +32,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 **Install execution model (v1).** SSH-based `pveceph install -y` on each node (uses pcenter's existing root SSH key trust — same path `SetCephNoout` uses today), REST `POST /ceph/init` on the founder, then REST MON/MGR creation. No per-job password collection; consistent with the rest of pCenter's auth model. The pve-agent route + streamed apt progress are tracked as future enhancements in `docs/ceph-lifecycle-plan.md`.
 
+### Added (PR 4 — destroy / purge)
+- **`POST /api/clusters/{cluster}/ceph/destroy`** — kicks off a destroy Job. Body: `{confirm: "<cluster-name>"}` — the confirm value MUST equal the cluster name verbatim (fat-finger guard). Returns `{job_id}`; poll `/ceph/jobs/{id}` for progress.
+- **`cephcluster.runDestroy`** orchestrates 8 phases: `destroy_preflight → set_noout → delete_fs → delete_pools → delete_mds → delete_mgr → delete_mon → ceph_purge` (per-node, parallel `pveceph purge --crash --logs` over SSH). Order matters: pools/FS before MDS (FS owns pools), MGR before MON (MGR publishes during teardown), purge LAST (it removes /etc/ceph).
+- **Continue-past-failure semantics.** Per-resource failures within a phase are recorded in `step.error` but don't abort the destroy — half-destroys are worse than mostly-clean ones with one stuck pool to clean up manually. Job ends `succeeded` so the operator can re-run destroy to mop up; visit the Status tab error messages to see what didn't go.
+- **Destroy UI** — collapsed "Danger zone" details element at the bottom of the /ceph Status tab. Opens a typed-confirmation dialog (must type the cluster name verbatim), then live job-progress polling with the same shape as the install wizard. The page returns to the "not installed" empty state on success.
+
+This closes PR 4 of `docs/ceph-lifecycle-plan.md` — full lifecycle (install / day-2 / FS / destroy) is now end-to-end manageable from pCenter.
+
 ## v0.1.15 — 2026-04-25
 
 ### Added

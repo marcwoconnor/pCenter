@@ -353,6 +353,11 @@ export const api = {
     }),
   getCephJob: (cluster: string, jobId: string) =>
     fetchAPI<CephJobSnapshot>(`/clusters/${cluster}/ceph/jobs/${jobId}`),
+  destroyCephCluster: (cluster: string, body: { confirm: string }) =>
+    fetchAPI<{ job_id: string }>(`/clusters/${cluster}/ceph/destroy`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   getNodeConfig: (cluster: string, node: string) =>
     fetchAPI<NodeConfig>(`/clusters/${cluster}/nodes/${node}/config`),
   updateNodeDNS: (cluster: string, node: string, dns: { search: string; dns1: string; dns2?: string; dns3?: string }) =>
