@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+### Fixed
+- **`CreateAPIToken` now probes the stored secret before delete-and-recreate** (closes #59). The previous behavior unconditionally rotated any existing `pcenter` token on a re-add — and because PVE clusters share `/etc/pve/priv/token.cfg` via pmxcfs, that silently invalidated the stored secret on every other cluster member, leaving the next poll cycle stuck on HTTP 401. New shape: `CreateAPIToken` takes an `existingSecret` parameter; if non-empty, it probes `GET /version` with that secret first and reuses it on success. `resolveHostAuth` looks up the previously-stored secret for the same address (new `DB.GetTokenSecretForAddress`) and threads it through. First-time host adds (no stored secret) skip the probe and behave exactly as before. The retry inside `CreateAPIToken` after a `delete` passes empty so it doesn't re-probe a known-stale secret.
+
 ## v0.1.15 — 2026-04-25
 
 ### Added

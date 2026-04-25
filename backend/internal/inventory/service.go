@@ -414,8 +414,15 @@ func (s *Service) resolveHostAuth(ctx context.Context, req *AddHostRequest) (str
 			return "", "", fmt.Errorf("authentication failed: %w", err)
 		}
 
+		// If we've previously stored a `pcenter` secret for this address (e.g.
+		// re-running "Add Host" on the same host, or adding a sibling that
+		// shares /etc/pve/priv/token.cfg), pass it so CreateAPIToken probes
+		// before delete-and-recreating — which would otherwise invalidate the
+		// stored secret on every other cluster member. See issue #59.
+		existingSecret, _ := s.db.GetTokenSecretForAddress(ctx, req.Address)
+
 		// Create an API token named "pcenter"
-		token, err := pve.CreateAPIToken(ctx, req.Address, auth, "pcenter", req.Insecure)
+		token, err := pve.CreateAPIToken(ctx, req.Address, auth, "pcenter", existingSecret, req.Insecure)
 		if err != nil {
 			return "", "", fmt.Errorf("create API token failed: %w", err)
 		}
