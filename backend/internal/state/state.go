@@ -36,7 +36,8 @@ type ClusterStore struct {
 	vms         map[int]pve.VM             // keyed by VMID (unique within cluster)
 	containers  map[int]pve.Container      // keyed by VMID
 	storage     map[string][]pve.Storage   // keyed by node name
-	ceph        map[string]*pve.CephStatus // keyed by node name
+	ceph        map[string]*pve.CephStatus // keyed by node name (per-node health snapshot from fetchNode)
+	cephTopology *pve.CephCluster          // cluster-wide topology (OSDs/MONs/pools/...) populated by pollCephLoop
 	nodeCerts   map[string][]pve.NodeCertificate // keyed by node name (polled infrequently)
 	haStatus       *pve.HAStatus
 	qdeviceStatus  *pve.QDeviceStatus
@@ -374,6 +375,24 @@ func (cs *ClusterStore) GetCeph() *pve.CephStatus {
 		}
 	}
 	return nil
+}
+
+// SetCephTopology stores the cluster-wide Ceph topology snapshot. Called by
+// the poller's pollCephLoop. Pass nil when Ceph is not installed (or to clear
+// after detecting installation removal); callers must tolerate a nil return
+// from GetCephTopology.
+func (cs *ClusterStore) SetCephTopology(topology *pve.CephCluster) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.cephTopology = topology
+}
+
+// GetCephTopology returns the cluster-wide Ceph topology snapshot, or nil
+// if Ceph is not installed or has not yet been polled.
+func (cs *ClusterStore) GetCephTopology() *pve.CephCluster {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.cephTopology
 }
 
 // GetHAStatus returns the cluster's HA status
@@ -796,6 +815,18 @@ func (s *Store) GetCeph() *pve.CephStatus {
 		}
 	}
 	return nil
+}
+
+// GetCephTopology returns the cluster-wide Ceph topology for a named cluster,
+// or nil if the cluster is unknown, has no Ceph, or hasn't been polled yet.
+func (s *Store) GetCephTopology(clusterName string) *pve.CephCluster {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cs, ok := s.clusters[clusterName]
+	if !ok {
+		return nil
+	}
+	return cs.GetCephTopology()
 }
 
 // GetSummary returns global summary (legacy)

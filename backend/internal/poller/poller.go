@@ -263,6 +263,15 @@ func (cp *ClusterPoller) run(ctx context.Context) {
 		cp.pollCertsLoop(ctx)
 	}()
 
+	// Also poll cluster-wide Ceph topology (OSDs, pools, MONs, ...).
+	// fetchNode already polls /ceph/status per node; this loop populates
+	// the topology view consumed by the day-2 management UI.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		cp.pollCephLoop(ctx)
+	}()
+
 	wg.Wait()
 }
 
@@ -868,5 +877,123 @@ func (p *Poller) checkMigrationStatuses(ctx context.Context) {
 				}
 			}(m.UPID)
 		}
+	}
+}
+
+// pollCephLoop polls cluster-wide Ceph topology (OSDs, MONs, MGRs, MDSs,
+// pools, rules, fs, flags) periodically. Topology data is identical from
+// every MON, so we hit one node per tick rather than fanning out.
+//
+// Cadence is intentionally slower than fetchNode's per-node Ceph status
+// poll — topology changes (pool create, OSD add) are operator-initiated
+// and rare, while health status needs to track cluster events promptly.
+func (cp *ClusterPoller) pollCephLoop(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	cp.fetchCephTopology(ctx)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cp.fetchCephTopology(ctx)
+		}
+	}
+}
+
+// fetchCephTopology fetches a full Ceph topology snapshot from any node
+// that has Ceph installed. If GetCephStatus returns an error from a node
+// (typically 404 "Ceph not installed") we move on to the next; if all
+// nodes fail, we set the topology to nil so the UI can render "no Ceph".
+func (cp *ClusterPoller) fetchCephTopology(ctx context.Context) {
+	cp.mu.RLock()
+	clients := make([]*pve.Client, 0, len(cp.clients))
+	for _, c := range cp.clients {
+		clients = append(clients, c)
+	}
+	cp.mu.RUnlock()
+
+	if len(clients) == 0 {
+		return
+	}
+
+	fetchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	// Pick a node that responds to /ceph/status — that's our signal Ceph is
+	// installed and the node is in quorum. Try each client in turn.
+	var probe *pve.Client
+	var status *pve.CephStatus
+	for _, client := range clients {
+		s, err := client.GetCephStatus(fetchCtx)
+		if err != nil || s == nil {
+			continue
+		}
+		probe = client
+		status = s
+		break
+	}
+	if probe == nil {
+		// No node has Ceph (or all are unreachable). Clear any stale topology.
+		cp.clusterStore.SetCephTopology(nil)
+		return
+	}
+
+	// Fetch each topology piece in parallel against the chosen node.
+	var (
+		mons    []pve.CephMON
+		mgrs    []pve.CephMGR
+		mdss    []pve.CephMDS
+		osds    []pve.CephOSD
+		pools   []pve.CephPool
+		rules   []pve.CephRule
+		fs      []pve.CephFSEntry
+		flags   pve.CephFlags
+		monErr, mgrErr, mdsErr, osdErr, poolErr, ruleErr, fsErr, flagErr error
+		wg      sync.WaitGroup
+	)
+	wg.Add(8)
+	go func() { defer wg.Done(); mons, monErr = probe.ListCephMONs(fetchCtx) }()
+	go func() { defer wg.Done(); mgrs, mgrErr = probe.ListCephMGRs(fetchCtx) }()
+	go func() { defer wg.Done(); mdss, mdsErr = probe.ListCephMDSs(fetchCtx) }()
+	go func() { defer wg.Done(); osds, osdErr = probe.ListCephOSDs(fetchCtx) }()
+	go func() { defer wg.Done(); pools, poolErr = probe.ListCephPools(fetchCtx) }()
+	go func() { defer wg.Done(); rules, ruleErr = probe.GetCephRules(fetchCtx) }()
+	go func() { defer wg.Done(); fs, fsErr = probe.ListCephFS(fetchCtx) }()
+	go func() { defer wg.Done(); flags, flagErr = probe.GetCephFlags(fetchCtx) }()
+	wg.Wait()
+
+	// Log non-fatal errors but proceed with whatever we got — partial data
+	// is better than no data, and a single endpoint hiccup shouldn't blank
+	// the whole topology view.
+	for _, e := range []struct {
+		what string
+		err  error
+	}{
+		{"mons", monErr}, {"mgrs", mgrErr}, {"mdss", mdsErr}, {"osds", osdErr},
+		{"pools", poolErr}, {"rules", ruleErr}, {"fs", fsErr}, {"flags", flagErr},
+	} {
+		if e.err != nil {
+			slog.Debug("ceph topology partial fetch error", "cluster", cp.name, "node", probe.NodeName(), "what", e.what, "error", e.err)
+		}
+	}
+
+	cp.clusterStore.SetCephTopology(&pve.CephCluster{
+		Status:      status,
+		MONs:        mons,
+		MGRs:        mgrs,
+		MDSs:        mdss,
+		OSDs:        osds,
+		Pools:       pools,
+		Rules:       rules,
+		FS:          fs,
+		Flags:       flags,
+		LastUpdated: time.Now(),
+	})
+
+	if cp.onChange != nil {
+		cp.onChange()
 	}
 }
