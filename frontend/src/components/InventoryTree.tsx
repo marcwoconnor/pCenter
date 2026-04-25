@@ -5,6 +5,7 @@ import type { SelectedObject } from '../context/ClusterContext';
 import type { Guest, Storage, ClusterInfo, NetworkInterface, Folder, TreeView, Datacenter, InventoryCluster, InventoryHost } from '../types';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { MigrateDialog } from './MigrateDialog';
+import { MoveStorageDialog } from './MoveStorageDialog';
 import { CloneDialog } from './CloneDialog';
 import { BackupDialog } from './BackupDialog';
 import { FolderDialog } from './FolderDialog';
@@ -265,6 +266,7 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
   const { hostsTree, vmsTree, createFolder, renameFolder, deleteFolder, moveFolder, moveResource } = useFolders();
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [migrateGuest, setMigrateGuest] = useState<Guest | null>(null);
+  const [moveStorageGuest, setMoveStorageGuest] = useState<Guest | null>(null);
   const [cloneGuest, setCloneGuest] = useState<Guest | null>(null);
   const [backupGuest, setBackupGuest] = useState<Guest | null>(null);
   const [networkInterfaces, setNetworkInterfaces] = useState<NetworkInterface[]>([]);
@@ -532,6 +534,11 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
         label: 'Migrate',
         icon: '↔',
         action: () => setMigrateGuest(guest),
+      },
+      {
+        label: 'Move Storage…',
+        icon: '💽',
+        action: () => setMoveStorageGuest(guest),
       },
       // "Move to" only in VMs & Templates view (vCenter behavior)
       ...(treeView === 'vms' ? [{
@@ -1477,6 +1484,15 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
             }}
           />
         )}
+        {moveStorageGuest && (
+          <MoveStorageDialog
+            guest={moveStorageGuest}
+            onClose={() => setMoveStorageGuest(null)}
+            onSuccess={() => {
+              // Disk move started - progress polled via /disk-moves
+            }}
+          />
+        )}
         {cloneGuest && (
           <CloneDialog
             guest={cloneGuest}
@@ -1705,6 +1721,13 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
           <MigrateDialog
             guest={migrateGuest}
             onClose={() => setMigrateGuest(null)}
+            onSuccess={() => {}}
+          />
+        )}
+        {moveStorageGuest && (
+          <MoveStorageDialog
+            guest={moveStorageGuest}
+            onClose={() => setMoveStorageGuest(null)}
             onSuccess={() => {}}
           />
         )}

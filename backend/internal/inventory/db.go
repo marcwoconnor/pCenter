@@ -26,14 +26,16 @@ type DB struct {
 	stmtListDCs     *sql.Stmt
 
 	// Prepared statements - Clusters
-	stmtInsertCluster     *sql.Stmt
-	stmtUpdateCluster     *sql.Stmt
-	stmtDeleteCluster     *sql.Stmt
-	stmtGetCluster        *sql.Stmt
-	stmtGetClusterByName  *sql.Stmt
-	stmtListClusters      *sql.Stmt
-	stmtSetClusterEnabled *sql.Stmt
-	stmtSetClusterStatus  *sql.Stmt
+	stmtInsertCluster       *sql.Stmt
+	stmtUpdateCluster       *sql.Stmt
+	stmtDeleteCluster       *sql.Stmt
+	stmtGetCluster          *sql.Stmt
+	stmtGetClusterByName    *sql.Stmt
+	stmtGetClusterByPVEName *sql.Stmt
+	stmtListClusters        *sql.Stmt
+	stmtSetClusterEnabled   *sql.Stmt
+	stmtSetClusterStatus    *sql.Stmt
+	stmtSetPVEClusterName   *sql.Stmt
 
 	// Prepared statements - Hosts
 	stmtInsertHost       *sql.Stmt
@@ -79,7 +81,8 @@ func (db *DB) Close() error {
 	stmts := []*sql.Stmt{
 		db.stmtInsertDC, db.stmtUpdateDC, db.stmtDeleteDC, db.stmtGetDC, db.stmtGetDCByName, db.stmtListDCs,
 		db.stmtInsertCluster, db.stmtUpdateCluster, db.stmtDeleteCluster, db.stmtGetCluster,
-		db.stmtGetClusterByName, db.stmtListClusters, db.stmtSetClusterEnabled, db.stmtSetClusterStatus,
+		db.stmtGetClusterByName, db.stmtGetClusterByPVEName, db.stmtListClusters,
+		db.stmtSetClusterEnabled, db.stmtSetClusterStatus, db.stmtSetPVEClusterName,
 		db.stmtInsertHost, db.stmtUpdateHost, db.stmtDeleteHost, db.stmtGetHost,
 		db.stmtListHostsByCluster, db.stmtSetHostStatus,
 	}
@@ -107,6 +110,7 @@ func (db *DB) migrate() error {
 		id TEXT PRIMARY KEY,
 		name TEXT UNIQUE NOT NULL,
 		agent_name TEXT,
+		pve_cluster_name TEXT DEFAULT '',
 		datacenter_id TEXT REFERENCES datacenters(id) ON DELETE SET NULL,
 		status TEXT DEFAULT 'empty',
 		enabled INTEGER DEFAULT 1,
@@ -154,6 +158,20 @@ func (db *DB) migrate() error {
 
 	// Create agent_name index after column exists
 	db.conn.Exec("CREATE INDEX IF NOT EXISTS idx_clusters_agent_name ON clusters(agent_name)")
+
+	// Migration: add pve_cluster_name column if missing. Populated when a
+	// cluster record is correlated to a real PVE cluster (via probe).
+	var hasPVEClusterName bool
+	row = db.conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('clusters') WHERE name='pve_cluster_name'")
+	var pveClusterNameCount int
+	if err := row.Scan(&pveClusterNameCount); err == nil && pveClusterNameCount > 0 {
+		hasPVEClusterName = true
+	}
+	if !hasPVEClusterName {
+		slog.Info("adding pve_cluster_name column to clusters")
+		db.conn.Exec("ALTER TABLE clusters ADD COLUMN pve_cluster_name TEXT DEFAULT ''")
+	}
+	db.conn.Exec("CREATE INDEX IF NOT EXISTS idx_clusters_pve_cluster_name ON clusters(pve_cluster_name)")
 
 	// Migration: if old schema had discovery_node column, migrate data to hosts
 	var hasDiscoveryNode bool
@@ -286,8 +304,8 @@ func (db *DB) prepareStatements() error {
 
 	// Cluster statements (simplified - no connection details)
 	db.stmtInsertCluster, err = db.conn.Prepare(`
-		INSERT INTO clusters (id, name, agent_name, datacenter_id, status, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO clusters (id, name, agent_name, pve_cluster_name, datacenter_id, status, enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare insert cluster: %w", err)
@@ -307,7 +325,7 @@ func (db *DB) prepareStatements() error {
 	}
 
 	db.stmtGetCluster, err = db.conn.Prepare(`
-		SELECT c.id, c.name, c.agent_name, c.datacenter_id, c.status, c.enabled, c.created_at, c.updated_at,
+		SELECT c.id, c.name, c.agent_name, COALESCE(c.pve_cluster_name, ''), c.datacenter_id, c.status, c.enabled, c.created_at, c.updated_at,
 		       d.name as datacenter_name
 		FROM clusters c
 		LEFT JOIN datacenters d ON c.datacenter_id = d.id
@@ -318,7 +336,7 @@ func (db *DB) prepareStatements() error {
 	}
 
 	db.stmtGetClusterByName, err = db.conn.Prepare(`
-		SELECT c.id, c.name, c.agent_name, c.datacenter_id, c.status, c.enabled, c.created_at, c.updated_at,
+		SELECT c.id, c.name, c.agent_name, COALESCE(c.pve_cluster_name, ''), c.datacenter_id, c.status, c.enabled, c.created_at, c.updated_at,
 		       d.name as datacenter_name
 		FROM clusters c
 		LEFT JOIN datacenters d ON c.datacenter_id = d.id
@@ -328,8 +346,19 @@ func (db *DB) prepareStatements() error {
 		return fmt.Errorf("prepare get cluster by name: %w", err)
 	}
 
+	db.stmtGetClusterByPVEName, err = db.conn.Prepare(`
+		SELECT c.id, c.name, c.agent_name, COALESCE(c.pve_cluster_name, ''), c.datacenter_id, c.status, c.enabled, c.created_at, c.updated_at,
+		       d.name as datacenter_name
+		FROM clusters c
+		LEFT JOIN datacenters d ON c.datacenter_id = d.id
+		WHERE c.pve_cluster_name = ?
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare get cluster by pve name: %w", err)
+	}
+
 	db.stmtListClusters, err = db.conn.Prepare(`
-		SELECT c.id, c.name, c.agent_name, c.datacenter_id, c.status, c.enabled, c.created_at, c.updated_at,
+		SELECT c.id, c.name, c.agent_name, COALESCE(c.pve_cluster_name, ''), c.datacenter_id, c.status, c.enabled, c.created_at, c.updated_at,
 		       d.name as datacenter_name
 		FROM clusters c
 		LEFT JOIN datacenters d ON c.datacenter_id = d.id
@@ -337,6 +366,13 @@ func (db *DB) prepareStatements() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare list clusters: %w", err)
+	}
+
+	db.stmtSetPVEClusterName, err = db.conn.Prepare(`
+		UPDATE clusters SET pve_cluster_name = ?, updated_at = ? WHERE id = ?
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare set pve cluster name: %w", err)
 	}
 
 	db.stmtSetClusterEnabled, err = db.conn.Prepare(`
@@ -547,18 +583,19 @@ func (db *DB) CreateCluster(ctx context.Context, req CreateClusterRequest) (*Clu
 
 	now := time.Now()
 	cluster := &Cluster{
-		ID:           uuid.New().String(),
-		Name:         req.Name,
-		AgentName:    req.Name, // Initially agent_name = name
-		DatacenterID: req.DatacenterID,
-		Status:       ClusterStatusEmpty,
-		Enabled:      true,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:             uuid.New().String(),
+		Name:           req.Name,
+		AgentName:      req.Name, // Initially agent_name = name
+		PVEClusterName: req.PVEClusterName,
+		DatacenterID:   req.DatacenterID,
+		Status:         ClusterStatusEmpty,
+		Enabled:        true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 
 	_, err := db.stmtInsertCluster.ExecContext(ctx,
-		cluster.ID, cluster.Name, cluster.AgentName, cluster.DatacenterID,
+		cluster.ID, cluster.Name, cluster.AgentName, cluster.PVEClusterName, cluster.DatacenterID,
 		string(cluster.Status), boolToInt(cluster.Enabled),
 		cluster.CreatedAt.Unix(), cluster.UpdatedAt.Unix(),
 	)
@@ -567,6 +604,35 @@ func (db *DB) CreateCluster(ctx context.Context, req CreateClusterRequest) (*Clu
 	}
 
 	return cluster, nil
+}
+
+// GetClusterByPVEName retrieves a cluster by its PVE cluster name (as reported
+// by /cluster/status). Returns nil if not found, or if the pve_cluster_name is empty.
+func (db *DB) GetClusterByPVEName(ctx context.Context, pveName string) (*Cluster, error) {
+	if pveName == "" {
+		return nil, nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	return db.getClusterLocked(ctx, db.stmtGetClusterByPVEName, pveName)
+}
+
+// SetPVEClusterName updates a cluster's pve_cluster_name. Used by the promotion
+// reconciler when it correlates a pcenter cluster with a real PVE cluster.
+func (db *DB) SetPVEClusterName(ctx context.Context, id, pveName string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	result, err := db.stmtSetPVEClusterName.ExecContext(ctx, pveName, time.Now().Unix(), id)
+	if err != nil {
+		return fmt.Errorf("set pve cluster name: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("cluster not found")
+	}
+	return nil
 }
 
 // GetCluster retrieves a cluster by ID
@@ -588,12 +654,13 @@ func (db *DB) GetClusterByName(ctx context.Context, name string) (*Cluster, erro
 func (db *DB) getClusterLocked(ctx context.Context, stmt *sql.Stmt, arg string) (*Cluster, error) {
 	var c Cluster
 	var agentName, datacenterID, datacenterName sql.NullString
+	var pveClusterName string
 	var status string
 	var enabled int
 	var createdAt, updatedAt int64
 
 	err := stmt.QueryRowContext(ctx, arg).Scan(
-		&c.ID, &c.Name, &agentName, &datacenterID, &status,
+		&c.ID, &c.Name, &agentName, &pveClusterName, &datacenterID, &status,
 		&enabled, &createdAt, &updatedAt, &datacenterName,
 	)
 	if err == sql.ErrNoRows {
@@ -606,6 +673,7 @@ func (db *DB) getClusterLocked(ctx context.Context, stmt *sql.Stmt, arg string) 
 	if agentName.Valid {
 		c.AgentName = agentName.String
 	}
+	c.PVEClusterName = pveClusterName
 	if datacenterID.Valid {
 		c.DatacenterID = &datacenterID.String
 	}
@@ -640,7 +708,7 @@ func (db *DB) ListClustersByDatacenter(ctx context.Context, datacenterID string)
 	defer db.mu.Unlock()
 
 	rows, err := db.conn.QueryContext(ctx,
-		`SELECT c.id, c.name, c.agent_name, c.datacenter_id, c.status, c.enabled, c.created_at, c.updated_at,
+		`SELECT c.id, c.name, c.agent_name, COALESCE(c.pve_cluster_name, ''), c.datacenter_id, c.status, c.enabled, c.created_at, c.updated_at,
 			d.name as datacenter_name
 		FROM clusters c
 		LEFT JOIN datacenters d ON c.datacenter_id = d.id
@@ -659,12 +727,13 @@ func (db *DB) scanClusters(rows *sql.Rows) ([]Cluster, error) {
 	for rows.Next() {
 		var c Cluster
 		var agentName, datacenterID, datacenterName sql.NullString
+		var pveClusterName string
 		var status string
 		var enabled int
 		var createdAt, updatedAt int64
 
 		if err := rows.Scan(
-			&c.ID, &c.Name, &agentName, &datacenterID, &status,
+			&c.ID, &c.Name, &agentName, &pveClusterName, &datacenterID, &status,
 			&enabled, &createdAt, &updatedAt, &datacenterName,
 		); err != nil {
 			return nil, fmt.Errorf("scan cluster: %w", err)
@@ -673,6 +742,7 @@ func (db *DB) scanClusters(rows *sql.Rows) ([]Cluster, error) {
 		if agentName.Valid {
 			c.AgentName = agentName.String
 		}
+		c.PVEClusterName = pveClusterName
 		if datacenterID.Valid {
 			c.DatacenterID = &datacenterID.String
 		}

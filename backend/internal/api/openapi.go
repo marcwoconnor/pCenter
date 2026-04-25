@@ -11,6 +11,12 @@ import (
 //go:embed openapi.yaml
 var openAPIYAML []byte
 
+//go:embed swagger-ui/swagger-ui.css
+var swaggerUICSS []byte
+
+//go:embed swagger-ui/swagger-ui-bundle.js
+var swaggerUIJS []byte
+
 // openAPIJSON is the YAML spec converted once at startup.
 var openAPIJSON []byte
 
@@ -38,20 +44,22 @@ func serveOpenAPIJSON(w http.ResponseWriter, r *http.Request) {
 	w.Write(openAPIJSON)
 }
 
-// swaggerUIHTML renders Swagger UI pointing at /api/openapi.yaml.
-// NOTE: assets are loaded from jsdelivr; for air-gapped deployments, vendor them locally.
-// Tracked as a follow-up issue.
+// swaggerUIHTML renders Swagger UI pointing at /api/openapi.yaml. Assets are
+// served from /api/swagger-ui/* (embedded in the binary) so /api/docs works
+// on air-gapped deploys with no outbound internet access. See
+// `backend/internal/api/swagger-ui/README.md` for the pinned version + how
+// to upgrade.
 const swaggerUIHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>pCenter API</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+  <link rel="stylesheet" href="/api/swagger-ui/swagger-ui.css">
   <style>body { margin: 0; } #swagger-ui { max-width: 1400px; margin: 0 auto; }</style>
 </head>
 <body>
 <div id="swagger-ui"></div>
-<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script src="/api/swagger-ui/swagger-ui-bundle.js"></script>
 <script>
   window.ui = SwaggerUIBundle({
     url: '/api/openapi.yaml',
@@ -67,4 +75,18 @@ const swaggerUIHTML = `<!DOCTYPE html>
 func serveSwaggerUI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(swaggerUIHTML))
+}
+
+// Swagger UI asset handlers — static files, embedded at compile time, cached
+// aggressively since they're versioned by the repo itself (change = redeploy).
+func serveSwaggerUICSS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=86400, immutable")
+	w.Write(swaggerUICSS)
+}
+
+func serveSwaggerUIJS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=86400, immutable")
+	w.Write(swaggerUIJS)
 }

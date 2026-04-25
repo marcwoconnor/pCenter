@@ -123,10 +123,14 @@ func (d *Dispatcher) deliver(ctx context.Context, e Event, t dispatchTarget) {
 			"attempt", attempt+1, "err", err)
 	}
 
-	d.db.RecordDelivery(t.endpointID, false, time.Now())
+	disabled, failures := d.db.RecordDelivery(t.endpointID, false, time.Now())
 	d.logger.Error("webhook gave up",
 		"endpoint", t.endpointID, "event", e.Event,
-		"attempts", attempts, "err", lastErr)
+		"attempts", attempts, "consecutive_failures", failures, "err", lastErr)
+	if disabled {
+		d.logger.Warn("webhook endpoint auto-disabled after consecutive failures",
+			"endpoint", t.endpointID, "threshold", AutoDisableThreshold)
+	}
 }
 
 // attempt performs a single POST. Returns error if the request failed or
@@ -155,12 +159,48 @@ func (d *Dispatcher) attempt(ctx context.Context, t dispatchTarget, body []byte,
 
 // matches returns true if the endpoint's event filter includes the given event name.
 // An empty/nil filter means "all events".
+// matches reports whether the given event should be delivered to an endpoint
+// whose subscription filter is `filter`.
+//
+// Filter semantics:
+//   - Empty filter → endpoint receives ALL events (unchanged legacy behaviour).
+//   - Exact match → case-insensitive equality (unchanged legacy behaviour).
+//   - Component wildcards → `*` as a dotted component means "any value at
+//     this position." So `vm.*` matches `vm.create` / `vm.delete` but NOT
+//     `ct.create`. `*.migrate` matches `vm.migrate` and `ct.migrate`.
+//     Multiple wildcards are allowed (`*.*` matches any two-component event).
+//
+// Wildcard matching is per-component on purpose — a bare `*` does NOT match
+// `vm.create` because component counts differ. An operator who wants "all
+// events" should either leave the filter empty or list `*.*`, which is the
+// honest description of pCenter's current two-component event shape.
 func matches(filter []string, event string) bool {
 	if len(filter) == 0 {
 		return true
 	}
+	eventParts := strings.Split(event, ".")
 	for _, f := range filter {
 		if strings.EqualFold(f, event) {
+			return true
+		}
+		if !strings.Contains(f, "*") {
+			continue
+		}
+		filterParts := strings.Split(f, ".")
+		if len(filterParts) != len(eventParts) {
+			continue
+		}
+		allMatch := true
+		for i, fp := range filterParts {
+			if fp == "*" {
+				continue
+			}
+			if !strings.EqualFold(fp, eventParts[i]) {
+				allMatch = false
+				break
+			}
+		}
+		if allMatch {
 			return true
 		}
 	}

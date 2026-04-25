@@ -131,10 +131,14 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 		mux.HandleFunc("GET /api/agent/connected", h.GetConnectedAgents)
 	}
 
-	// OpenAPI spec + Swagger UI (public; the docs must be reachable before login)
+	// OpenAPI spec + Swagger UI (public; the docs must be reachable before login).
+	// The swagger-ui asset routes are public for the same reason — they back the
+	// /api/docs page and must load without a session.
 	mux.HandleFunc("GET /api/openapi.yaml", serveOpenAPIYAML)
 	mux.HandleFunc("GET /api/openapi.json", serveOpenAPIJSON)
 	mux.HandleFunc("GET /api/docs", serveSwaggerUI)
+	mux.HandleFunc("GET /api/swagger-ui/swagger-ui.css", serveSwaggerUICSS)
+	mux.HandleFunc("GET /api/swagger-ui/swagger-ui-bundle.js", serveSwaggerUIJS)
 
 	// === Protected API endpoints ===
 	// Build a protected mux for all API routes
@@ -444,6 +448,8 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	// Add member nodes to an already-existing PVE cluster
 	protectedMux.HandleFunc("POST /api/inventory/pve-cluster/join/preflight", h.PveClusterJoinPreflight)
 	protectedMux.HandleFunc("POST /api/inventory/pve-cluster/join", h.JoinPveCluster)
+	// Opt-in reconciliation for legacy clusters predating the PVE-correlation model.
+	protectedMux.HandleFunc("POST /api/inventory/reconcile", h.ReconcileInventory)
 
 	// Wrap protected routes with auth middleware (if auth is enabled)
 	if authSvc != nil {

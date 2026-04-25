@@ -368,6 +368,42 @@ func main() {
 		time.Sleep(2 * time.Second)
 	}
 
+	// Start the cluster-membership reconciler. It periodically probes standalone
+	// hosts and promotes them into clusters when they join a real PVE cluster,
+	// and logs mismatches for existing cluster members. Runs whenever inventory
+	// is enabled; the poller hookup is optional (promotion callback rewires it).
+	{
+		reconciler := inventory.NewReconciler(inventoryService, 10*time.Minute)
+		if p != nil {
+			reconciler.OnPromote(func(host *inventory.InventoryHost, cluster *inventory.Cluster, tokenSecret string) {
+				// Previously the host was polled under "standalone:<id>"; now it
+				// should be polled under the cluster's agent name. We can't
+				// remove the old cluster from the poller cleanly mid-flight
+				// (AddCluster doesn't have a counterpart), so we register the
+				// new one and let the stale standalone entry idle out. The
+				// secret for the new key is populated too so GetClusterConfigs
+				// can see it.
+				agentName := cluster.AgentName
+				if agentName == "" {
+					agentName = cluster.Name
+				}
+				if cfg.ClusterSecrets != nil {
+					cfg.ClusterSecrets[agentName] = tokenSecret
+				}
+				p.AddCluster(config.ClusterConfig{
+					Name:          agentName,
+					DiscoveryNode: host.Address,
+					TokenID:       host.TokenID,
+					TokenSecret:   tokenSecret,
+					Insecure:      host.Insecure,
+				})
+				slog.Info("reconciler rewired poller for promoted host", "cluster", cluster.Name, "address", host.Address)
+			})
+		}
+		go reconciler.Start(ctx)
+		handler.SetReconciler(reconciler)
+	}
+
 	// Initialize activity logging
 	activityDB, err := activity.OpenDB(cfg.Activity.DatabasePath)
 	if err != nil {
@@ -388,7 +424,8 @@ func main() {
 		slog.Error("failed to open webhooks database", "error", err)
 		os.Exit(1)
 	}
-	defer webhooksDB.Close()
+	// DB lifecycle is owned by webhooksSvc.Stop() in the graceful shutdown path
+	// below — calling Close() here too would double-close the *sql.DB.
 	webhooksSvc := webhooks.NewService(webhooksDB, authCrypto)
 	webhooksSvc.Start(ctx)
 	handler.SetWebhooksService(webhooksSvc)
@@ -564,24 +601,57 @@ func main() {
 	// Wait for shutdown signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	sig := <-quit
+	slog.Info("shutting down", "signal", sig.String())
 
-	slog.Info("shutting down...")
+	// Second signal = force quit. Keeps operators from staring at a hung
+	// shutdown when a long-running in-flight request is blocking drain.
+	go func() {
+		<-quit
+		slog.Warn("second signal received — forcing exit")
+		os.Exit(1)
+	}()
 
-	// Graceful shutdown
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Graceful shutdown sequence (30s total budget):
+	//   1. server.Shutdown — stop accepting new HTTP, drain in-flight (1001 for WS).
+	//   2. hub.Stop       — close WebSocket client channels (the hub's Run loop
+	//                       exits and sockets get proper close frames via the
+	//                       HTTP server's own drain above).
+	//   3. webhooksSvc.Stop — halt dispatcher goroutine + close its DB. Jobs
+	//                         already mid-deliver complete; queued-but-unpicked
+	//                         jobs are dropped (documented behaviour).
+	//   4. cancel()       — signal the main context so every ctx-aware
+	//                       background goroutine (poller, scheduler, migration
+	//                       monitor, metrics collector/rollup, reconciler,
+	//                       alarm evaluator, session cleanup, update checker)
+	//                       exits before their owning DBs close via defer.
+	//   5. brief wait for those goroutines to observe cancellation — keeps
+	//                     "database is closed" errors out of the tail of the log.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		slog.Error("server shutdown error", "error", err)
+		slog.Error("http server shutdown error", "error", err)
 	}
+	hub.Stop()
+	if err := webhooksSvc.Stop(); err != nil {
+		slog.Error("webhooks service stop error", "error", err)
+	}
+	cancel()
+	time.Sleep(200 * time.Millisecond)
 
 	slog.Info("goodbye!")
 }
 
-// migrateConfigClusters imports clusters from config.yaml into inventory DB (one-time migration)
+// migrateConfigClusters imports clusters from config.yaml into inventory DB (one-time migration).
+//
+// Each legacy entry is probed via /cluster/status: entries backed by a real
+// PVE cluster are filed as pcenter clusters; single-node entries become
+// standalone datacenter hosts. This matches the auto-routing behavior of the
+// interactive Add-Host path so on-disk state reflects PVE reality rather than
+// the legacy config's "everything is a cluster" assumption.
 func migrateConfigClusters(ctx context.Context, svc *inventory.Service, cfg *config.Config) error {
-	// Check if inventory already has clusters
+	// Check if inventory already has clusters or standalone hosts
 	count, err := svc.ClusterCount(ctx)
 	if err != nil {
 		return fmt.Errorf("check cluster count: %w", err)
@@ -590,14 +660,12 @@ func migrateConfigClusters(ctx context.Context, svc *inventory.Service, cfg *con
 		return nil // Already have clusters, skip migration
 	}
 
-	// Check if legacy clusters exist in config
 	if len(cfg.Clusters) == 0 {
-		return nil // Nothing to migrate
+		return nil
 	}
 
 	slog.Info("migrating clusters from config.yaml", "count", len(cfg.Clusters))
 
-	// Create "Default" datacenter
 	dc, err := svc.CreateDatacenter(ctx, inventory.CreateDatacenterRequest{
 		Name:        "Default",
 		Description: "Auto-created during migration from config.yaml",
@@ -607,33 +675,27 @@ func migrateConfigClusters(ctx context.Context, svc *inventory.Service, cfg *con
 	}
 	slog.Info("created default datacenter", "id", dc.ID)
 
-	// Import each cluster with its host
 	for _, legacy := range cfg.Clusters {
-		cluster, err := svc.CreateCluster(ctx, inventory.CreateClusterRequest{
-			Name:         legacy.Name,
-			DatacenterID: &dc.ID,
-		})
-		if err != nil {
-			slog.Warn("failed to migrate cluster", "name", legacy.Name, "error", err)
-			continue
-		}
-
-		// Add the host from legacy config
-		host, err := svc.AddHost(ctx, cluster.ID, inventory.AddHostRequest{
+		result, _, err := svc.AddHostAutoRoute(ctx, dc.ID, inventory.AddHostRequest{
 			Address:     legacy.DiscoveryNode,
 			TokenID:     legacy.TokenID,
 			TokenSecret: legacy.TokenSecret,
 			Insecure:    legacy.Insecure,
 		})
 		if err != nil {
-			slog.Warn("failed to add host during migration", "cluster", legacy.Name, "error", err)
-		} else {
-			// Mark host as online and cluster as active (since it was working before)
-			svc.SetHostStatus(ctx, host.ID, inventory.HostStatusOnline, "", "")
-			svc.SetClusterStatus(ctx, cluster.ID, inventory.ClusterStatusActive)
+			slog.Warn("failed to migrate config entry", "name", legacy.Name, "address", legacy.DiscoveryNode, "error", err)
+			continue
 		}
 
-		slog.Info("migrated cluster", "name", legacy.Name, "datacenter", dc.Name)
+		// These entries were working before (they'd been in the poller's config),
+		// so mark the host online and any newly-created cluster active.
+		svc.SetHostStatus(ctx, result.Host.ID, inventory.HostStatusOnline, "", "")
+		if !result.Standalone && result.Cluster != nil {
+			svc.SetClusterStatus(ctx, result.Cluster.ID, inventory.ClusterStatusActive)
+			slog.Info("migrated PVE cluster", "legacy_name", legacy.Name, "pve_cluster", result.DetectedPVECluster, "cluster", result.Cluster.Name, "datacenter", dc.Name)
+		} else {
+			slog.Info("migrated standalone host", "legacy_name", legacy.Name, "address", legacy.DiscoveryNode, "datacenter", dc.Name)
+		}
 	}
 
 	return nil

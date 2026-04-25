@@ -1,91 +1,53 @@
-# pCenter - Developer Notes
+# pCenter — Developer Notes
 
-Proxmox datacenter manager - vCenter alternative
+Depth-oriented engineering notes. For a session quick-start (commands, conventions, layout), see `CLAUDE.md`. For end-user install, see `README.md`.
 
-## Project Evolution
+## Architecture at a glance
 
-**v1 (Current - pcenter @ 10.31.11.50):** Polling architecture - pCenter pulls from Proxmox nodes
-**v2 (In Development - pcenter2 @ 10.31.11.51):** Agent architecture - pve-agent pushes to pCenter
+Two collection modes share the same pCenter brain:
 
-### Key Planning Documents
-- `docs/pve-agent-spec.md` - Complete Proxmox API surface (200+ endpoints)
-- `docs/pve-agent-project-plan.md` - Full implementation plan and architecture
-- `docs/auth-system.md` - Authentication system: sessions, TOTP 2FA, trusted IPs
+- **Poller** — pCenter pulls from each Proxmox cluster every 5s (default). Simple to deploy; only pCenter needs credentials. See `backend/internal/poller`.
+- **Agent** (`pve-agent/`) — optional push-mode: a tiny Go binary on each PVE node streams state over WebSocket to pCenter. Reduces polling latency and load, lets pCenter drop SSH for most reads. Enabled per-host via the `deploy-agent` action; see `docs/pve-agent-project-plan.md`.
+
+Both modes write to the same in-memory `state.Store`. API handlers read from the store; WebSocket hub pushes state diffs to browsers on every change.
+
+### Key planning documents
+- `docs/vcenter-feature-parity-roadmap.md` — phased plan toward v1.0, with per-feature scope notes.
+- `docs/pve-agent-spec.md` — Proxmox API surface we call (REST + SSH).
+- `docs/pve-agent-project-plan.md` — agent architecture + deployment model.
+- `docs/auth-system.md` — sessions, TOTP 2FA, trusted-IP windows, encryption-at-rest.
+- `docs/test-harness.md` — the nested PVE test cluster used for release smoke tests.
 
 ## Stack
-- **Backend**: Go 1.22+ (stdlib `net/http` mux with method-prefix routing, SQLite)
-- **Frontend**: React 18 + TypeScript + Vite + TailwindCSS + shadcn/ui
-- **Real-time**: WebSocket for live updates
+- **Backend**: Go 1.22+ (stdlib `net/http` mux with method-prefix routing, SQLite via `mattn/go-sqlite3`, native SSH via `golang.org/x/crypto/ssh`).
+- **Frontend**: React 18 + TypeScript (strict) + Vite + TailwindCSS.
+- **Real-time**: WebSocket for dashboard state, SSE-like broadcast hub (`internal/api/websocket.go`).
+- **Persistence**: one SQLite DB per feature area (auth, alarms, webhooks, folders, …), all under the data dir.
 
-## Commands
+## Deployment
 
-```bash
-# Backend
-cd backend && go run ./cmd/server
-cd backend && go test ./...
-cd backend && go build -o pcenter ./cmd/server
+Two supported install paths — both produce the same runtime layout:
 
-# Frontend
-cd frontend && npm run dev
-cd frontend && npm run build
-cd frontend && npm run lint
-```
+- **Debian package** (recommended) — `packaging/build-deb.sh` produces `pcenter_*.deb`. `postinst` handles fresh-install vs upgrade (fresh waits for config, upgrade restarts the service). Seeds `/etc/pcenter/env` with an auto-generated encryption key on first install. Systemd unit shipped; service runs under `ProtectSystem=strict` + `ProtectHome=true`, so `HOME=/opt/pcenter/data` — SSH invocations pass `-o UserKnownHostsFile` / `IdentityFile` explicitly because OpenSSH's `~` uses `pw_dir`, not `$HOME`.
+- **Source build** — `cd backend && go build ./cmd/server` + `cd frontend && npm run build`. Copy the binary to `/opt/pcenter/pcenter`, the `dist/` contents to `/opt/pcenter/frontend/`, and install the systemd unit from `packaging/`. Config in `/etc/pcenter/config.yaml` or `/opt/pcenter/config.yaml`.
 
-## Structure
+For release validation, the memory note `release_deploy_recipe.md` documents provisioning a fresh Ubuntu 24.04 LXC via the PVE API and running the README's Quick Install against it — catches the exact workarounds the deb path has baked in for issues #43–#47.
 
-```
-pCenter/
-├── backend/
-│   ├── cmd/server/      # Main entrypoint
-│   ├── internal/
-│   │   ├── api/         # HTTP handlers
-│   │   ├── pve/         # Proxmox API client
-│   │   ├── poller/      # Background node polling
-│   │   ├── state/       # In-memory state cache
-│   │   └── config/      # Config loading
-│   └── go.mod
-├── frontend/
-│   ├── src/
-│   │   ├── components/  # React components
-│   │   ├── pages/       # Page components
-│   │   ├── hooks/       # Custom hooks
-│   │   ├── api/         # API client
-│   │   └── types/       # TypeScript types
-│   └── package.json
-└── config.yaml
-```
+## Key design decisions
+- **SQLite per feature** (not one shared DB) — each package owns its migrations, nothing cross-schemas, no JOIN coupling. Cost: harder to back up as one unit; solved by pointing `PCENTER_DATA_DIR` at one place.
+- **In-memory state, rebuilt on restart** — the PVE cluster IS the source of truth. The cache is a convenience for sub-second reads; nothing persists cluster inventory.
+- **WebSocket pushes state diffs** — the frontend never polls for data it already has.
+- **Hand-authored OpenAPI** — `backend/internal/api/openapi.yaml`, embedded at compile time. CI-enforced via `TestOpenAPINoDrift` (see `openapi_drift_test.go`).
 
-## Proxmox API Reference
+## Proxmox API reference
 - Base: `https://<node>:8006/api2/json`
 - Auth: `Authorization: PVEAPIToken=<tokenid>=<secret>`
 - Nodes: `/nodes`
 - VMs: `/nodes/{node}/qemu`
 - CTs: `/nodes/{node}/lxc`
 - Storage: `/storage`
-- Cluster: `/cluster/resources`
-
-## Deployment (Production: pcenter / 10.31.11.50)
-
-```bash
-# Frontend - deploy to /opt/pcenter/frontend/ (NOT /static/)
-cd frontend && rm -rf dist node_modules/.tmp && npm run build
-scp -r dist/* root@pcenter:/opt/pcenter/frontend/
-
-# Backend - rebuild and restart service
-cd backend && GOOS=linux go build -o pcenter ./cmd/server
-scp pcenter root@pcenter:/opt/pcenter/
-ssh root@pcenter "systemctl restart pcenter"
-```
-
-- Hostname: `pcenter` (pcenter.ad.techsnet.net)
-- IP: 10.31.11.50
-- Static files: `/opt/pcenter/frontend/` (NOT /static/)
-
-## Key Decisions
-- SQLite for metadata (config, preferences) - no external DB needed
-- In-memory cache for real-time state - rebuilt on restart from PVE API
-- WebSocket pushes state diffs to frontend
-- Single binary + static assets = easy deployment
+- Cluster: `/cluster/resources`, `/cluster/status`
+- Tasks: `/nodes/{node}/tasks/{upid}/status`
 
 ## Overview Panel Details
 
@@ -244,65 +206,53 @@ metrics:
    }, []); // Empty deps - runs once
    ```
 
-## PVE Agent (v2 Architecture)
+## PVE Agent (push-mode collection)
 
-### Overview
-Replace polling with push-based agents running on each Proxmox node.
+Optional per-node agent that replaces SSH + REST polling with a single outbound WebSocket. Both modes work against the same pCenter binary; operators can mix (poll some clusters, push from others).
 
+### Collection model
 ```
 pve-agent (on each PVE node)
     │
     ├── Collects: node status, VMs, CTs, storage, ceph, /proc metrics
-    ├── Pushes: WebSocket to pCenter every 5 seconds
-    └── Executes: Commands received from pCenter (start/stop/migrate/etc)
+    ├── Pushes: WebSocket to pCenter every ~5 seconds
+    └── Executes: commands received from pCenter (start/stop/migrate/backup/etc.)
 ```
 
-### Benefits over Polling
-- Real-time updates (instant vs 5-sec delay)
-- No SSH needed (agent reads /proc locally)
-- Simpler firewall (agents connect outbound)
-- Better scalability (distributed collection)
-- Event-driven (VM started → immediate notification)
+### Trade-offs vs pure polling
+| Axis | Poller | Agent |
+|------|--------|-------|
+| Latency | ~5s per tick | Immediate |
+| Credentials | API token on pCenter only | Pre-shared token on each agent |
+| Firewall | Inbound allow to PVE API port | Outbound only to pCenter |
+| SSH required | Yes (for node commands) | No (agent reads /proc locally) |
+| Setup per host | None beyond token | Deploy binary + systemd unit |
 
-### Agent Structure
+### Layout
 ```
 pve-agent/
-├── cmd/pve-agent/main.go      # Entry point
-├── internal/
-│   ├── collector/             # Gathers data from local PVE
-│   ├── executor/              # Runs commands from pCenter
-│   ├── client/                # WebSocket to pCenter
-│   └── types/                 # Shared types
-├── pve-agent.service          # systemd unit
-└── go.mod
+├── cmd/pve-agent/         entry point
+└── internal/
+    ├── collector/          samples /proc + calls local PVE API
+    ├── executor/           runs commands queued by pCenter
+    ├── client/             WebSocket to pCenter
+    └── types/              shared wire format
 ```
 
-### pCenter Changes for v2
-```
-backend/internal/
-├── agent/
-│   ├── hub.go                 # WebSocket hub for agents
-│   ├── protocol.go            # Message types
-│   └── handler.go             # Process agent data
-```
+pCenter side: `backend/internal/agent/` — WebSocket hub (`hub.go`), command correlation, state translation. The `Hub` mirrors the browser-facing hub's API surface but is keyed by `<cluster>/<node>`.
 
-### Deployment Commands
+### Deploying an agent
+Preferred: use the "Deploy Agent" action on a host in the pCenter UI — it generates the pre-shared token, pushes the binary over SSH, installs the unit, and starts the service.
+
+Manual (matching behaviour):
 ```bash
-# Build agent
 cd pve-agent && GOOS=linux go build -o pve-agent ./cmd/pve-agent
-
-# Deploy to node
-scp pve-agent root@pve04:/usr/local/bin/
-scp pve-agent.service root@pve04:/etc/systemd/system/
-ssh root@pve04 "systemctl daemon-reload && systemctl enable --now pve-agent"
-
-# Check agent status
-ssh root@pve04 "journalctl -u pve-agent -f"
+scp pve-agent root@<pve-node>:/usr/local/bin/
+scp pve-agent.service root@<pve-node>:/etc/systemd/system/
+ssh root@<pve-node> "systemctl daemon-reload && systemctl enable --now pve-agent"
 ```
 
-### Development Instance
-- **pcenter2**: New LXC for v2 development (separate from production v1)
-- Keep v1 running at pcenter (10.31.11.50) during development
+Logs: `ssh root@<pve-node> "journalctl -u pve-agent -f"`.
 
 ## Gotchas & Lessons Learned
 
@@ -311,11 +261,10 @@ ssh root@pve04 "journalctl -u pve-agent -f"
 - Do NOT filter by `s.active === 1` or `s.status === 'available'` - it filters out everything
 - Just filter by content type: `s.content.includes('images')` for VM disks, `s.content.includes('rootdir')` for containers
 
-### Agent-Only Mode (pcenter2)
-- pcenter2 runs without poller (agent-only mode)
-- `h.poller` is nil - don't call `h.poller.GetClusterClients()`
-- Use `h.getClient(cluster, node)` helper which falls back to `createOnDemandClient()`
-- Get nodes from store: `cs.GetNodes()` where `cs, _ := h.store.GetCluster(name)`
+### Agent-Only Mode
+- Deployments running without the poller (`poller.enabled: false` in config) have `h.poller == nil` — don't call `h.poller.GetClusterClients()` unguarded.
+- Use `h.getClient(cluster, node)` helper which falls back to `createOnDemandClient()` when no poller client is available.
+- Get nodes from the store: `cs.GetNodes()` where `cs, _ := h.store.GetCluster(name)`. Don't route node lookups through the poller.
 
 ### Guest NIC Data
 - PVE list endpoints (`/nodes/{node}/qemu`, `/lxc`) do NOT return NIC config

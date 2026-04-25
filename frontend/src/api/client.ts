@@ -8,6 +8,8 @@ import type {
   GlobalSummary,
   ClusterInfo,
   MigrationProgress,
+  MoveDiskRequest,
+  DiskMoveProgress,
   DRSRecommendation,
   NetworkInterface,
   SDNZone,
@@ -30,6 +32,7 @@ import type {
   CreateClusterRequest,
   UpdateClusterRequest,
   AddHostRequest,
+  AddHostResult,
   UpdateHostRequest,
   DatacenterTreeResponse,
   PveClusterPreflightRequest,
@@ -447,6 +450,21 @@ export const api = {
   getMigrationTargets: (cluster: string) =>
     fetchAPI<{ name: string; online: boolean }[]>(`/clusters/${cluster}/nodes/migration-targets`),
 
+  // Storage vMotion (per-disk / per-volume move between storage pools)
+  moveVMDisk: (cluster: string, vmid: number, req: MoveDiskRequest) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/vms/${vmid}/disk/move`, {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+  moveContainerVolume: (cluster: string, vmid: number, req: MoveDiskRequest) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/containers/${vmid}/volume/move`, {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+  getDiskMoves: () => fetchAPI<DiskMoveProgress[]>('/disk-moves'),
+  clearDiskMove: (upid: string) =>
+    fetchAPI<void>(`/disk-moves/${encodeURIComponent(upid)}`, { method: 'DELETE' }),
+
   // DRS
   applyDRSRecommendation: (cluster: string, id: string) =>
     fetchAPI<{ upid: string; message: string }>(`/clusters/${cluster}/drs/apply/${id}`, { method: 'POST' }),
@@ -579,8 +597,11 @@ export const api = {
   deleteDatacenter: (id: string) =>
     fetchAPI<void>(`/datacenters/${id}`, { method: 'DELETE' }),
   getDatacenterTree: () => fetchAPI<DatacenterTreeResponse>('/datacenters/tree'),
+  // Adds a host to a datacenter. Backend probes PVE /cluster/status and
+  // auto-routes under a real cluster (creating one if needed) or as a
+  // standalone — inspect AddHostResult.standalone / cluster to know which.
   addDatacenterHost: (datacenterID: string, req: AddHostRequest) =>
-    fetchAPI<InventoryHost>(`/datacenters/${datacenterID}/hosts`, {
+    fetchAPI<AddHostResult>(`/datacenters/${datacenterID}/hosts`, {
       method: 'POST',
       body: JSON.stringify(req),
     }),

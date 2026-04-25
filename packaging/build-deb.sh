@@ -52,8 +52,24 @@ cat > "${PKG_DIR}/etc/pcenter/config.yaml" << 'CONF'
 #
 # Full reference: https://github.com/marcwoconnor/pCenter#configuration-reference
 #
-# Hosts are configured through the web UI (Hosts & Clusters → Add a host),
-# not in this file. The section below covers server/storage settings only.
+# Fresh installs start with an empty inventory. Add your first datacenter and
+# Proxmox host through the web UI after pCenter is running — it will auto-detect
+# whether the host is part of a real PVE cluster (via /cluster/status) and file
+# it under a pcenter cluster or as a standalone accordingly. The "Create
+# Proxmox Cluster" and "Add Member Node" wizards in the Hosts & Clusters tab
+# can also form/extend Corosync clusters from inside pCenter.
+#
+# Legacy bootstrap: if you prefer to seed hosts from config, uncomment the
+# clusters: block below. Each entry is probed on first start; real PVE clusters
+# become pcenter clusters, standalone nodes become standalone hosts under
+# the auto-created "Default" datacenter.
+#
+# clusters:
+#   - name: legacy-bootstrap
+#     discovery_node: "YOUR_PROXMOX_IP:8006"
+#     token_id: "root@pam!pcenter"
+#     token_secret: "${PVE_TOKEN_SECRET}"
+#     insecure: true
 
 poller:
   enabled: true   # Set to false to disable background polling (dashboard will be empty)

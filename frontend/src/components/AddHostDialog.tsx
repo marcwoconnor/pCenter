@@ -72,12 +72,19 @@ export function AddHostDialog({
           insecure,
         });
       } else if (mode === 'datacenter' && datacenterId) {
-        host = await api.addDatacenterHost(datacenterId, {
+        setStatus('Probing cluster membership...');
+        const result = await api.addDatacenterHost(datacenterId, {
           address: addr,
           username: username.trim(),
           password,
           insecure,
         });
+        host = result.host;
+        if (!result.standalone && result.cluster) {
+          setStatus(`Detected PVE cluster "${result.detected_pve_cluster}" — filed under cluster "${result.cluster.name}"`);
+        } else {
+          setStatus('Standalone host added under datacenter');
+        }
       } else {
         throw new Error('Invalid mode or missing target');
       }
@@ -126,7 +133,7 @@ export function AddHostDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">
-          Add {mode === 'datacenter' ? 'Standalone ' : ''}Host to {targetName}
+          Add Host to {targetName}
         </h3>
         <form onSubmit={handleSubmit} onKeyDown={handleKeyDown}>
           <div className="mb-3">
@@ -143,7 +150,9 @@ export function AddHostDialog({
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
             />
             <p className="text-xs text-gray-500 mt-1">
-              {mode === 'datacenter' ? 'Standalone Proxmox host (not in a cluster)' : 'Any node in the Proxmox cluster'}
+              {mode === 'datacenter'
+                ? 'Any Proxmox host. Cluster membership is auto-detected: real PVE clusters become pcenter clusters; single-node hosts are filed as standalone.'
+                : 'Any node in the Proxmox cluster'}
             </p>
           </div>
           <div className="mb-3">

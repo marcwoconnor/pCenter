@@ -83,6 +83,37 @@ paths:
             application/json:
               schema: { type: object }
 
+  /api/swagger-ui/swagger-ui.css:
+    get:
+      tags: [meta]
+      summary: Vendored Swagger UI stylesheet
+      description: |
+        Static asset backing `/api/docs`. Vendored at build time so the docs
+        page works on air-gapped deploys without outbound internet access.
+        Pinned version lives in `backend/internal/api/swagger-ui/README.md`.
+      security: []
+      responses:
+        '200':
+          description: CSS
+          content:
+            text/css:
+              schema: { type: string }
+
+  /api/swagger-ui/swagger-ui-bundle.js:
+    get:
+      tags: [meta]
+      summary: Vendored Swagger UI bundle
+      description: |
+        Static asset backing `/api/docs`. Vendored at build time; see
+        `/api/swagger-ui/swagger-ui.css` for rationale.
+      security: []
+      responses:
+        '200':
+          description: JavaScript
+          content:
+            application/javascript:
+              schema: { type: string }
+
   /api/version:
     get:
       tags: [meta]
@@ -454,6 +485,99 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
 
+  # === Storage vMotion (per-disk/volume move between storage pools) ===
+
+  /api/clusters/{cluster}/vms/{vmid}/disk/move:
+    post:
+      tags: [guests]
+      summary: Move a VM disk to a different storage pool (online, VM may be running)
+      description: |
+        Initiates a Proxmox `qm move_disk`. The VM stays on its current node;
+        only the backing storage changes. Returns a UPID that can be polled via
+        `GET /api/disk-moves`. The operation is online — no downtime required.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - $ref: '#/components/parameters/VMID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MoveDiskRequest' }
+      responses:
+        '200':
+          description: Move started
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [upid]
+                properties:
+                  upid: { type: string }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/containers/{vmid}/volume/move:
+    post:
+      tags: [guests]
+      summary: Move an LXC volume (rootfs / mpN) to a different storage pool
+      description: |
+        Initiates a Proxmox `pct move_volume`. **The container must be stopped** —
+        PVE does not support online LXC volume moves today. Returns a UPID that
+        can be polled via `GET /api/disk-moves`.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - $ref: '#/components/parameters/VMID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MoveDiskRequest' }
+      responses:
+        '200':
+          description: Move started
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [upid]
+                properties:
+                  upid: { type: string }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/disk-moves:
+    get:
+      tags: [guests]
+      summary: List active / recently-completed storage vMotion operations
+      responses:
+        '200':
+          description: In-flight disk moves across all clusters
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/DiskMoveProgress' }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/disk-moves/{upid}:
+    delete:
+      tags: [guests]
+      summary: Clear a completed/failed disk-move entry from the progress list
+      description: |
+        Removes a finished disk-move record from in-memory state. Does not
+        affect PVE — the move itself has already completed.
+      parameters:
+        - in: path
+          name: upid
+          required: true
+          schema: { type: string }
+          description: PVE task UPID returned by the move endpoint.
+      responses:
+        '204': { description: Cleared }
+        '404': { $ref: '#/components/responses/Error' }
+
   # === Webhooks (admin-only) ===
 
   /api/webhooks:
@@ -708,6 +832,61 @@ components:
         maxmem: { type: integer }
         uptime: { type: integer }
 
+    MoveDiskRequest:
+      type: object
+      required: [disk, target_storage]
+      description: |
+        Request body for VM disk and CT volume moves. `disk` is the qemu disk
+        key (scsi0, virtio0, ide0, sata0) for VMs or the lxc volume key
+        (rootfs, mp0, mp1, ...) for containers. `format` is VM-only. `from_storage`
+        is optional metadata, stored on the progress record for display.
+      properties:
+        disk:
+          type: string
+          example: scsi0
+        target_storage:
+          type: string
+          example: ceph-pool-1
+        delete_source:
+          type: boolean
+          default: false
+          description: If true, PVE removes the source volume after the copy succeeds.
+        format:
+          type: string
+          enum: [raw, qcow2, vmdk]
+          description: VM only; omit or leave empty to keep the target storage's default.
+        from_storage:
+          type: string
+          description: Optional source storage name (display-only; not passed to PVE).
+
+    DiskMoveProgress:
+      type: object
+      required: [upid, cluster, vmid, guest_type, node, disk, to_storage, started_at, status]
+      description: In-flight or recently-completed storage vMotion operation.
+      properties:
+        upid: { type: string }
+        cluster: { type: string }
+        vmid: { type: integer }
+        guest_name: { type: string }
+        guest_type: { type: string, enum: [vm, ct] }
+        node: { type: string }
+        disk: { type: string, example: scsi0 }
+        from_storage: { type: string }
+        to_storage: { type: string }
+        delete_source: { type: boolean }
+        started_at: { type: string, format: date-time }
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: |
+            Coarse progress: 0 while running, flips to 100 when the PVE task
+            reports OK. PVE's move_disk task log doesn't expose fine-grained
+            percent in a stable machine-readable form, so intermediate values
+            are not attempted.
+        status: { type: string, enum: [running, completed, failed] }
+        error: { type: string }
+
     WebhookEndpoint:
       type: object
       required: [id, name, url, enabled]
@@ -722,6 +901,11 @@ components:
             Dotted event names (e.g. `vm.create`, `ct.migrate`). An empty array
             means the endpoint receives **all** events. Event names are derived
             from the activity log's `resource_type.action`.
+
+            Per-component wildcards are supported: `vm.*` matches every VM
+            action, `*.migrate` matches migrations across resource types, and
+            `*.*` matches any two-component event. A bare `*` does NOT match
+            a two-component event (component counts must agree).
         enabled: { type: boolean }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
