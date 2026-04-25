@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+## v0.1.20 — 2026-04-25
+
 ### Fixed
 - **Ceph install wizard's `install_packages` phase silently no-op'd on PVE 9** — `pveceph install -y` is invalid on PVE 9 (the `-y` flag was dropped, and `pveceph install` without it aborts at apt's "Do you want to continue?" prompt). The wizard's pipe through `tail -50` masked the non-zero exit so the step reported success while no daemon packages were placed on the node, then `create_mon` failed with `binary not installed: /usr/bin/ceph-mon`. Rewritten to: `set -o pipefail` to stop hiding errors, `pveceph install --repository no-subscription` (best-effort, configures the repo), and a real `apt-get install -y --no-install-recommends --allow-downgrades ceph` that actually places the daemons. The phase now ends with a `test -x /usr/bin/ceph-mon` so the step fails immediately if the binaries aren't there, with a recovery hint pointing at the most common causes (enterprise repo without a subscription, version skew with an existing ceph-common, held packages).
 
