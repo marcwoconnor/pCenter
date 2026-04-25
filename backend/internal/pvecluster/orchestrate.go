@@ -337,12 +337,32 @@ func (m *Manager) runJoinHostsJob(
 	job.succeedStep(sourceHost.ID, PhaseUpdateInventor,
 		fmt.Sprintf("%d host(s) added to %s", len(hostIDs), cluster.Name))
 
-	// Phase 4: Drop the obsolete per-host standalone pollers; the cluster
-	// itself is already polled, no need to AddCluster.
+	// Phase 4: Reconcile the poller. The cluster's existing poller goroutine
+	// only ran node discovery once at startup, so the new member is invisible
+	// to it. Remove and re-add the cluster to force a fresh discoverNodes
+	// call. Also drop the obsolete per-host "standalone:" pollers from when
+	// these hosts were standalone.
 	if m.deps.Poller != nil {
 		for _, id := range hostIDs {
 			m.deps.Poller.RemoveCluster("standalone:" + id)
 		}
+		// Re-read the source host to pick up any token refresh.
+		src, _ := m.deps.Inventory.GetHost(ctx, sourceHost.ID)
+		if src == nil {
+			src = sourceHost
+		}
+		agentName := cluster.AgentName
+		if agentName == "" {
+			agentName = cluster.Name
+		}
+		m.deps.Poller.RemoveCluster(agentName)
+		m.deps.Poller.AddCluster(config.ClusterConfig{
+			Name:          agentName,
+			DiscoveryNode: src.Address,
+			TokenID:       src.TokenID,
+			TokenSecret:   src.TokenSecret,
+			Insecure:      src.Insecure,
+		})
 	}
 
 	job.markSucceeded(cluster.ID)
