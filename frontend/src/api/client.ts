@@ -5,6 +5,9 @@ import type {
   Storage,
   StorageVolume,
   CephStatus,
+  CephCluster,
+  CephInstallPreflightResponse,
+  CephJobSnapshot,
   GlobalSummary,
   ClusterInfo,
   MigrationProgress,
@@ -172,6 +175,189 @@ export const api = {
     fetchAPI<Summary>(`/clusters/${cluster}/summary`),
   getClusterNodes: (cluster: string) =>
     fetchAPI<Node[]>(`/clusters/${cluster}/nodes`),
+  getClusterCeph: (cluster: string) =>
+    fetchAPI<CephCluster>(`/clusters/${cluster}/ceph`),
+  createCephPool: (
+    cluster: string,
+    body: {
+      name: string;
+      size?: number;
+      min_size?: number;
+      pg_num?: number;
+      pg_autoscale_mode?: 'on' | 'off' | 'warn';
+      application?: 'rbd' | 'cephfs' | 'rgw';
+      crush_rule?: string;
+      add_storages?: boolean;
+    },
+  ) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/ceph/pool`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateCephPool: (
+    cluster: string,
+    pool: string,
+    body: {
+      size?: number;
+      min_size?: number;
+      pg_num?: number;
+      pg_autoscale_mode?: 'on' | 'off' | 'warn';
+      application?: 'rbd' | 'cephfs' | 'rgw';
+      crush_rule?: string;
+    },
+  ) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/ceph/pool/${pool}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  deleteCephPool: (
+    cluster: string,
+    pool: string,
+    opts?: { force?: boolean; remove_storages?: boolean },
+  ) => {
+    const q = new URLSearchParams();
+    if (opts?.force) q.set('force', '1');
+    if (opts?.remove_storages) q.set('remove_storages', '1');
+    const qs = q.toString();
+    return fetchAPI<{ upid: string }>(
+      `/clusters/${cluster}/ceph/pool/${pool}${qs ? '?' + qs : ''}`,
+      { method: 'DELETE' },
+    );
+  },
+  toggleCephFlag: (cluster: string, flag: string, enable: boolean) =>
+    fetchAPI<{ status: string }>(`/clusters/${cluster}/ceph/flags/${flag}`, {
+      method: 'POST',
+      body: JSON.stringify({ enable }),
+    }),
+  createCephOSD: (
+    cluster: string,
+    node: string,
+    body: {
+      dev: string;
+      db_dev?: string;
+      wal_dev?: string;
+      db_dev_size?: number;
+      wal_dev_size?: number;
+      encrypted?: boolean;
+      crush_device_class?: 'hdd' | 'ssd' | 'nvme';
+      osds_per_device?: number;
+    },
+  ) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/nodes/${node}/ceph/osd`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  deleteCephOSD: (cluster: string, node: string, osdid: number, opts?: { cleanup?: boolean }) => {
+    const qs = opts?.cleanup ? '?cleanup=1' : '';
+    return fetchAPI<{ upid: string }>(
+      `/clusters/${cluster}/nodes/${node}/ceph/osd/${osdid}${qs}`,
+      { method: 'DELETE' },
+    );
+  },
+  setCephOSDIn: (cluster: string, node: string, osdid: number) =>
+    fetchAPI<{ status: string }>(
+      `/clusters/${cluster}/nodes/${node}/ceph/osd/${osdid}/in`,
+      { method: 'POST' },
+    ),
+  setCephOSDOut: (cluster: string, node: string, osdid: number) =>
+    fetchAPI<{ status: string }>(
+      `/clusters/${cluster}/nodes/${node}/ceph/osd/${osdid}/out`,
+      { method: 'POST' },
+    ),
+  scrubCephOSD: (cluster: string, node: string, osdid: number, opts?: { deep?: boolean }) => {
+    const qs = opts?.deep ? '?deep=1' : '';
+    return fetchAPI<{ status: string }>(
+      `/clusters/${cluster}/nodes/${node}/ceph/osd/${osdid}/scrub${qs}`,
+      { method: 'POST' },
+    );
+  },
+  createCephMON: (cluster: string, node: string, opts?: { mon_address?: string }) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/nodes/${node}/ceph/mon`, {
+      method: 'POST',
+      body: opts ? JSON.stringify(opts) : undefined,
+    }),
+  deleteCephMON: (cluster: string, node: string, monid: string) =>
+    fetchAPI<{ upid: string }>(
+      `/clusters/${cluster}/nodes/${node}/ceph/mon/${monid}`,
+      { method: 'DELETE' },
+    ),
+  createCephMGR: (cluster: string, node: string) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/nodes/${node}/ceph/mgr`, {
+      method: 'POST',
+    }),
+  deleteCephMGR: (cluster: string, node: string, mgrid: string) =>
+    fetchAPI<{ upid: string }>(
+      `/clusters/${cluster}/nodes/${node}/ceph/mgr/${mgrid}`,
+      { method: 'DELETE' },
+    ),
+  createCephMDS: (cluster: string, node: string, opts?: { hotstandby?: boolean }) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/nodes/${node}/ceph/mds`, {
+      method: 'POST',
+      body: opts ? JSON.stringify(opts) : undefined,
+    }),
+  deleteCephMDS: (cluster: string, node: string, name: string) =>
+    fetchAPI<{ upid: string }>(
+      `/clusters/${cluster}/nodes/${node}/ceph/mds/${name}`,
+      { method: 'DELETE' },
+    ),
+  createCephFS: (
+    cluster: string,
+    node: string,
+    name: string,
+    opts?: { pg_num?: number; add_storage?: boolean },
+  ) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/nodes/${node}/ceph/fs/${name}`, {
+      method: 'POST',
+      body: opts ? JSON.stringify(opts) : undefined,
+    }),
+  deleteCephFS: (
+    cluster: string,
+    node: string,
+    name: string,
+    opts?: { remove_storages?: boolean; remove_pools?: boolean },
+  ) => {
+    const q = new URLSearchParams();
+    if (opts?.remove_storages) q.set('remove_storages', '1');
+    if (opts?.remove_pools) q.set('remove_pools', '1');
+    const qs = q.toString();
+    return fetchAPI<{ upid: string }>(
+      `/clusters/${cluster}/nodes/${node}/ceph/fs/${name}${qs ? '?' + qs : ''}`,
+      { method: 'DELETE' },
+    );
+  },
+  getCephCrushMap: async (cluster: string): Promise<string> => {
+    const resp = await fetch(`/api/clusters/${cluster}/ceph/crush`, {
+      credentials: 'include',
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+    return await resp.text();
+  },
+  preflightCephInstall: (cluster: string, body: { nodes: string[] }) =>
+    fetchAPI<CephInstallPreflightResponse>(`/clusters/${cluster}/ceph/install/preflight`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  startCephInstall: (
+    cluster: string,
+    body: {
+      nodes: string[];
+      network: string;
+      cluster_network?: string;
+      pool_size?: number;
+      min_size?: number;
+    },
+  ) =>
+    fetchAPI<{ job_id: string }>(`/clusters/${cluster}/ceph/install`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  getCephJob: (cluster: string, jobId: string) =>
+    fetchAPI<CephJobSnapshot>(`/clusters/${cluster}/ceph/jobs/${jobId}`),
+  destroyCephCluster: (cluster: string, body: { confirm: string }) =>
+    fetchAPI<{ job_id: string }>(`/clusters/${cluster}/ceph/destroy`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   getNodeConfig: (cluster: string, node: string) =>
     fetchAPI<NodeConfig>(`/clusters/${cluster}/nodes/${node}/config`),
   updateNodeDNS: (cluster: string, node: string, dns: { search: string; dns1: string; dns2?: string; dns3?: string }) =>

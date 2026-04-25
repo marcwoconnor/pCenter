@@ -190,6 +190,36 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	// Cluster summary
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/summary", h.GetClusterSummary)
 
+	// Cluster Ceph topology (OSDs, MONs, pools, ...). The global /api/ceph
+	// endpoint above only returns CephStatus; this returns the full topology
+	// snapshot used by the day-2 management UI.
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/ceph", h.GetClusterCeph)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/ceph/pool", h.CreateClusterCephPool)
+	protectedMux.HandleFunc("PUT /api/clusters/{cluster}/ceph/pool/{pool}", h.UpdateClusterCephPool)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/ceph/pool/{pool}", h.DeleteClusterCephPool)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/ceph/flags/{flag}", h.ToggleClusterCephFlag)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/ceph/osd", h.CreateClusterCephOSD)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/nodes/{node}/ceph/osd/{osdid}", h.DeleteClusterCephOSD)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/ceph/osd/{osdid}/in", h.SetClusterCephOSDIn)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/ceph/osd/{osdid}/out", h.SetClusterCephOSDOut)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/ceph/osd/{osdid}/scrub", h.ScrubClusterCephOSD)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/ceph/mon", h.CreateClusterCephMON)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/nodes/{node}/ceph/mon/{monid}", h.DeleteClusterCephMON)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/ceph/mgr", h.CreateClusterCephMGR)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/nodes/{node}/ceph/mgr/{mgrid}", h.DeleteClusterCephMGR)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/ceph/mds", h.CreateClusterCephMDS)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/nodes/{node}/ceph/mds/{name}", h.DeleteClusterCephMDS)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/ceph/fs/{name}", h.CreateClusterCephFS)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/nodes/{node}/ceph/fs/{name}", h.DeleteClusterCephFS)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/ceph/crush", h.GetClusterCephCrushMap)
+
+	// Ceph install/destroy orchestration (PR 3 + PR 4 of the lifecycle plan)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/ceph/install/preflight", h.PreflightCephInstall)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/ceph/install", h.StartCephInstall)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/ceph/jobs/{job_id}", h.GetCephJob)
+	protectedMux.HandleFunc("GET /api/clusters/{cluster}/ceph/jobs", h.ListCephJobs)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/ceph/destroy", h.StartCephDestroy)
+
 	// Cluster nodes
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes", h.GetClusterNodes)
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes/{node}/config", h.GetNodeConfig)

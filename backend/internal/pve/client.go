@@ -1254,6 +1254,574 @@ func (c *Client) getHostFromURL() string {
 	return host
 }
 
+// --- Ceph topology read methods ---
+//
+// Each List/Get below targets a /nodes/{node}/ceph/* endpoint. The data is
+// cluster-wide (every MON returns the same view) so callers should pick any
+// healthy node — the poller is responsible for that choice.
+
+// ListCephOSDs returns a flat list of OSDs by walking the CRUSH tree returned
+// by /nodes/{node}/ceph/osd. The "host" parent is propagated onto each leaf
+// so the UI can group by node without a second lookup.
+func (c *Client) ListCephOSDs(ctx context.Context) ([]CephOSD, error) {
+	resp, err := get[CephOSDListResponse](c, ctx, fmt.Sprintf("/nodes/%s/ceph/osd", c.nodeName))
+	if err != nil {
+		return nil, err
+	}
+	var out []CephOSD
+	flattenCephOSDTree(&resp.Root, "", &out)
+	return out, nil
+}
+
+// flattenCephOSDTree walks the CRUSH tree depth-first, emitting one CephOSD
+// per leaf (type=="osd"). The current host's name is threaded through so leaves
+// inherit the host from their nearest "host" ancestor.
+func flattenCephOSDTree(node *CephOSDTreeNode, currentHost string, out *[]CephOSD) {
+	if node == nil {
+		return
+	}
+	host := currentHost
+	if node.Type == "host" {
+		host = node.Name
+	}
+	if node.Type == "osd" {
+		*out = append(*out, CephOSD{
+			ID:          node.ID,
+			Name:        node.Name,
+			Type:        node.Type,
+			Host:        host,
+			DeviceClass: node.DeviceClass,
+			Status:      node.Status,
+			In:          node.Reweight > 0,
+			CrushWeight: node.CrushWeight,
+			Reweight:    node.Reweight,
+		})
+	}
+	for i := range node.Children {
+		flattenCephOSDTree(&node.Children[i], host, out)
+	}
+}
+
+// ListCephMONs returns Ceph monitor daemons (cluster-wide).
+func (c *Client) ListCephMONs(ctx context.Context) ([]CephMON, error) {
+	return get[[]CephMON](c, ctx, fmt.Sprintf("/nodes/%s/ceph/mon", c.nodeName))
+}
+
+// ListCephMGRs returns Ceph manager daemons (cluster-wide).
+func (c *Client) ListCephMGRs(ctx context.Context) ([]CephMGR, error) {
+	return get[[]CephMGR](c, ctx, fmt.Sprintf("/nodes/%s/ceph/mgr", c.nodeName))
+}
+
+// ListCephMDSs returns Ceph metadata server daemons (cluster-wide).
+func (c *Client) ListCephMDSs(ctx context.Context) ([]CephMDS, error) {
+	return get[[]CephMDS](c, ctx, fmt.Sprintf("/nodes/%s/ceph/mds", c.nodeName))
+}
+
+// ListCephPools returns Ceph pools (cluster-wide).
+func (c *Client) ListCephPools(ctx context.Context) ([]CephPool, error) {
+	return get[[]CephPool](c, ctx, fmt.Sprintf("/nodes/%s/ceph/pool", c.nodeName))
+}
+
+// ListCephFS returns CephFS filesystems (cluster-wide).
+func (c *Client) ListCephFS(ctx context.Context) ([]CephFSEntry, error) {
+	return get[[]CephFSEntry](c, ctx, fmt.Sprintf("/nodes/%s/ceph/fs", c.nodeName))
+}
+
+// GetCephRules returns CRUSH rules (cluster-wide).
+func (c *Client) GetCephRules(ctx context.Context) ([]CephRule, error) {
+	return get[[]CephRule](c, ctx, fmt.Sprintf("/nodes/%s/ceph/rules", c.nodeName))
+}
+
+// GetCephFlags returns the cluster-wide OSD flags. PVE returns these as an
+// array of {name, value, description} objects from /cluster/ceph/flags;
+// translate to the typed struct callers expect.
+func (c *Client) GetCephFlags(ctx context.Context) (CephFlags, error) {
+	type rawFlag struct {
+		Name  string `json:"name"`
+		Value bool   `json:"value"`
+	}
+	raw, err := get[[]rawFlag](c, ctx, "/cluster/ceph/flags")
+	if err != nil {
+		return CephFlags{}, err
+	}
+	var flags CephFlags
+	for _, f := range raw {
+		switch f.Name {
+		case "noout":
+			flags.NoOut = f.Value
+		case "noin":
+			flags.NoIn = f.Value
+		case "noup":
+			flags.NoUp = f.Value
+		case "nodown":
+			flags.NoDown = f.Value
+		case "nobackfill":
+			flags.NoBackfill = f.Value
+		case "norebalance":
+			flags.NoRebalance = f.Value
+		case "norecover":
+			flags.NoRecover = f.Value
+		case "noscrub":
+			flags.NoScrub = f.Value
+		case "nodeep-scrub":
+			flags.NoDeepScrub = f.Value
+		case "pause":
+			flags.Pause = f.Value
+		}
+	}
+	return flags, nil
+}
+
+// --- Ceph topology write methods ---
+//
+// Pool + flag mutations route through PVE REST. Write ops on Ceph pools
+// (POST/PUT/DELETE /nodes/{node}/ceph/pool) accept the same form-encoded
+// param shape as the rest of the PVE API; flag toggles use the cluster-
+// scoped /cluster/ceph/flags/{flag} endpoint introduced in PVE 7.
+
+// CephPoolCreateOptions are the parameters accepted by POST /nodes/{node}/ceph/pool.
+// Zero-valued numeric fields are omitted from the request so PVE applies its own
+// defaults (size=3, min_size=2, pg_num=128 at the time of writing).
+type CephPoolCreateOptions struct {
+	Name            string
+	Size            int    // replica count; 0 = PVE default
+	MinSize         int    // min replicas for I/O; 0 = PVE default
+	PGNum           int    // 0 = PVE default
+	PGAutoscaleMode string // "on" | "off" | "warn"; "" = PVE default ("on" since Octopus)
+	Application     string // "rbd" | "cephfs" | "rgw"; "" = no application tag
+	CrushRule       string // CRUSH rule NAME (PVE accepts both id and name); "" = default
+	AddStorages     bool   // when true, also creates a PVE Storage entry pointing at the pool
+}
+
+// CreateCephPool creates a Ceph pool. Returns a UPID for task tracking.
+func (c *Client) CreateCephPool(ctx context.Context, opts CephPoolCreateOptions) (string, error) {
+	if opts.Name == "" {
+		return "", fmt.Errorf("pool name is required")
+	}
+	params := map[string]string{"name": opts.Name}
+	if opts.Size > 0 {
+		params["size"] = fmt.Sprintf("%d", opts.Size)
+	}
+	if opts.MinSize > 0 {
+		params["min_size"] = fmt.Sprintf("%d", opts.MinSize)
+	}
+	if opts.PGNum > 0 {
+		params["pg_num"] = fmt.Sprintf("%d", opts.PGNum)
+	}
+	if opts.PGAutoscaleMode != "" {
+		params["pg_autoscale_mode"] = opts.PGAutoscaleMode
+	}
+	if opts.Application != "" {
+		params["application"] = opts.Application
+	}
+	if opts.CrushRule != "" {
+		params["crush_rule"] = opts.CrushRule
+	}
+	if opts.AddStorages {
+		params["add_storages"] = "1"
+	}
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/pool", c.nodeName), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// CephPoolUpdateOptions captures the subset of pool fields PVE allows to
+// be updated post-creation. Empty/zero values are omitted.
+type CephPoolUpdateOptions struct {
+	Size            int
+	MinSize         int
+	PGNum           int
+	PGAutoscaleMode string
+	Application     string
+	CrushRule       string
+}
+
+// UpdateCephPool updates an existing pool. PUT returns no UPID for any
+// field PVE supports today, so we surface only an error.
+func (c *Client) UpdateCephPool(ctx context.Context, name string, opts CephPoolUpdateOptions) error {
+	if name == "" {
+		return fmt.Errorf("pool name is required")
+	}
+	params := map[string]string{}
+	if opts.Size > 0 {
+		params["size"] = fmt.Sprintf("%d", opts.Size)
+	}
+	if opts.MinSize > 0 {
+		params["min_size"] = fmt.Sprintf("%d", opts.MinSize)
+	}
+	if opts.PGNum > 0 {
+		params["pg_num"] = fmt.Sprintf("%d", opts.PGNum)
+	}
+	if opts.PGAutoscaleMode != "" {
+		params["pg_autoscale_mode"] = opts.PGAutoscaleMode
+	}
+	if opts.Application != "" {
+		params["application"] = opts.Application
+	}
+	if opts.CrushRule != "" {
+		params["crush_rule"] = opts.CrushRule
+	}
+	if len(params) == 0 {
+		return fmt.Errorf("at least one field must be set")
+	}
+	_, err := c.put(ctx, fmt.Sprintf("/nodes/%s/ceph/pool/%s", c.nodeName, name), params)
+	return err
+}
+
+// CephPoolDeleteOptions controls the destructive side of pool removal.
+type CephPoolDeleteOptions struct {
+	Force          bool // override "pool has data" safety check
+	RemoveStorages bool // also delete PVE Storage entries pointing at this pool
+}
+
+// DeleteCephPool deletes a pool and returns a UPID. The query string carries
+// the options because PVE's DELETE handler reads them from the URL.
+func (c *Client) DeleteCephPool(ctx context.Context, name string, opts CephPoolDeleteOptions) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("pool name is required")
+	}
+	path := fmt.Sprintf("/nodes/%s/ceph/pool/%s", c.nodeName, name)
+	q := url.Values{}
+	if opts.Force {
+		q.Set("force", "1")
+	}
+	if opts.RemoveStorages {
+		q.Set("remove_storages", "1")
+	}
+	if encoded := q.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	data, err := c.deleteWithData(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// SetCephFlag toggles a single cluster-wide OSD flag via PVE's typed
+// endpoint. PVE accepts the canonical flag names (noout, norebalance,
+// noscrub, nodeep-scrub, ...). Unlike SetCephNoout (legacy SSH path),
+// this requires no shell access.
+func (c *Client) SetCephFlag(ctx context.Context, flag string, enable bool) error {
+	if flag == "" {
+		return fmt.Errorf("flag is required")
+	}
+	value := "0"
+	if enable {
+		value = "1"
+	}
+	_, err := c.put(ctx, fmt.Sprintf("/cluster/ceph/flags/%s", flag), map[string]string{"value": value})
+	return err
+}
+
+// CephOSDCreateOptions are the parameters PVE accepts on POST /nodes/{node}/ceph/osd.
+// Dev is the data device path (e.g. "/dev/sdb"); DBDev / WALDev are optional
+// separate-device offloads for the BlueStore RocksDB and WAL respectively.
+type CephOSDCreateOptions struct {
+	Dev              string // required: data device, e.g. "/dev/sdb"
+	DBDev            string // optional: separate DB device path
+	WALDev           string // optional: separate WAL device path
+	DBDevSize        int    // optional: DB partition size GiB (PVE-managed LVM); 0 = device-default
+	WALDevSize       int    // optional: WAL partition size GiB; 0 = device-default
+	Encrypted        bool   // when true, dm-crypt over the OSD
+	CrushDeviceClass string // optional override: "hdd" | "ssd" | "nvme" | ""
+	OSDsPerDevice    int    // optional: split a single device into N OSDs (NVMe); 0 = 1
+}
+
+// CreateCephOSD creates a Ceph OSD on this client's node. Returns UPID.
+//
+// Important: the caller is responsible for confirming the device is wiped /
+// has no signatures — PVE's pveceph osd create will refuse a device that
+// looks like it might already hold a filesystem. The agent's disk_zap
+// action handles that side; see docs/ceph-lifecycle-plan.md.
+func (c *Client) CreateCephOSD(ctx context.Context, opts CephOSDCreateOptions) (string, error) {
+	if opts.Dev == "" {
+		return "", fmt.Errorf("dev is required")
+	}
+	params := map[string]string{"dev": opts.Dev}
+	if opts.DBDev != "" {
+		params["db_dev"] = opts.DBDev
+	}
+	if opts.WALDev != "" {
+		params["wal_dev"] = opts.WALDev
+	}
+	if opts.DBDevSize > 0 {
+		params["db_dev_size"] = fmt.Sprintf("%d", opts.DBDevSize)
+	}
+	if opts.WALDevSize > 0 {
+		params["wal_dev_size"] = fmt.Sprintf("%d", opts.WALDevSize)
+	}
+	if opts.Encrypted {
+		params["encrypted"] = "1"
+	}
+	if opts.CrushDeviceClass != "" {
+		params["crush_device_class"] = opts.CrushDeviceClass
+	}
+	if opts.OSDsPerDevice > 0 {
+		params["osds_per_device"] = fmt.Sprintf("%d", opts.OSDsPerDevice)
+	}
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/osd", c.nodeName), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// DeleteCephOSD destroys an OSD. When cleanup=true PVE removes the LVM
+// volumes too — required for re-using the device without manual zap.
+// Returns UPID.
+func (c *Client) DeleteCephOSD(ctx context.Context, osdID int, cleanup bool) (string, error) {
+	path := fmt.Sprintf("/nodes/%s/ceph/osd/%d", c.nodeName, osdID)
+	if cleanup {
+		path += "?cleanup=1"
+	}
+	data, err := c.deleteWithData(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// SetCephOSDIn marks an OSD "in" (CRUSH eligible). PVE returns no UPID.
+func (c *Client) SetCephOSDIn(ctx context.Context, osdID int) error {
+	_, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/osd/%d/in", c.nodeName, osdID), nil)
+	return err
+}
+
+// SetCephOSDOut marks an OSD "out" — typically the first step of a planned
+// removal so PGs migrate off cleanly. PVE returns no UPID.
+func (c *Client) SetCephOSDOut(ctx context.Context, osdID int) error {
+	_, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/osd/%d/out", c.nodeName, osdID), nil)
+	return err
+}
+
+// ScrubCephOSD requests a scrub of an OSD. When deep=true, requests a deep
+// scrub instead. PVE returns no UPID — the request is queued by the OSD
+// itself and runs asynchronously.
+func (c *Client) ScrubCephOSD(ctx context.Context, osdID int, deep bool) error {
+	params := map[string]string{}
+	if deep {
+		params["deep"] = "1"
+	}
+	_, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/osd/%d/scrub", c.nodeName, osdID), params)
+	return err
+}
+
+// CreateCephMON creates a Ceph monitor daemon on this client's node.
+// monAddress is optional — when set, PVE binds the MON to that address
+// instead of auto-detecting (useful when the node has multiple interfaces
+// on the public network). Returns UPID.
+func (c *Client) CreateCephMON(ctx context.Context, monAddress string) (string, error) {
+	params := map[string]string{}
+	if monAddress != "" {
+		params["mon-address"] = monAddress
+	}
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/mon", c.nodeName), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// DeleteCephMON destroys a Ceph monitor by ID (typically the hostname of
+// the node owning the MON). Returns UPID. Caller is responsible for
+// confirming quorum will survive — removing the last MON breaks the
+// cluster irrecoverably without manual intervention.
+func (c *Client) DeleteCephMON(ctx context.Context, monID string) (string, error) {
+	if monID == "" {
+		return "", fmt.Errorf("monid is required")
+	}
+	data, err := c.deleteWithData(ctx, fmt.Sprintf("/nodes/%s/ceph/mon/%s", c.nodeName, monID))
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// CreateCephMGR creates a Ceph manager daemon on this client's node.
+// PVE allows multiple MGRs per cluster (one active + N standbys) — best
+// practice is to run an MGR alongside every MON. Returns UPID.
+func (c *Client) CreateCephMGR(ctx context.Context) (string, error) {
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/mgr", c.nodeName), nil)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// DeleteCephMGR destroys a Ceph manager by ID (typically the hostname).
+// Removing the active MGR triggers failover to a standby; removing the
+// last MGR leaves the cluster without health/orchestration metrics.
+// Returns UPID.
+func (c *Client) DeleteCephMGR(ctx context.Context, mgrID string) (string, error) {
+	if mgrID == "" {
+		return "", fmt.Errorf("mgrid is required")
+	}
+	data, err := c.deleteWithData(ctx, fmt.Sprintf("/nodes/%s/ceph/mgr/%s", c.nodeName, mgrID))
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// InitCephClusterOptions captures the params for POST /nodes/{node}/ceph/init.
+// Network is the public-network CIDR (required; e.g. "10.0.0.0/24");
+// ClusterNetwork is optional (used for OSD replication when set).
+// Size + MinSize seed the global Ceph defaults for newly-created pools.
+type InitCephClusterOptions struct {
+	Network        string // required: public network CIDR
+	ClusterNetwork string // optional: cluster network CIDR for OSD replication
+	Size           int    // default 3 if zero (PVE applies its own default)
+	MinSize        int    // default 2 if zero
+	DisableCephx   bool   // turns off Ceph's auth — virtually never wanted
+}
+
+// InitCephCluster bootstraps a fresh Ceph cluster on this client's node.
+// Must run on exactly one node — typically the first MON node. PVE writes
+// /etc/pve/ceph.conf and the initial keyrings; subsequent MONs just join.
+// Returns no UPID — the call is synchronous.
+func (c *Client) InitCephCluster(ctx context.Context, opts InitCephClusterOptions) error {
+	if opts.Network == "" {
+		return fmt.Errorf("network is required")
+	}
+	params := map[string]string{"network": opts.Network}
+	if opts.ClusterNetwork != "" {
+		params["cluster-network"] = opts.ClusterNetwork
+	}
+	if opts.Size > 0 {
+		params["size"] = fmt.Sprintf("%d", opts.Size)
+	}
+	if opts.MinSize > 0 {
+		params["min_size"] = fmt.Sprintf("%d", opts.MinSize)
+	}
+	if opts.DisableCephx {
+		params["disable_cephx"] = "1"
+	}
+	_, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/init", c.nodeName), params)
+	return err
+}
+
+// CreateCephMDS creates a Ceph metadata server daemon on this client's node.
+// hotstandby toggles whether the MDS sits in standby-replay (warm cache, faster
+// failover at the cost of memory). Returns UPID.
+func (c *Client) CreateCephMDS(ctx context.Context, hotstandby bool) (string, error) {
+	params := map[string]string{}
+	if hotstandby {
+		params["hotstandby"] = "1"
+	}
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/mds", c.nodeName), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// DeleteCephMDS destroys an MDS by name. If the MDS is the active rank for a
+// CephFS, removing it triggers failover; if there are no standbys, the FS
+// goes degraded until another MDS is created. Returns UPID.
+func (c *Client) DeleteCephMDS(ctx context.Context, name string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	data, err := c.deleteWithData(ctx, fmt.Sprintf("/nodes/%s/ceph/mds/%s", c.nodeName, name))
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// CephFSCreateOptions captures the params for POST /nodes/{node}/ceph/fs/{name}.
+// Note: the FS name lives in the URL, NOT the body — PVE's API contract.
+type CephFSCreateOptions struct {
+	Name       string // required: filesystem name; PVE creates {name}_data + {name}_metadata pools
+	PGNum      int    // optional: PG count for the data pool; 0 = PVE default
+	AddStorage bool   // when true, also create a PVE Storage entry of type "cephfs"
+}
+
+// CreateCephFS creates a CephFS filesystem. PVE creates the underlying
+// data + metadata pools automatically. Returns UPID.
+func (c *Client) CreateCephFS(ctx context.Context, opts CephFSCreateOptions) (string, error) {
+	if opts.Name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	params := map[string]string{}
+	if opts.PGNum > 0 {
+		params["pg_num"] = fmt.Sprintf("%d", opts.PGNum)
+	}
+	if opts.AddStorage {
+		params["add_storage"] = "1"
+	}
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/fs/%s", c.nodeName, opts.Name), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// CephFSDeleteOptions controls the destructive scope of FS removal.
+type CephFSDeleteOptions struct {
+	RemoveStorages bool // also drop PVE Storage entries pointing at this FS
+	RemovePools    bool // also delete the underlying data + metadata pools
+}
+
+// DeleteCephFS destroys a CephFS. When RemovePools is true, the underlying
+// pools are deleted too — without it, the FS is removed but the pools remain
+// (rare, useful only when migrating a pool to a new FS). Returns UPID.
+func (c *Client) DeleteCephFS(ctx context.Context, name string, opts CephFSDeleteOptions) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	path := fmt.Sprintf("/nodes/%s/ceph/fs/%s", c.nodeName, name)
+	q := url.Values{}
+	if opts.RemoveStorages {
+		q.Set("remove_storages", "1")
+	}
+	if opts.RemovePools {
+		q.Set("remove_pools", "1")
+	}
+	if encoded := q.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	data, err := c.deleteWithData(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// GetCephCrushMap returns the textual decompiled CRUSH map. Useful for the
+// CRUSH viewer tab; editing flows through `ceph osd setcrushmap` which is
+// out of scope for PR 2 (operators do this rarely and via SSH today).
+func (c *Client) GetCephCrushMap(ctx context.Context) (string, error) {
+	return get[string](c, ctx, fmt.Sprintf("/nodes/%s/ceph/crush", c.nodeName))
+}
+
 // GetSmartData fetches SMART data for all disks on this node
 func (c *Client) GetSmartData(ctx context.Context) ([]SmartDisk, error) {
 	host := c.getHostFromURL()

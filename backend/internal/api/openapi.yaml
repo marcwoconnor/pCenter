@@ -354,6 +354,792 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
 
+  /api/clusters/{cluster}/ceph:
+    get:
+      tags: [clusters]
+      summary: Cluster-wide Ceph topology snapshot
+      description: |
+        Returns the full Ceph topology cached by the poller — OSDs, MONs,
+        MGRs, MDSs, pools, CRUSH rules, CephFS instances, and OSD flags.
+        Returns 404 when the cluster has no Ceph installed or hasn't been
+        polled yet. The cadence is ~30s; back-to-back calls within a tick
+        return identical responses.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+      responses:
+        '200':
+          description: Ceph topology
+          content:
+            application/json:
+              schema: { type: object }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/ceph/pool:
+    post:
+      tags: [clusters]
+      summary: Create a Ceph pool
+      description: |
+        Creates a Ceph pool. Required: name. Optional: size, min_size,
+        pg_num, pg_autoscale_mode (on/off/warn), application
+        (rbd/cephfs/rgw), crush_rule, add_storages. Zero-valued numeric
+        fields use PVE defaults. Returns the UPID of the create task.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                size: { type: integer }
+                min_size: { type: integer }
+                pg_num: { type: integer }
+                pg_autoscale_mode: { type: string, enum: [on, off, warn] }
+                application: { type: string, enum: [rbd, cephfs, rgw] }
+                crush_rule: { type: string }
+                add_storages: { type: boolean }
+      responses:
+        '200':
+          description: Task started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { upid: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/ceph/pool/{pool}:
+    put:
+      tags: [clusters]
+      summary: Update a Ceph pool's mutable fields
+      description: |
+        Updates an existing pool. At least one of size, min_size, pg_num,
+        pg_autoscale_mode, application, or crush_rule must be set.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: pool
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                size: { type: integer }
+                min_size: { type: integer }
+                pg_num: { type: integer }
+                pg_autoscale_mode: { type: string, enum: [on, off, warn] }
+                application: { type: string, enum: [rbd, cephfs, rgw] }
+                crush_rule: { type: string }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [clusters]
+      summary: Delete a Ceph pool
+      description: |
+        Deletes a pool. Use force=1 to override the "pool has data" check
+        and remove_storages=1 to also drop PVE Storage entries pointing at
+        this pool. Returns the UPID of the delete task.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: pool
+          required: true
+          schema: { type: string }
+        - in: query
+          name: force
+          schema: { type: string, enum: ["1"] }
+        - in: query
+          name: remove_storages
+          schema: { type: string, enum: ["1"] }
+      responses:
+        '200':
+          description: Task started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { upid: { type: string } }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/nodes/{node}/ceph/osd:
+    post:
+      tags: [clusters]
+      summary: Create a Ceph OSD on a specific node
+      description: |
+        Creates a Ceph OSD on the named node. Required: `dev` (data device
+        path, e.g. /dev/sdb). Optional: separate `db_dev` / `wal_dev` for
+        BlueStore offload, `encrypted` for dm-crypt, `crush_device_class`
+        override, and `osds_per_device` to split a fast device into
+        multiple OSDs. The caller is responsible for wiping the device
+        first; PVE refuses to create on a device with existing
+        signatures. Returns the UPID of the create task.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dev]
+              properties:
+                dev: { type: string, example: "/dev/sdb" }
+                db_dev: { type: string }
+                wal_dev: { type: string }
+                db_dev_size: { type: integer, description: "DB partition size in GiB" }
+                wal_dev_size: { type: integer, description: "WAL partition size in GiB" }
+                encrypted: { type: boolean }
+                crush_device_class: { type: string, enum: [hdd, ssd, nvme] }
+                osds_per_device: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Task started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { upid: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/nodes/{node}/ceph/osd/{osdid}:
+    delete:
+      tags: [clusters]
+      summary: Destroy a Ceph OSD
+      description: |
+        Destroys an OSD on the named node. Pass `cleanup=1` to also remove
+        the underlying LVM volumes — required to re-use the device without
+        a manual zap. Returns the UPID of the destroy task.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+        - in: path
+          name: osdid
+          required: true
+          schema: { type: integer, minimum: 0 }
+        - in: query
+          name: cleanup
+          schema: { type: string, enum: ["1"] }
+      responses:
+        '200':
+          description: Task started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { upid: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/nodes/{node}/ceph/osd/{osdid}/in:
+    post:
+      tags: [clusters]
+      summary: Mark a Ceph OSD "in"
+      description: Marks an OSD CRUSH-eligible. The reverse of /out.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+        - in: path
+          name: osdid
+          required: true
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: OSD marked in
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/nodes/{node}/ceph/osd/{osdid}/out:
+    post:
+      tags: [clusters]
+      summary: Mark a Ceph OSD "out"
+      description: |
+        Marks an OSD out (typically the first step of a planned removal so
+        PGs migrate off cleanly).
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+        - in: path
+          name: osdid
+          required: true
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: OSD marked out
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/nodes/{node}/ceph/osd/{osdid}/scrub:
+    post:
+      tags: [clusters]
+      summary: Request a scrub of a Ceph OSD
+      description: |
+        Queues a scrub on the named OSD. Pass `deep=1` for a deep scrub.
+        Runs asynchronously inside Ceph; this endpoint returns immediately
+        once the request is accepted.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+        - in: path
+          name: osdid
+          required: true
+          schema: { type: integer, minimum: 0 }
+        - in: query
+          name: deep
+          schema: { type: string, enum: ["1"] }
+      responses:
+        '200':
+          description: Scrub queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/nodes/{node}/ceph/mon:
+    post:
+      tags: [clusters]
+      summary: Create a Ceph monitor on a specific node
+      description: |
+        Creates a Ceph monitor daemon on the named node. `mon_address` is
+        optional — set when the node has multiple interfaces and PVE
+        should not auto-detect. Returns the UPID of the create task.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mon_address: { type: string }
+      responses:
+        '200':
+          description: Task started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { upid: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/nodes/{node}/ceph/mon/{monid}:
+    delete:
+      tags: [clusters]
+      summary: Destroy a Ceph monitor
+      description: |
+        Destroys the named monitor. The caller is responsible for
+        confirming quorum will survive — removing the last MON requires
+        manual recovery to bring the cluster back. The destructive guard
+        belongs in the UI confirmation dialog, not this API. Returns the
+        UPID of the destroy task.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+        - in: path
+          name: monid
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Task started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { upid: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/nodes/{node}/ceph/mgr:
+    post:
+      tags: [clusters]
+      summary: Create a Ceph manager on a specific node
+      description: |
+        Creates a Ceph manager daemon on the named node. PVE picks the
+        daemon name from the node hostname. Returns the UPID of the
+        create task.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Task started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { upid: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/nodes/{node}/ceph/mgr/{mgrid}:
+    delete:
+      tags: [clusters]
+      summary: Destroy a Ceph manager
+      description: |
+        Destroys the named manager. Removing the active MGR triggers
+        failover to a standby; removing the last MGR loses metrics but
+        doesn't break I/O.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+        - in: path
+          name: mgrid
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Task started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { upid: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/nodes/{node}/ceph/mds:
+    post:
+      tags: [clusters]
+      summary: Create a Ceph MDS on a specific node
+      description: |
+        Creates a Ceph metadata server. `hotstandby` toggles standby-replay
+        (warm cache, faster failover at the cost of memory). Returns the
+        UPID of the create task.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                hotstandby: { type: boolean }
+      responses:
+        '200':
+          description: Task started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { upid: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/nodes/{node}/ceph/mds/{name}:
+    delete:
+      tags: [clusters]
+      summary: Destroy a Ceph MDS by name
+      description: |
+        Removing the active MDS for a CephFS triggers failover to a standby;
+        with no standbys, the FS goes degraded until another MDS is created.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Task started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { upid: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/nodes/{node}/ceph/fs/{name}:
+    post:
+      tags: [clusters]
+      summary: Create a CephFS filesystem
+      description: |
+        Creates a CephFS named by the path parameter. PVE creates the
+        underlying `{name}_data` and `{name}_metadata` pools automatically.
+        Optional: pg_num for the data pool, add_storage to also create a
+        PVE Storage entry of type cephfs.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pg_num: { type: integer, minimum: 1 }
+                add_storage: { type: boolean }
+      responses:
+        '200':
+          description: Task started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { upid: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [clusters]
+      summary: Destroy a CephFS filesystem
+      description: |
+        Removes the named filesystem. Pass `remove_storages=1` to also drop
+        PVE Storage entries; `remove_pools=1` to also delete the underlying
+        data + metadata pools.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: node
+          required: true
+          schema: { type: string }
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+        - in: query
+          name: remove_storages
+          schema: { type: string, enum: ["1"] }
+        - in: query
+          name: remove_pools
+          schema: { type: string, enum: ["1"] }
+      responses:
+        '200':
+          description: Task started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { upid: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/ceph/crush:
+    get:
+      tags: [clusters]
+      summary: Decompiled CRUSH map (text)
+      description: |
+        Returns the cluster's decompiled CRUSH map as plain text. Read-only —
+        editing flows through `ceph osd setcrushmap` and is not exposed
+        in this release.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+      responses:
+        '200':
+          description: CRUSH map text
+          content:
+            text/plain:
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/ceph/install/preflight:
+    post:
+      tags: [clusters]
+      summary: Preflight checks for a Ceph install
+      description: |
+        Probes each target node and returns a structured report. Each host
+        gets a `blockers` list (e.g. unreachable, Ceph already installed)
+        and the wizard refuses to submit if `can_proceed` is false.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nodes]
+              properties:
+                nodes:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200':
+          description: Preflight result
+          content:
+            application/json:
+              schema: { type: object }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/ceph/install:
+    post:
+      tags: [clusters]
+      summary: Start a Ceph install Job
+      description: |
+        Kicks off install orchestration as a background Job. The first node
+        in `nodes` becomes the founder (gets pveceph init + first MON +
+        first MGR); the rest get pveceph install + an additional MON each.
+        Returns a `job_id` immediately; poll
+        `GET /api/clusters/{cluster}/ceph/jobs/{job_id}` for progress.
+
+        v1 uses pcenter's existing SSH key trust to root@<node> for
+        `pveceph install` and the configured PVE API token for everything
+        else. No per-job passwords.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nodes, network]
+              properties:
+                nodes:
+                  type: array
+                  items: { type: string }
+                  description: Ordered list of PVE nodes; first is the founder.
+                network:
+                  type: string
+                  description: Public network CIDR for `pveceph init --network`
+                  example: "10.0.0.0/24"
+                cluster_network:
+                  type: string
+                  description: Optional separate cluster network for OSD replication.
+                pool_size:
+                  type: integer
+                  default: 3
+                min_size:
+                  type: integer
+                  default: 2
+      responses:
+        '200':
+          description: Job started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id: { type: string }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/ceph/jobs:
+    get:
+      tags: [clusters]
+      summary: List recent Ceph install/destroy jobs
+      description: |
+        Returns all known jobs (running + recently completed), newest-first.
+        Job state is in-memory — pcenter restart wipes the registry.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+      responses:
+        '200':
+          description: List of job snapshots
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+        '401': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/ceph/destroy:
+    post:
+      tags: [clusters]
+      summary: Start a Ceph destroy Job
+      description: |
+        Tears Ceph down across the entire cluster: deletes pools (with PVE
+        Storage entries), CephFS instances, MDSs, MGRs, MONs, then runs
+        `pveceph purge --crash --logs` on every node. The destroy
+        continues past per-resource failures rather than bailing —
+        half-destroys are worse than mostly-clean ones.
+
+        IRREVERSIBLE. The body must include `confirm` equal to the cluster
+        name verbatim; the wizard's typed-confirmation field produces this.
+        Returns `{job_id}` immediately; poll
+        `GET /api/clusters/{cluster}/ceph/jobs/{job_id}` for progress.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm]
+              properties:
+                confirm:
+                  type: string
+                  description: Must equal the cluster name verbatim.
+      responses:
+        '200':
+          description: Job started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id: { type: string }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/ceph/jobs/{job_id}:
+    get:
+      tags: [clusters]
+      summary: Snapshot of a single Ceph install/destroy job
+      description: |
+        Returns a JSON snapshot with state (running/succeeded/failed), the
+        ordered list of steps with per-step state + message + error, and
+        timestamps. 404 means the job ID is unknown — the operation
+        either landed or pcenter restarted and lost the registry.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: job_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Job snapshot
+          content:
+            application/json:
+              schema: { type: object }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
+  /api/clusters/{cluster}/ceph/flags/{flag}:
+    post:
+      tags: [clusters]
+      summary: Set or unset a cluster-wide Ceph OSD flag
+      description: |
+        Toggles a cluster-wide OSD flag. Allowed flags: noout, noin, noup,
+        nodown, nobackfill, norebalance, norecover, noscrub, nodeep-scrub,
+        pause. Other PVE-accepted flags are intentionally not exposed.
+      parameters:
+        - $ref: '#/components/parameters/ClusterName'
+        - in: path
+          name: flag
+          required: true
+          schema:
+            type: string
+            enum: [noout, noin, noup, nodown, nobackfill, norebalance, norecover, noscrub, nodeep-scrub, pause]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enable]
+              properties:
+                enable: { type: boolean }
+      responses:
+        '200':
+          description: Flag toggled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
   # === Guests ===
 
   /api/guests:

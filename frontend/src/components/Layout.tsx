@@ -23,6 +23,7 @@ const navItems = [
   { path: '/hosts', label: 'Hosts & Clusters', icon: '▦' },
   { path: '/vms', label: 'VMs & Templates', icon: '◫' },
   { path: '/storage', label: 'Storage', icon: '▤' },
+  { path: '/ceph', label: 'Ceph', icon: '⬢' },
   { path: '/network', label: 'Network', icon: '◈' },
   { path: '/library', label: 'Library', icon: '📚' },
 ];

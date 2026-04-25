@@ -6,6 +6,7 @@ import { Home } from './pages/Home';
 import { HostsAndClusters } from './pages/HostsAndClusters';
 import { VMsAndTemplates } from './pages/VMsAndTemplates';
 import { StoragePage } from './pages/Storage';
+import { CephPage } from './pages/Ceph';
 import { NetworkPage } from './pages/Network';
 import { ContentLibrary } from './pages/ContentLibrary';
 import { ConsolePage } from './pages/ConsolePage';
@@ -107,6 +108,18 @@ function AppRoutes() {
               <ClusterProvider>
                 <FolderProvider>
                   <StoragePage />
+                </FolderProvider>
+              </ClusterProvider>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/ceph"
+          element={
+            <ProtectedRoute>
+              <ClusterProvider>
+                <FolderProvider>
+                  <CephPage />
                 </FolderProvider>
               </ClusterProvider>
             </ProtectedRoute>

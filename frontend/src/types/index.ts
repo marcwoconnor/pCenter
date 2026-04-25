@@ -267,6 +267,155 @@ export interface CephStatus {
   };
 }
 
+// Ceph topology — populated from GET /api/clusters/{cluster}/ceph.
+// Field names mirror the backend (pve.CephCluster) verbatim; see
+// docs/ceph-lifecycle-plan.md for the source of truth.
+
+export interface CephOSD {
+  id: number;
+  name: string;
+  type: string;
+  host: string;
+  device_class: string;
+  status: string;          // "up" | "down"
+  in: boolean;
+  crush_weight: number;
+  reweight: number;
+  used_bytes?: number;
+  avail_bytes?: number;
+  total_bytes?: number;
+}
+
+export interface CephMON {
+  name: string;
+  addr: string;
+  host: string;
+  rank: number;
+  quorum: boolean;
+  state: string;           // "leader" | "peon" | ...
+  ceph_version?: string;
+  direction?: string;
+}
+
+export interface CephMGR {
+  name: string;
+  host: string;
+  state: string;           // "active" | "standby"
+  addr?: string;
+  ceph_version?: string;
+}
+
+export interface CephMDS {
+  name: string;
+  host: string;
+  addr?: string;
+  state: string;           // "up:active" | "up:standby" | ...
+  rank?: number;
+  standby_replay?: boolean;
+}
+
+export interface CephPool {
+  id: number;
+  pool_name: string;
+  size: number;
+  min_size: number;
+  pg_num: number;
+  pg_num_min?: number;
+  pg_autoscale_mode?: string;
+  crush_rule: number;
+  crush_rule_name?: string;
+  application?: string;
+  bytes_used?: number;
+  max_avail?: number;
+  percent_used?: number;
+  type?: string;           // "replicated" | "erasure"
+}
+
+export interface CephRule {
+  rule_id: number;
+  rule_name: string;
+  ruleset?: number;
+  type?: number;           // 1 = replicated, 3 = erasure
+  steps_count?: number;
+}
+
+export interface CephFSEntry {
+  name: string;
+  metadata_pool?: string;
+  data_pools?: string[];
+}
+
+export interface CephFlags {
+  noout: boolean;
+  noin: boolean;
+  noup: boolean;
+  nodown: boolean;
+  nobackfill: boolean;
+  norebalance: boolean;
+  norecover: boolean;
+  noscrub: boolean;
+  'nodeep-scrub': boolean;
+  pause: boolean;
+}
+
+export interface CephCluster {
+  status?: CephStatus;
+  version?: string;
+  mons: CephMON[];
+  mgrs: CephMGR[];
+  mdss: CephMDS[];
+  osds: CephOSD[];
+  pools: CephPool[];
+  rules: CephRule[];
+  fs: CephFSEntry[];
+  flags: CephFlags;
+  last_updated: string;    // RFC3339
+}
+
+// Install/destroy orchestration (cephcluster package).
+
+export interface CephInstallPreflightHost {
+  node: string;
+  reachable: boolean;
+  pve_version?: string;
+  pve_major?: string;
+  ceph_already_installed: boolean;
+  blockers: string[];
+}
+
+export interface CephInstallPreflightResponse {
+  hosts: CephInstallPreflightHost[];
+  can_proceed: boolean;
+  network_ok: boolean;
+  message?: string;
+}
+
+export type CephJobState = 'running' | 'succeeded' | 'failed';
+export type CephJobKind = 'install' | 'destroy';
+export type CephStepState = 'pending' | 'running' | 'succeeded' | 'failed';
+
+export interface CephJobStep {
+  host: string;
+  phase: string;
+  state: CephStepState;
+  upid?: string;
+  message?: string;
+  error?: string;
+  started_at?: string;
+  ended_at?: string;
+}
+
+export interface CephJobSnapshot {
+  job_id: string;
+  kind: CephJobKind;
+  cluster: string;
+  state: CephJobState;
+  error?: string;
+  steps: CephJobStep[];
+  started_at: string;
+  ended_at?: string;
+}
+
 // Multi-cluster types
 
 export interface HAInfo {

@@ -230,3 +230,63 @@ func TestStore_ConcurrentAccess(t *testing.T) {
 		<-done
 	}
 }
+
+// TestClusterStore_CephTopology verifies the cluster-wide Ceph topology
+// can be set, retrieved, and cleared independently of the per-node ceph
+// status map.
+func TestClusterStore_CephTopology(t *testing.T) {
+	store := New()
+	cs := store.GetOrCreateCluster("test")
+
+	// Default is nil — topology not yet populated.
+	if got := cs.GetCephTopology(); got != nil {
+		t.Errorf("new ClusterStore should have nil CephTopology, got %+v", got)
+	}
+
+	topology := &pve.CephCluster{
+		MONs:  []pve.CephMON{{Name: "pve1", Quorum: true, State: "leader"}},
+		OSDs:  []pve.CephOSD{{ID: 0, Name: "osd.0", Status: "up", In: true}},
+		Pools: []pve.CephPool{{Name: "rbd", Size: 3}},
+	}
+	cs.SetCephTopology(topology)
+
+	got := cs.GetCephTopology()
+	if got == nil {
+		t.Fatal("after SetCephTopology, GetCephTopology returned nil")
+	}
+	if len(got.MONs) != 1 || len(got.OSDs) != 1 || len(got.Pools) != 1 {
+		t.Errorf("topology lost data after roundtrip: %+v", got)
+	}
+
+	// Setting nil clears (e.g. after Ceph uninstall).
+	cs.SetCephTopology(nil)
+	if got := cs.GetCephTopology(); got != nil {
+		t.Errorf("SetCephTopology(nil) should clear, got %+v", got)
+	}
+}
+
+// TestStore_GetCephTopology verifies the Store-level accessor by cluster name,
+// including the nil cases (unknown cluster, cluster with no topology yet).
+func TestStore_GetCephTopology(t *testing.T) {
+	store := New()
+
+	// Unknown cluster returns nil, doesn't panic.
+	if got := store.GetCephTopology("nonexistent"); got != nil {
+		t.Errorf("unknown cluster should return nil, got %+v", got)
+	}
+
+	// Known cluster with no topology returns nil.
+	cs := store.GetOrCreateCluster("prod")
+	if got := store.GetCephTopology("prod"); got != nil {
+		t.Errorf("cluster without topology should return nil, got %+v", got)
+	}
+
+	cs.SetCephTopology(&pve.CephCluster{
+		Pools: []pve.CephPool{{Name: "rbd"}},
+	})
+
+	got := store.GetCephTopology("prod")
+	if got == nil || len(got.Pools) != 1 || got.Pools[0].Name != "rbd" {
+		t.Errorf("expected topology with rbd pool, got %+v", got)
+	}
+}

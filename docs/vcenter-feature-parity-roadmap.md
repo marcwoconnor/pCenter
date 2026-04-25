@@ -138,7 +138,11 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 | Storage overview | ✅ | All pools listed with usage |
 | Storage content browse | ✅ | ISOs, templates, backups, images |
 | File upload | ✅ | Upload ISOs/templates to storage |
-| Ceph integration | ✅ | Health monitoring + whitelisted commands |
+| Ceph integration (read-only monitor) | ✅ | Health monitoring + whitelisted commands |
+| Ceph day-2 management (OSD/MON/pool/flags CRUD) | ✅ | PR 1 of `docs/ceph-lifecycle-plan.md` — `/ceph` page tabs |
+| Ceph CephFS + MDS + CRUSH viewer | ✅ | PR 2 — CephFS + MDS lifecycle, CRUSH viewer (editing intentionally out of scope) |
+| Ceph install wizard | ✅ | PR 3 — `cephcluster` package; SSH `pveceph install` + REST init/MON/MGR |
+| Ceph destroy / purge | ✅ | PR 4 — typed-confirmation destroy with continue-past-failure |
 | SMART monitoring | ✅ | Disk health + temperature tracking |
 | Storage profiles/policies | 🔴 | Policy-based VM storage placement |
 | Storage DRS | 🔴 | Auto-balance storage across pools |

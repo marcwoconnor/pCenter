@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/moconnor/pcenter/internal/pve"
@@ -281,5 +282,302 @@ func TestGetAllGuestsEmpty(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", rec.Code)
+	}
+}
+
+// TestGetClusterCeph_404s covers the two distinct nil paths: the cluster
+// itself doesn't exist, and the cluster exists but has no Ceph topology
+// (not installed or not yet polled). Both surface as 404.
+func TestGetClusterCeph_404s(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	t.Run("unknown cluster", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/clusters/nope/ceph", nil)
+		req.SetPathValue("cluster", "nope")
+		rec := httptest.NewRecorder()
+		h.GetClusterCeph(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("cluster exists but no Ceph", func(t *testing.T) {
+		_, store := newTestHandler(t)
+		store.GetOrCreateCluster("test-cluster")
+		h := NewHandler(store, nil, nil)
+
+		req := httptest.NewRequest("GET", "/api/clusters/test-cluster/ceph", nil)
+		req.SetPathValue("cluster", "test-cluster")
+		rec := httptest.NewRecorder()
+		h.GetClusterCeph(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+// TestCreateClusterCephPool_Validation covers the request-validation paths
+// that don't require a live PVE backend: bad JSON, missing name, unknown
+// cluster, no poller (agent-only mode). The happy path is exercised via
+// the pve client's TestCreateCephPool_FormsRequest test.
+func TestCreateClusterCephPool_Validation(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(*state.Store)
+		body     string
+		wantCode int
+	}{
+		{
+			name:     "invalid JSON",
+			body:     `{not json`,
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "missing name",
+			body:     `{"size":3}`,
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "unknown cluster",
+			body:     `{"name":"rbd"}`,
+			wantCode: http.StatusNotFound,
+		},
+		{
+			name: "agent-only mode (no poller)",
+			setup: func(s *state.Store) {
+				s.GetOrCreateCluster("test-cluster")
+			},
+			body:     `{"name":"rbd"}`,
+			wantCode: http.StatusServiceUnavailable,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := state.New()
+			if tt.setup != nil {
+				tt.setup(store)
+			}
+			h := NewHandler(store, nil, nil)
+
+			req := httptest.NewRequest("POST", "/api/clusters/test-cluster/ceph/pool", strings.NewReader(tt.body))
+			req.SetPathValue("cluster", "test-cluster")
+			rec := httptest.NewRecorder()
+			h.CreateClusterCephPool(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Errorf("got status %d, want %d (body: %s)", rec.Code, tt.wantCode, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestToggleClusterCephFlag_RejectsUnsupportedFlag verifies the flag
+// allowlist gates obvious typos before any backend call.
+func TestToggleClusterCephFlag_RejectsUnsupportedFlag(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	req := httptest.NewRequest("POST", "/api/clusters/test/ceph/flags/sortbitwise", strings.NewReader(`{"enable":true}`))
+	req.SetPathValue("cluster", "test")
+	req.SetPathValue("flag", "sortbitwise")
+	rec := httptest.NewRecorder()
+	h.ToggleClusterCephFlag(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for unsupported flag, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUpdateClusterCephPool_RejectsEmptyPool covers the path-param check.
+func TestUpdateClusterCephPool_RejectsEmptyPool(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	req := httptest.NewRequest("PUT", "/api/clusters/test/ceph/pool/", strings.NewReader(`{"size":2}`))
+	req.SetPathValue("cluster", "test")
+	req.SetPathValue("pool", "")
+	rec := httptest.NewRecorder()
+	h.UpdateClusterCephPool(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for empty pool name, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCreateClusterCephOSD_Validation covers the validation paths reachable
+// without a live PVE backend.
+func TestCreateClusterCephOSD_Validation(t *testing.T) {
+	tests := []struct {
+		name     string
+		node     string
+		body     string
+		wantCode int
+	}{
+		{name: "missing node path-param", node: "", body: `{"dev":"/dev/sdb"}`, wantCode: http.StatusBadRequest},
+		{name: "invalid JSON", node: "pve1", body: `{nope`, wantCode: http.StatusBadRequest},
+		{name: "missing dev", node: "pve1", body: `{"encrypted":true}`, wantCode: http.StatusBadRequest},
+		{name: "unknown cluster", node: "pve1", body: `{"dev":"/dev/sdb"}`, wantCode: http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, _ := newTestHandler(t)
+
+			req := httptest.NewRequest("POST", "/api/clusters/x/nodes/x/ceph/osd", strings.NewReader(tt.body))
+			req.SetPathValue("cluster", "test-cluster")
+			req.SetPathValue("node", tt.node)
+			rec := httptest.NewRecorder()
+			h.CreateClusterCephOSD(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Errorf("got status %d, want %d (body: %s)", rec.Code, tt.wantCode, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestOSDActionHandlers_RejectInvalidOSDID covers the parseOSDID guard
+// shared by DELETE / in / out / scrub.
+func TestOSDActionHandlers_RejectInvalidOSDID(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	handlers := map[string]func(http.ResponseWriter, *http.Request){
+		"delete": h.DeleteClusterCephOSD,
+		"in":     h.SetClusterCephOSDIn,
+		"out":    h.SetClusterCephOSDOut,
+		"scrub":  h.ScrubClusterCephOSD,
+	}
+	for name, fn := range handlers {
+		t.Run(name+"_non_numeric", func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/", nil)
+			req.SetPathValue("cluster", "c")
+			req.SetPathValue("node", "n")
+			req.SetPathValue("osdid", "abc")
+			rec := httptest.NewRecorder()
+			fn(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("%s: expected 400 for non-numeric osdid, got %d", name, rec.Code)
+			}
+		})
+		t.Run(name+"_negative", func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/", nil)
+			req.SetPathValue("cluster", "c")
+			req.SetPathValue("node", "n")
+			req.SetPathValue("osdid", "-1")
+			rec := httptest.NewRecorder()
+			fn(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("%s: expected 400 for negative osdid, got %d", name, rec.Code)
+			}
+		})
+	}
+}
+
+// TestCephMONHandlers_Validation covers create/delete validation for
+// monitors and managers (same shape — pickNodeClient gates the rest).
+func TestCephMONHandlers_Validation(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	t.Run("create requires node path-param", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/", strings.NewReader(`{}`))
+		req.SetPathValue("cluster", "c")
+		req.SetPathValue("node", "")
+		rec := httptest.NewRecorder()
+		h.CreateClusterCephMON(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", rec.Code)
+		}
+	})
+	t.Run("create rejects bad JSON when body present", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/", strings.NewReader(`{not json`))
+		req.SetPathValue("cluster", "c")
+		req.SetPathValue("node", "pve1")
+		rec := httptest.NewRecorder()
+		h.CreateClusterCephMON(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", rec.Code)
+		}
+	})
+	t.Run("create allows empty body", func(t *testing.T) {
+		// Empty body means "use defaults" — should pass JSON parsing and
+		// fall through to pickNodeClient, which returns 404 (cluster not found)
+		// for our empty test handler. Net result: 404, not 400.
+		req := httptest.NewRequest("POST", "/", nil)
+		req.SetPathValue("cluster", "missing-cluster")
+		req.SetPathValue("node", "pve1")
+		rec := httptest.NewRecorder()
+		h.CreateClusterCephMON(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("expected 404 (passed body validation), got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("delete requires monid", func(t *testing.T) {
+		req := httptest.NewRequest("DELETE", "/", nil)
+		req.SetPathValue("cluster", "c")
+		req.SetPathValue("node", "pve1")
+		req.SetPathValue("monid", "")
+		rec := httptest.NewRecorder()
+		h.DeleteClusterCephMON(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", rec.Code)
+		}
+	})
+}
+
+func TestCephMGRHandlers_Validation(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	t.Run("create requires node path-param", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/", nil)
+		req.SetPathValue("cluster", "c")
+		req.SetPathValue("node", "")
+		rec := httptest.NewRecorder()
+		h.CreateClusterCephMGR(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", rec.Code)
+		}
+	})
+	t.Run("delete requires mgrid", func(t *testing.T) {
+		req := httptest.NewRequest("DELETE", "/", nil)
+		req.SetPathValue("cluster", "c")
+		req.SetPathValue("node", "pve1")
+		req.SetPathValue("mgrid", "")
+		rec := httptest.NewRecorder()
+		h.DeleteClusterCephMGR(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", rec.Code)
+		}
+	})
+}
+
+// TestGetClusterCeph_ReturnsTopology populates the topology and verifies
+// the JSON round-trip preserves the cluster-wide shape.
+func TestGetClusterCeph_ReturnsTopology(t *testing.T) {
+	store := state.New()
+	cs := store.GetOrCreateCluster("prod")
+	cs.SetCephTopology(&pve.CephCluster{
+		MONs:  []pve.CephMON{{Name: "pve1", Quorum: true, State: "leader"}},
+		OSDs:  []pve.CephOSD{{ID: 0, Name: "osd.0", Status: "up", In: true, Host: "pve1"}},
+		Pools: []pve.CephPool{{Name: "rbd", Size: 3, MinSize: 2, PGNum: 128}},
+		Flags: pve.CephFlags{NoOut: true},
+	})
+	h := NewHandler(store, nil, nil)
+
+	req := httptest.NewRequest("GET", "/api/clusters/prod/ceph", nil)
+	req.SetPathValue("cluster", "prod")
+	rec := httptest.NewRecorder()
+	h.GetClusterCeph(rec, req)
+
+	var got pve.CephCluster
+	decodeJSON(t, rec, &got)
+
+	if len(got.MONs) != 1 || got.MONs[0].State != "leader" {
+		t.Errorf("MONs lost in roundtrip: %+v", got.MONs)
+	}
+	if len(got.OSDs) != 1 || got.OSDs[0].Host != "pve1" {
+		t.Errorf("OSDs lost in roundtrip: %+v", got.OSDs)
+	}
+	if len(got.Pools) != 1 || got.Pools[0].Name != "rbd" || got.Pools[0].Size != 3 {
+		t.Errorf("Pools lost in roundtrip: %+v", got.Pools)
+	}
+	if !got.Flags.NoOut {
+		t.Error("NoOut flag not preserved")
 	}
 }

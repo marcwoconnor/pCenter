@@ -27,6 +27,7 @@ import (
 	"github.com/moconnor/pcenter/internal/migration"
 	"github.com/moconnor/pcenter/internal/poller"
 	"github.com/moconnor/pcenter/internal/pve"
+	"github.com/moconnor/pcenter/internal/cephcluster"
 	"github.com/moconnor/pcenter/internal/pvecluster"
 	"github.com/moconnor/pcenter/internal/rbac"
 	"github.com/moconnor/pcenter/internal/scheduler"
@@ -603,6 +604,14 @@ func main() {
 		})
 		handler.SetPveClusterManager(pveClusterMgr)
 		slog.Info("PVE cluster formation enabled")
+	}
+
+	// Enable Ceph install/destroy orchestration. Requires the poller to
+	// resolve PVE clients per node. Job state is in-memory; restart loses it.
+	if p != nil {
+		cephClusterMgr := cephcluster.NewManager(cephcluster.Deps{Poller: p})
+		handler.SetCephClusterManager(cephClusterMgr)
+		slog.Info("Ceph install orchestration enabled")
 	}
 
 	// Start server in goroutine
