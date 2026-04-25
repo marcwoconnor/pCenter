@@ -29,9 +29,11 @@ export function WebhooksPanel() {
     }
   };
 
+  /* eslint-disable react-hooks/set-state-in-effect -- fetch on mount */
   useEffect(() => {
     reload();
   }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const onDelete = async (w: WebhookEndpoint) => {
     if (!confirm(`Delete webhook "${w.name}"? Receivers will stop getting events immediately.`)) return;

@@ -15,6 +15,7 @@ export function PCenterRootDetail({ defaultTab }: { defaultTab?: string }) {
   const { nodes, guests, clusters } = useCluster();
   const [activeTab, setActiveTab] = useState(defaultTab || 'summary');
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- sync tab prop into state so parent can deep-link
   useEffect(() => { if (defaultTab) setActiveTab(defaultTab); }, [defaultTab]);
 
   return (
@@ -457,7 +458,7 @@ function NotificationsConfig() {
           <p className="text-gray-500 text-sm text-center py-4">No notification channels. Alarms fire but no notifications are sent.</p>
         ) : channels.map(ch => {
           let url = '';
-          try { url = JSON.parse(ch.config)?.url || ''; } catch {}
+          try { url = JSON.parse(ch.config)?.url || ''; } catch { /* malformed channel config — fall back to empty URL below */ }
           return (
             <div key={ch.id} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3 flex items-center justify-between">
               <div>

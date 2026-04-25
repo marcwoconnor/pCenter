@@ -335,6 +335,7 @@ export function ClusterACMETab({ clusterName }: { clusterName: string }) {
     }
   }, [clusterName]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch on mount; load is stable via useCallback
   useEffect(() => { load() }, [load]);
 
   const onDeleteAccount = async (name: string) => {

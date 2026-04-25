@@ -86,6 +86,7 @@ import type {
   CreateWebhookRequest,
   CreateWebhookResponse,
   UpdateWebhookRequest,
+  VersionInfo,
 } from '../types';
 
 import { getCSRFToken } from './auth';
@@ -898,7 +899,7 @@ export const api = {
 
   // Version/update check
   getVersion: () =>
-    fetchAPI<any>('/version'),
+    fetchAPI<VersionInfo>('/version'),
 
   // RBAC
   getRoles: () =>

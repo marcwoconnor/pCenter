@@ -415,6 +415,25 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
     [guests]
   );
 
+  // Sort storage by name for stable ordering. Kept at the top of the
+  // component alongside the other sort hooks — early returns for the other
+  // `view` branches would otherwise make this a conditionally-called hook.
+  const sortedStorage = useMemo(() =>
+    [...storage].sort((a, b) => a.storage.localeCompare(b.storage)),
+    [storage]
+  );
+
+  // Group local (non-shared) storage by node. Used by the `view === 'storage'`
+  // render path. Declared here for the same reason as `sortedStorage`.
+  const localByNode = useMemo(() => {
+    const map: Record<string, Storage[]> = {};
+    for (const s of sortedStorage.filter(s => !s.shared)) {
+      if (!map[s.node]) map[s.node] = [];
+      map[s.node].push(s);
+    }
+    return map;
+  }, [sortedStorage]);
+
   // Group guests by cluster and node
   const guestsByClusterNode = useMemo(() => {
     const map: Record<string, Record<string, Guest[]>> = {};
@@ -1781,12 +1800,6 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
     );
   }
 
-  // Sort storage by name for stable ordering
-  const sortedStorage = useMemo(() =>
-    [...storage].sort((a, b) => a.storage.localeCompare(b.storage)),
-    [storage]
-  );
-
   // Get storage icon and tooltip based on type
   const getStorageIcon = (type: string): { icon: string; title: string } => {
     switch (type) {
@@ -1824,14 +1837,6 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
   // Storage View
   if (view === 'storage') {
     const sharedStorage = sortedStorage.filter(s => s.shared);
-    const localByNode = useMemo(() => {
-      const map: Record<string, Storage[]> = {};
-      for (const s of sortedStorage.filter(s => !s.shared)) {
-        if (!map[s.node]) map[s.node] = [];
-        map[s.node].push(s);
-      }
-      return map;
-    }, [sortedStorage]);
 
     return (
       <div className="py-2 min-h-full" onContextMenu={(e) => e.preventDefault()}>

@@ -65,6 +65,8 @@ export function ObjectDetail() {
   const [activeTab, setActiveTab] = useState('summary');
 
   // Handle defaultTab from context menu navigation
+  /* eslint-disable react-hooks/set-state-in-effect --
+     sync defaultTab prop into tab state on object change; parent deep-links via defaultTab */
   useEffect(() => {
     if (selectedObject?.defaultTab) {
       setActiveTab(selectedObject.defaultTab);
@@ -72,6 +74,17 @@ export function ObjectDetail() {
       setActiveTab('summary');
     }
   }, [selectedObject?.id, selectedObject?.defaultTab]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  // Memoize the NetworkTopology element. Declared above the early returns so
+  // React's rules-of-hooks is satisfied — returns null for non-network or
+  // null selectedObject, which the actual render site handles.
+  const networkTopologyElement = useMemo(() => {
+    if (!selectedObject || selectedObject.type !== 'network') return null;
+    const node = selectedObject.node || '';
+    const cluster = selectedObject.cluster || '';
+    return <NetworkTopology node={node} cluster={cluster} />;
+  }, [selectedObject]);
 
   if (!selectedObject) {
     return (
@@ -109,14 +122,6 @@ export function ObjectDetail() {
   const storageItem = selectedObject.type === 'storage'
     ? storage.find((s) => `${s.node}-${s.storage}` === selectedObject.id)
     : null;
-
-  // Memoize the entire NetworkTopology element to prevent re-renders from parent
-  const networkTopologyElement = useMemo(() => {
-    if (selectedObject.type !== 'network') return null;
-    const node = selectedObject.node || '';
-    const cluster = selectedObject.cluster || '';
-    return <NetworkTopology node={node} cluster={cluster} />;
-  }, [selectedObject.type, selectedObject.node, selectedObject.cluster]);
 
   const handleAction = async (action: 'start' | 'stop' | 'shutdown') => {
     if (!guest) return;
@@ -341,6 +346,8 @@ function NodeConfigureTab({ node, cluster }: { node: string; cluster: string }) 
       .finally(() => setLoading(false));
   };
 
+  /* eslint-disable react-hooks/set-state-in-effect --
+     fetch-on-mount for node config with cancellation guard */
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -351,6 +358,7 @@ function NodeConfigureTab({ node, cluster }: { node: string; cluster: string }) 
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [node, cluster]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   if (loading) {
     return <div className="text-center py-8 text-gray-500">Loading configuration...</div>;
@@ -967,14 +975,14 @@ function GuestSummary({ guest, tags, tagAssignments, onTagsChanged }: {
     try {
       await api.assignTag({ tag_id: tagId, object_type: objectType, object_id: objectId, cluster: guest.cluster });
       onTagsChanged();
-    } catch {}
+    } catch { /* tag assign is best-effort — the UI will refresh and show the real state on next load */ }
   };
 
   const handleUnassign = async (tagId: string) => {
     try {
       await api.unassignTag({ tag_id: tagId, object_type: objectType, object_id: objectId, cluster: guest.cluster });
       onTagsChanged();
-    } catch {}
+    } catch { /* tag unassign is best-effort — the UI will refresh and show the real state on next load */ }
   };
 
   return (
@@ -1584,6 +1592,8 @@ function NodeMonitorTab({ node }: { node: string }) {
   });
 
   // Fetch metrics for selected guests
+  /* eslint-disable react-hooks/set-state-in-effect --
+     fetch-on-selection-change + clear-when-empty; no external system to subscribe to here */
   useEffect(() => {
     if (selectedGuests.size === 0) {
       setGuestMetrics([]);
@@ -1628,6 +1638,7 @@ function NodeMonitorTab({ node }: { node: string }) {
     const interval = setInterval(fetchGuestMetrics, 30000);
     return () => clearInterval(interval);
   }, [selectedGuests, timeRange, nodeGuests]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Toggle guest selection
   const toggleGuest = (vmid: number) => {
@@ -2236,7 +2247,10 @@ function StorageSection({
     return disks.sort((a, b) => a.key.localeCompare(b.key));
   }, [config.raw_config, isVM]);
 
-  // Add rootfs for containers
+  // Add rootfs for containers. React Compiler can't infer preservation across
+  // the `.find` + conditional spread, so the manual memoization stays —
+  // behavior-equivalent, just not compiler-optimized.
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const allStorage = useMemo(() => {
     if (ctConfig?.rootfs && !storage.find(s => s.key === 'rootfs')) {
       return [{ key: 'rootfs', value: ctConfig.rootfs }, ...storage];
@@ -2525,6 +2539,10 @@ function ConsoleTab({
         rfbRef.current = null;
       }
     };
+    // scaleMode is intentionally omitted: the connection should not tear down
+    // on scale toggles. A separate effect below picks up scaleMode changes
+    // and updates rfb.scaleViewport in place.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [type, vmid, isRunning]);
 
   // Reset state when switching VMs

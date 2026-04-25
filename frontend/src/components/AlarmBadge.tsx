@@ -25,7 +25,7 @@ export const AlarmBadge = memo(function AlarmBadge() {
   const handleAcknowledge = async (alarmId: string) => {
     try {
       await api.acknowledgeAlarm(alarmId, 'admin');
-    } catch {}
+    } catch { /* acknowledge best-effort — user can retry */ }
   };
 
   const badgeColor = criticalCount > 0

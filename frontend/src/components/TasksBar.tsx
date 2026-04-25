@@ -1,16 +1,25 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useCluster } from '../context/ClusterContext';
 
 export function TasksBar() {
   const { tasks, migrations } = useCluster();
   const [expanded, setExpanded] = useState(false);
 
+  // Clock kept in state so "X seconds ago" labels stay fresh and render
+  // output is a pure function of props+state — react-hooks/purity flags
+  // Date.now() directly in render as impure.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const recentTasks = tasks.slice(0, expanded ? 10 : 3);
   const runningCount = tasks.filter((t) => t.status === 'running').length;
   const runningMigrations = migrations.filter((m) => m.status === 'running');
 
   const formatTime = (timestamp: number) => {
-    const seconds = Math.floor((Date.now() - timestamp) / 1000);
+    const seconds = Math.floor((now - timestamp) / 1000);
     if (seconds < 60) return `${seconds}s ago`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
     return `${Math.floor(seconds / 3600)}h ago`;

@@ -62,11 +62,11 @@ export function ActivityPanel() {
 
   // Save state to localStorage (try-catch for disabled/full storage)
   useEffect(() => {
-    try { localStorage.setItem('pcenter-activity-open', isOpen.toString()); } catch {}
+    try { localStorage.setItem('pcenter-activity-open', isOpen.toString()); } catch { /* localStorage can fail silently (quota, private mode) — non-essential persistence */ }
   }, [isOpen]);
 
   useEffect(() => {
-    try { localStorage.setItem('pcenter-activity-height', height.toString()); } catch {}
+    try { localStorage.setItem('pcenter-activity-height', height.toString()); } catch { /* localStorage can fail silently (quota, private mode) — non-essential persistence */ }
   }, [height]);
 
   // Resize handling
