@@ -670,7 +670,7 @@ export const api = {
       body: JSON.stringify({ ssh_password: sshPassword }),
     }),
   deployAgent: (id: string) =>
-    fetchAPI<{ success: boolean; message: string; token_secret?: string }>(`/inventory/hosts/${id}/deploy-agent`, {
+    fetchAPI<{ success: boolean; skipped?: boolean; message: string; token_secret?: string }>(`/inventory/hosts/${id}/deploy-agent`, {
       method: 'POST',
     }),
 
