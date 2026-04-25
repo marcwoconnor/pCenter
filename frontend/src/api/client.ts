@@ -810,11 +810,6 @@ export const api = {
   // Inventory Hosts (per-cluster)
   getClusterHosts: (clusterName: string) =>
     fetchAPI<InventoryHost[]>(`/inventory/clusters/${clusterName}/hosts`),
-  addClusterHost: (clusterName: string, req: AddHostRequest) =>
-    fetchAPI<InventoryHost>(`/inventory/clusters/${clusterName}/hosts`, {
-      method: 'POST',
-      body: JSON.stringify(req),
-    }),
   getHost: (id: string) => fetchAPI<InventoryHost>(`/inventory/hosts/${id}`),
   updateHost: (id: string, req: UpdateHostRequest) =>
     fetchAPI<void>(`/inventory/hosts/${id}`, { method: 'PUT', body: JSON.stringify(req) }),
@@ -856,7 +851,7 @@ export const api = {
       body: JSON.stringify({ ssh_password: sshPassword }),
     }),
   deployAgent: (id: string) =>
-    fetchAPI<{ success: boolean; message: string; token_secret?: string }>(`/inventory/hosts/${id}/deploy-agent`, {
+    fetchAPI<{ success: boolean; skipped?: boolean; message: string; token_secret?: string }>(`/inventory/hosts/${id}/deploy-agent`, {
       method: 'POST',
     }),
 

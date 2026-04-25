@@ -367,6 +367,32 @@ func main() {
 
 		// Wait for initial discovery and poll
 		time.Sleep(2 * time.Second)
+
+		// Periodically reconcile poller registrations against inventory.
+		// Catches the case where rows are deleted out-of-band (SQL DELETE
+		// during recovery) — without this, the orphan goroutines keep 401'ing
+		// every cp.interval until pcenter restarts. Issue #66.
+		go func() {
+			ticker := time.NewTicker(60 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					expected, err := inventoryService.GetClusterConfigs(ctx, cfg.ClusterSecrets)
+					if err != nil {
+						slog.Warn("poller reconcile: failed to load inventory", "error", err)
+						continue
+					}
+					names := make([]string, 0, len(expected))
+					for _, c := range expected {
+						names = append(names, c.Name)
+					}
+					p.Reconcile(names)
+				}
+			}
+		}()
 	}
 
 	// Start the cluster-membership reconciler. It periodically probes standalone

@@ -277,10 +277,8 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
   const [orphanClusters, setOrphanClusters] = useState<InventoryCluster[]>([]);
   const [datacenterDialog, setDatacenterDialog] = useState<DatacenterDialogState | null>(null);
   const [addHostDialog, setAddHostDialog] = useState<{
-    mode: 'cluster' | 'datacenter';
-    clusterName?: string;
-    datacenterId?: string;
-    datacenterName?: string;
+    datacenterId: string;
+    datacenterName: string;
   } | null>(null);
   const [uploadDialog, setUploadDialog] = useState<{ storage: string; node: string; contentType: 'iso' | 'vztmpl' } | null>(null);
   const [createVMDialog, setCreateVMDialog] = useState<{ cluster: string; node: string } | null>(null);
@@ -323,7 +321,7 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
       setDatacenterDialog({ mode: 'create-dc' });
     } else {
       const dc = datacenters[0];
-      setAddHostDialog({ mode: 'datacenter', datacenterId: dc.id, datacenterName: dc.name });
+      setAddHostDialog({ datacenterId: dc.id, datacenterName: dc.name });
     }
   }, [datacenters]);
 
@@ -790,7 +788,6 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
         label: 'Add Host',
         icon: '🖥️',
         action: () => setAddHostDialog({
-          mode: 'datacenter',
           datacenterId: dc.id,
           datacenterName: dc.name,
         }),
@@ -880,11 +877,6 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
         icon: '🔗',
         action: () => setJoinPveClusterDialog(cluster),
       }] : []),
-      {
-        label: 'Add Host (inventory record only)',
-        icon: '➕',
-        action: () => setAddHostDialog({ mode: 'cluster', clusterName: cluster.name }),
-      },
       {
         label: 'Edit Cluster',
         icon: '✏️',
@@ -1523,7 +1515,7 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
               await fetchDatacenterTree();
               if (shouldChain && created && 'name' in created) {
                 const dc = created as Datacenter;
-                setAddHostDialog({ mode: 'datacenter', datacenterId: dc.id, datacenterName: dc.name });
+                setAddHostDialog({ datacenterId: dc.id, datacenterName: dc.name });
               }
             }}
             onClose={() => {
@@ -1534,8 +1526,6 @@ export const InventoryTree = memo(function InventoryTree({ view, filter = '' }: 
         )}
         {addHostDialog && (
           <AddHostDialog
-            mode={addHostDialog.mode}
-            clusterName={addHostDialog.clusterName}
             datacenterId={addHostDialog.datacenterId}
             datacenterName={addHostDialog.datacenterName}
             onSubmit={async () => {

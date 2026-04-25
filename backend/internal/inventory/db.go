@@ -984,6 +984,31 @@ func (db *DB) GetHost(ctx context.Context, id string) (*InventoryHost, error) {
 	return &h, nil
 }
 
+// GetTokenSecretForAddress returns a previously-stored token secret for the
+// given host address, or "" if none is on file. Used by AddHost to probe an
+// existing token before letting CreateAPIToken delete-and-recreate it (which
+// would invalidate sibling hosts in a PVE cluster sharing token.cfg).
+func (db *DB) GetTokenSecretForAddress(ctx context.Context, address string) (string, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var secret sql.NullString
+	err := db.conn.QueryRowContext(ctx, `
+		SELECT COALESCE(token_secret, '')
+		FROM inventory_hosts
+		WHERE address = ? AND COALESCE(token_secret, '') != ''
+		ORDER BY updated_at DESC
+		LIMIT 1
+	`, address).Scan(&secret)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("lookup token secret by address: %w", err)
+	}
+	return secret.String, nil
+}
+
 // ListHostsByCluster retrieves hosts for a cluster
 func (db *DB) ListHostsByCluster(ctx context.Context, clusterID string) ([]InventoryHost, error) {
 	db.mu.Lock()
