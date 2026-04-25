@@ -137,9 +137,7 @@ export function AddHostDialog({
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
             />
             <p className="text-xs text-gray-500 mt-1">
-              {mode === 'datacenter'
-                ? 'Any Proxmox host. Cluster membership is auto-detected: real PVE clusters become pcenter clusters; single-node hosts are filed as standalone.'
-                : 'Any node in the Proxmox cluster'}
+              Any Proxmox host. Cluster membership is auto-detected: real PVE clusters become pcenter clusters; single-node hosts are filed as standalone.
             </p>
           </div>
           <div className="mb-3">

@@ -6,7 +6,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
-## v0.1.16 — 2026-04-25
+## v0.1.17 — 2026-04-25
+
+Same payload as the would-be v0.1.16 (which failed CI on a leftover `mode` reference in `AddHostDialog.tsx` from PR #69 — caught by `tsc -b` in CI but not by `tsc --noEmit` locally) plus the one-line build fix.
+
+### Fixed
+- **`AddHostDialog.tsx`: drop dead `mode === 'datacenter'` ternary** that referenced a removed prop. The cluster-mode branch was deleted in PR #61's cleanup but this one ternary survived; CI's `tsc -b` (project references) caught it where `tsc --noEmit` did not.
+
+## v0.1.16 — 2026-04-25 (unreleased — failed CI)
 
 Two big themes this release: the **full Ceph lifecycle** (install → day-2 → CephFS → destroy, all from `/ceph`), and a tranche of poller/inventory **fixes** from PR #69 that landed alongside.
 
