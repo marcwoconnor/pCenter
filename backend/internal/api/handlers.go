@@ -5266,6 +5266,7 @@ func verifyKeyAuth(ctx context.Context, addr, privKeyPath string, pinnedKey ssh.
 // DeployAgentResponse is the response from agent deployment
 type DeployAgentResponse struct {
 	Success     bool   `json:"success"`
+	Skipped     bool   `json:"skipped,omitempty"` // true when the agent binary isn't shipped on this pcenter; not an error
 	Message     string `json:"message"`
 	TokenSecret string `json:"token_secret,omitempty"` // The generated PVE API token secret
 }
@@ -5325,8 +5326,9 @@ func (h *Handler) DeployAgent(w http.ResponseWriter, r *http.Request) {
 	// Deploy the agent
 	result := deployAgentToHost(ctx, hostAddr, clusterName, h.cfg)
 
-	// Log activity
-	if h.activity != nil {
+	// Log activity. Skipped (binary not shipped) is intentionally NOT logged —
+	// it's a configuration condition, not an event worth surfacing every add.
+	if h.activity != nil && !result.Skipped {
 		action := "agent_deploy"
 		if !result.Success {
 			action = "agent_deploy_failed"
@@ -5355,11 +5357,17 @@ func deployAgentToHost(ctx context.Context, host, clusterName string, cfg *confi
 		homeDir = "/root"
 	}
 
-	// Check if agent binary exists locally
+	// Check if agent binary exists locally. The .deb does not ship the agent
+	// (separate `pve-agent` package), so a missing binary on a fresh install is
+	// the expected state — not a failure. Skip silently rather than logging an
+	// error and failing the host-add UX. Issue #60.
 	if _, err := os.Stat(cfg.Agent.BinaryPath); os.IsNotExist(err) {
+		slog.Info("agent binary not present, skipping deploy",
+			"host", host, "binary_path", cfg.Agent.BinaryPath)
 		return DeployAgentResponse{
-			Success: false,
-			Message: fmt.Sprintf("agent binary not found at %s - build and copy it first", cfg.Agent.BinaryPath),
+			Success: true,
+			Skipped: true,
+			Message: fmt.Sprintf("agent binary not installed at %s; host added without push agent (pull-mode polling will work via API token)", cfg.Agent.BinaryPath),
 		}
 	}
 

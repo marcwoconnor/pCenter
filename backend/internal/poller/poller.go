@@ -26,6 +26,16 @@ type Poller struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	// mu serializes the AddCluster / RemoveCluster / Reconcile triad against
+	// each other. Read-mostly callers (GetClusterClients, runDRSAnalysis,
+	// ForceRefresh, OnChange) intentionally do not take this lock — they're
+	// invoked from contexts that don't race with reconciliation in practice,
+	// and adding lock acquisitions in their hot paths would noticeably regress
+	// the per-tick poll cost. The narrow contract: anything that mutates the
+	// `clusters` map MUST hold mu; anything that snapshots its keys/values
+	// for iteration MUST hold mu while building the snapshot.
+	mu sync.Mutex
 }
 
 // ClusterPoller handles polling for a single cluster
@@ -85,11 +95,14 @@ func (p *Poller) AddCluster(cfg config.ClusterConfig) *ClusterPoller {
 		onChange:     p.onChange,
 	}
 
+	p.mu.Lock()
 	p.clusters[cfg.Name] = cp
+	pollerCtx := p.ctx
+	p.mu.Unlock()
 
 	// If poller is already running, start this cluster's polling goroutine immediately
-	if p.ctx != nil {
-		childCtx, cancel := context.WithCancel(p.ctx)
+	if pollerCtx != nil {
+		childCtx, cancel := context.WithCancel(pollerCtx)
 		cp.cancel = cancel
 		p.wg.Add(1)
 		go func() {
@@ -114,7 +127,13 @@ func (p *Poller) AddCluster(cfg config.ClusterConfig) *ClusterPoller {
 // Safe to call on an unknown name (no-op). If the poller was never Start()ed
 // (cancel == nil), the cluster is just removed from the map.
 func (p *Poller) RemoveCluster(name string) {
+	p.mu.Lock()
 	cp, ok := p.clusters[name]
+	if ok {
+		delete(p.clusters, name)
+	}
+	p.mu.Unlock()
+
 	if !ok {
 		// Still drop any stale state for that name — there may be leftover
 		// entries from a previous run that no longer have a poller.
@@ -124,9 +143,43 @@ func (p *Poller) RemoveCluster(name string) {
 	if cp.cancel != nil {
 		cp.cancel()
 	}
-	delete(p.clusters, name)
 	p.store.RemoveCluster(name)
 	slog.Info("removed cluster from poller", "cluster", name)
+}
+
+// Reconcile drops poller entries whose names are not present in `expected`.
+// Used to garbage-collect orphan goroutines after out-of-band inventory
+// changes (e.g. an operator SQL-DELETE'd a host row, or a test reset state) —
+// without it, the standalone:<id> ClusterPoller for the gone host keeps
+// running and 401'ing every interval until pcenter restarts. Issue #66.
+//
+// Pass the canonical set of expected poller keys (typically derived from
+// inventory.GetClusterConfigs). Names in `expected` that are not currently
+// registered are NOT added — Reconcile is one-directional cleanup. Adding
+// stays the responsibility of explicit AddCluster calls (the API layer and
+// the inventory reconciler's promote callback).
+//
+// Returns the names that were removed (possibly empty).
+func (p *Poller) Reconcile(expected []string) []string {
+	want := make(map[string]struct{}, len(expected))
+	for _, n := range expected {
+		want[n] = struct{}{}
+	}
+
+	p.mu.Lock()
+	orphans := make([]string, 0)
+	for name := range p.clusters {
+		if _, ok := want[name]; !ok {
+			orphans = append(orphans, name)
+		}
+	}
+	p.mu.Unlock()
+
+	for _, name := range orphans {
+		slog.Info("reconcile: dropping orphan poller (not in inventory)", "cluster", name)
+		p.RemoveCluster(name)
+	}
+	return orphans
 }
 
 // GetClusterClients returns all clients for a cluster
@@ -165,9 +218,15 @@ func (p *Poller) OnChange(fn func()) {
 
 // Start begins polling all clusters
 func (p *Poller) Start(ctx context.Context) {
+	p.mu.Lock()
 	p.ctx, p.cancel = context.WithCancel(ctx)
-
+	startTargets := make([]*ClusterPoller, 0, len(p.clusters))
 	for _, cp := range p.clusters {
+		startTargets = append(startTargets, cp)
+	}
+	p.mu.Unlock()
+
+	for _, cp := range startTargets {
 		childCtx, cancel := context.WithCancel(p.ctx)
 		cp.cancel = cancel
 		p.wg.Add(1)
@@ -193,7 +252,7 @@ func (p *Poller) Start(ctx context.Context) {
 		p.pollMigrationsLoop(p.ctx)
 	}()
 
-	slog.Info("poller started", "clusters", len(p.clusters), "interval", p.interval, "drs", p.drsScheduler != nil)
+	slog.Info("poller started", "clusters", len(startTargets), "interval", p.interval, "drs", p.drsScheduler != nil)
 }
 
 // Stop stops all pollers
