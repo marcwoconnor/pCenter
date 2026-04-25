@@ -269,6 +269,25 @@ export const api = {
       { method: 'POST' },
     );
   },
+  createCephMON: (cluster: string, node: string, opts?: { mon_address?: string }) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/nodes/${node}/ceph/mon`, {
+      method: 'POST',
+      body: opts ? JSON.stringify(opts) : undefined,
+    }),
+  deleteCephMON: (cluster: string, node: string, monid: string) =>
+    fetchAPI<{ upid: string }>(
+      `/clusters/${cluster}/nodes/${node}/ceph/mon/${monid}`,
+      { method: 'DELETE' },
+    ),
+  createCephMGR: (cluster: string, node: string) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/nodes/${node}/ceph/mgr`, {
+      method: 'POST',
+    }),
+  deleteCephMGR: (cluster: string, node: string, mgrid: string) =>
+    fetchAPI<{ upid: string }>(
+      `/clusters/${cluster}/nodes/${node}/ceph/mgr/${mgrid}`,
+      { method: 'DELETE' },
+    ),
   getNodeConfig: (cluster: string, node: string) =>
     fetchAPI<NodeConfig>(`/clusters/${cluster}/nodes/${node}/config`),
   updateNodeDNS: (cluster: string, node: string, dns: { search: string; dns1: string; dns2?: string; dns3?: string }) =>

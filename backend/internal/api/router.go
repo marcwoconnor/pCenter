@@ -203,6 +203,10 @@ func NewRouter(store *state.Store, p *poller.Poller, hub *Hub, agentHub *agent.H
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/ceph/osd/{osdid}/in", h.SetClusterCephOSDIn)
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/ceph/osd/{osdid}/out", h.SetClusterCephOSDOut)
 	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/ceph/osd/{osdid}/scrub", h.ScrubClusterCephOSD)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/ceph/mon", h.CreateClusterCephMON)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/nodes/{node}/ceph/mon/{monid}", h.DeleteClusterCephMON)
+	protectedMux.HandleFunc("POST /api/clusters/{cluster}/nodes/{node}/ceph/mgr", h.CreateClusterCephMGR)
+	protectedMux.HandleFunc("DELETE /api/clusters/{cluster}/nodes/{node}/ceph/mgr/{mgrid}", h.DeleteClusterCephMGR)
 
 	// Cluster nodes
 	protectedMux.HandleFunc("GET /api/clusters/{cluster}/nodes", h.GetClusterNodes)

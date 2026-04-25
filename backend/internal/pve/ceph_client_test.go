@@ -493,3 +493,109 @@ func TestScrubCephOSD(t *testing.T) {
 		t.Errorf("deep scrub: body must contain deep=1, got %q", rec.body)
 	}
 }
+
+func TestCreateCephMON_DefaultBody(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":"UPID:pve1:0010:AAAA:CEPH_MON_CREATE:pve1:root@pam:"}`)
+	c := newTestClient(srv, "pve1")
+
+	upid, err := c.CreateCephMON(context.Background(), "")
+	if err != nil {
+		t.Fatalf("CreateCephMON: %v", err)
+	}
+	if !strings.HasPrefix(upid, "UPID:") {
+		t.Errorf("expected UPID, got %q", upid)
+	}
+	if rec.method != "POST" {
+		t.Errorf("method: want POST, got %q", rec.method)
+	}
+	if want := "/api2/json/nodes/pve1/ceph/mon"; rec.path != want {
+		t.Errorf("path: want %q, got %q", want, rec.path)
+	}
+	if rec.body != "" {
+		t.Errorf("body should be empty when no monAddress, got %q", rec.body)
+	}
+}
+
+func TestCreateCephMON_WithAddress(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":"UPID:x"}`)
+	c := newTestClient(srv, "pve1")
+
+	if _, err := c.CreateCephMON(context.Background(), "10.0.0.1"); err != nil {
+		t.Fatalf("CreateCephMON: %v", err)
+	}
+	if !strings.Contains(rec.body, "mon-address=10.0.0.1") {
+		t.Errorf("body missing mon-address; got %q", rec.body)
+	}
+}
+
+func TestDeleteCephMON_RequiresMonID(t *testing.T) {
+	c := newTestClient(httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("server should not be hit when monid is empty")
+	})), "pve1")
+	defer c.httpClient.CloseIdleConnections()
+
+	if _, err := c.DeleteCephMON(context.Background(), ""); err == nil {
+		t.Fatal("expected error when monid is empty")
+	}
+}
+
+func TestDeleteCephMON_PathFormat(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":"UPID:pve1:0011:BBBB:CEPH_MON_DESTROY:pve2:root@pam:"}`)
+	c := newTestClient(srv, "pve1")
+
+	upid, err := c.DeleteCephMON(context.Background(), "pve2")
+	if err != nil {
+		t.Fatalf("DeleteCephMON: %v", err)
+	}
+	if !strings.HasPrefix(upid, "UPID:") {
+		t.Errorf("expected UPID, got %q", upid)
+	}
+	if rec.method != "DELETE" {
+		t.Errorf("method: want DELETE, got %q", rec.method)
+	}
+	if want := "/api2/json/nodes/pve1/ceph/mon/pve2"; rec.path != want {
+		t.Errorf("path: want %q, got %q", want, rec.path)
+	}
+}
+
+func TestCreateCephMGR(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":"UPID:pve1:0012:CCCC:CEPH_MGR_CREATE:pve1:root@pam:"}`)
+	c := newTestClient(srv, "pve1")
+
+	upid, err := c.CreateCephMGR(context.Background())
+	if err != nil {
+		t.Fatalf("CreateCephMGR: %v", err)
+	}
+	if !strings.HasPrefix(upid, "UPID:") {
+		t.Errorf("expected UPID, got %q", upid)
+	}
+	if rec.method != "POST" || rec.path != "/api2/json/nodes/pve1/ceph/mgr" {
+		t.Errorf("unexpected request: %s %s", rec.method, rec.path)
+	}
+}
+
+func TestDeleteCephMGR_PathFormat(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":"UPID:x"}`)
+	c := newTestClient(srv, "pve1")
+
+	if _, err := c.DeleteCephMGR(context.Background(), "pve3"); err != nil {
+		t.Fatalf("DeleteCephMGR: %v", err)
+	}
+	if want := "/api2/json/nodes/pve1/ceph/mgr/pve3"; rec.path != want {
+		t.Errorf("path: want %q, got %q", want, rec.path)
+	}
+	if rec.method != "DELETE" {
+		t.Errorf("method: want DELETE, got %q", rec.method)
+	}
+}
+
+func TestDeleteCephMGR_RequiresMgrID(t *testing.T) {
+	c := newTestClient(httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("server should not be hit when mgrid is empty")
+	})), "pve1")
+	defer c.httpClient.CloseIdleConnections()
+
+	if _, err := c.DeleteCephMGR(context.Background(), ""); err == nil {
+		t.Fatal("expected error when mgrid is empty")
+	}
+}

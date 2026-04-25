@@ -470,6 +470,83 @@ func TestOSDActionHandlers_RejectInvalidOSDID(t *testing.T) {
 	}
 }
 
+// TestCephMONHandlers_Validation covers create/delete validation for
+// monitors and managers (same shape — pickNodeClient gates the rest).
+func TestCephMONHandlers_Validation(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	t.Run("create requires node path-param", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/", strings.NewReader(`{}`))
+		req.SetPathValue("cluster", "c")
+		req.SetPathValue("node", "")
+		rec := httptest.NewRecorder()
+		h.CreateClusterCephMON(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", rec.Code)
+		}
+	})
+	t.Run("create rejects bad JSON when body present", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/", strings.NewReader(`{not json`))
+		req.SetPathValue("cluster", "c")
+		req.SetPathValue("node", "pve1")
+		rec := httptest.NewRecorder()
+		h.CreateClusterCephMON(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", rec.Code)
+		}
+	})
+	t.Run("create allows empty body", func(t *testing.T) {
+		// Empty body means "use defaults" — should pass JSON parsing and
+		// fall through to pickNodeClient, which returns 404 (cluster not found)
+		// for our empty test handler. Net result: 404, not 400.
+		req := httptest.NewRequest("POST", "/", nil)
+		req.SetPathValue("cluster", "missing-cluster")
+		req.SetPathValue("node", "pve1")
+		rec := httptest.NewRecorder()
+		h.CreateClusterCephMON(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("expected 404 (passed body validation), got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("delete requires monid", func(t *testing.T) {
+		req := httptest.NewRequest("DELETE", "/", nil)
+		req.SetPathValue("cluster", "c")
+		req.SetPathValue("node", "pve1")
+		req.SetPathValue("monid", "")
+		rec := httptest.NewRecorder()
+		h.DeleteClusterCephMON(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", rec.Code)
+		}
+	})
+}
+
+func TestCephMGRHandlers_Validation(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	t.Run("create requires node path-param", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/", nil)
+		req.SetPathValue("cluster", "c")
+		req.SetPathValue("node", "")
+		rec := httptest.NewRecorder()
+		h.CreateClusterCephMGR(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", rec.Code)
+		}
+	})
+	t.Run("delete requires mgrid", func(t *testing.T) {
+		req := httptest.NewRequest("DELETE", "/", nil)
+		req.SetPathValue("cluster", "c")
+		req.SetPathValue("node", "pve1")
+		req.SetPathValue("mgrid", "")
+		rec := httptest.NewRecorder()
+		h.DeleteClusterCephMGR(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", rec.Code)
+		}
+	})
+}
+
 // TestGetClusterCeph_ReturnsTopology populates the topology and verifies
 // the JSON round-trip preserves the cluster-wide shape.
 func TestGetClusterCeph_ReturnsTopology(t *testing.T) {

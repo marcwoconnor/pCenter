@@ -1577,6 +1577,71 @@ func (c *Client) ScrubCephOSD(ctx context.Context, osdID int, deep bool) error {
 	return err
 }
 
+// CreateCephMON creates a Ceph monitor daemon on this client's node.
+// monAddress is optional — when set, PVE binds the MON to that address
+// instead of auto-detecting (useful when the node has multiple interfaces
+// on the public network). Returns UPID.
+func (c *Client) CreateCephMON(ctx context.Context, monAddress string) (string, error) {
+	params := map[string]string{}
+	if monAddress != "" {
+		params["mon-address"] = monAddress
+	}
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/mon", c.nodeName), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// DeleteCephMON destroys a Ceph monitor by ID (typically the hostname of
+// the node owning the MON). Returns UPID. Caller is responsible for
+// confirming quorum will survive — removing the last MON breaks the
+// cluster irrecoverably without manual intervention.
+func (c *Client) DeleteCephMON(ctx context.Context, monID string) (string, error) {
+	if monID == "" {
+		return "", fmt.Errorf("monid is required")
+	}
+	data, err := c.deleteWithData(ctx, fmt.Sprintf("/nodes/%s/ceph/mon/%s", c.nodeName, monID))
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// CreateCephMGR creates a Ceph manager daemon on this client's node.
+// PVE allows multiple MGRs per cluster (one active + N standbys) — best
+// practice is to run an MGR alongside every MON. Returns UPID.
+func (c *Client) CreateCephMGR(ctx context.Context) (string, error) {
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/mgr", c.nodeName), nil)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// DeleteCephMGR destroys a Ceph manager by ID (typically the hostname).
+// Removing the active MGR triggers failover to a standby; removing the
+// last MGR leaves the cluster without health/orchestration metrics.
+// Returns UPID.
+func (c *Client) DeleteCephMGR(ctx context.Context, mgrID string) (string, error) {
+	if mgrID == "" {
+		return "", fmt.Errorf("mgrid is required")
+	}
+	data, err := c.deleteWithData(ctx, fmt.Sprintf("/nodes/%s/ceph/mgr/%s", c.nodeName, mgrID))
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
 // GetSmartData fetches SMART data for all disks on this node
 func (c *Client) GetSmartData(ctx context.Context) ([]SmartDisk, error) {
 	host := c.getHostFromURL()

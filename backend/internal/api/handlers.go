@@ -1041,6 +1041,110 @@ func (h *Handler) ScrubClusterCephOSD(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
+// CephMONCreateRequest is the JSON body for CreateClusterCephMON. mon_address
+// is optional — set when the node has multiple interfaces and PVE should
+// not auto-detect.
+type CephMONCreateRequest struct {
+	MonAddress string `json:"mon_address,omitempty"`
+}
+
+// CreateClusterCephMON creates a Ceph monitor on a specific node.
+func (h *Handler) CreateClusterCephMON(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+	if nodeName == "" {
+		writeError(w, http.StatusBadRequest, "node is required")
+		return
+	}
+	// Body is optional — empty body means "use defaults".
+	var req CephMONCreateRequest
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+	client := h.pickNodeClient(w, clusterName, nodeName)
+	if client == nil {
+		return
+	}
+	upid, err := client.CreateCephMON(r.Context(), req.MonAddress)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// DeleteClusterCephMON destroys a Ceph monitor by ID. The caller is
+// responsible for confirming quorum will survive — removing the last MON
+// breaks the cluster. We don't enforce a quorum-survival check here because
+// "what if I want to recover from a corrupt monmap" is a real scenario;
+// the destructive guard belongs in the UI confirmation dialog, not the API.
+func (h *Handler) DeleteClusterCephMON(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+	monID := r.PathValue("monid")
+	if monID == "" {
+		writeError(w, http.StatusBadRequest, "monid is required")
+		return
+	}
+	client := h.pickNodeClient(w, clusterName, nodeName)
+	if client == nil {
+		return
+	}
+	upid, err := client.DeleteCephMON(r.Context(), monID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// CreateClusterCephMGR creates a Ceph manager on a specific node. No body
+// required — PVE picks the daemon name from the node hostname.
+func (h *Handler) CreateClusterCephMGR(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+	if nodeName == "" {
+		writeError(w, http.StatusBadRequest, "node is required")
+		return
+	}
+	client := h.pickNodeClient(w, clusterName, nodeName)
+	if client == nil {
+		return
+	}
+	upid, err := client.CreateCephMGR(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// DeleteClusterCephMGR destroys a Ceph manager by ID. Removing the active
+// MGR triggers failover to a standby; removing the last MGR loses metrics
+// but doesn't break I/O.
+func (h *Handler) DeleteClusterCephMGR(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+	mgrID := r.PathValue("mgrid")
+	if mgrID == "" {
+		writeError(w, http.StatusBadRequest, "mgrid is required")
+		return
+	}
+	client := h.pickNodeClient(w, clusterName, nodeName)
+	if client == nil {
+		return
+	}
+	upid, err := client.DeleteCephMGR(r.Context(), mgrID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
 // GetSmart returns SMART data for all disks across all nodes
 func (h *Handler) GetSmart(w http.ResponseWriter, r *http.Request) {
 	if h.poller == nil {
