@@ -1145,6 +1145,141 @@ func (h *Handler) DeleteClusterCephMGR(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"upid": upid})
 }
 
+// CephMDSCreateRequest is the JSON body for CreateClusterCephMDS.
+type CephMDSCreateRequest struct {
+	Hotstandby bool `json:"hotstandby,omitempty"`
+}
+
+// CreateClusterCephMDS creates an MDS daemon on a specific node.
+func (h *Handler) CreateClusterCephMDS(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+	if nodeName == "" {
+		writeError(w, http.StatusBadRequest, "node is required")
+		return
+	}
+	var req CephMDSCreateRequest
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+	client := h.pickNodeClient(w, clusterName, nodeName)
+	if client == nil {
+		return
+	}
+	upid, err := client.CreateCephMDS(r.Context(), req.Hotstandby)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// DeleteClusterCephMDS destroys an MDS by name.
+func (h *Handler) DeleteClusterCephMDS(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	client := h.pickNodeClient(w, clusterName, nodeName)
+	if client == nil {
+		return
+	}
+	upid, err := client.DeleteCephMDS(r.Context(), name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// CephFSCreateRequest is the JSON body for CreateClusterCephFS. Note: name
+// goes in the URL path (PVE's contract), not the body.
+type CephFSCreateRequest struct {
+	PGNum      int  `json:"pg_num,omitempty"`
+	AddStorage bool `json:"add_storage,omitempty"`
+}
+
+// CreateClusterCephFS creates a CephFS filesystem.
+func (h *Handler) CreateClusterCephFS(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+	name := r.PathValue("name")
+	if nodeName == "" || name == "" {
+		writeError(w, http.StatusBadRequest, "node and name are required")
+		return
+	}
+	var req CephFSCreateRequest
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+	client := h.pickNodeClient(w, clusterName, nodeName)
+	if client == nil {
+		return
+	}
+	upid, err := client.CreateCephFS(r.Context(), pve.CephFSCreateOptions{
+		Name:       name,
+		PGNum:      req.PGNum,
+		AddStorage: req.AddStorage,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// DeleteClusterCephFS destroys a CephFS. Query params: remove_storages=1
+// drops PVE Storage entries; remove_pools=1 drops the underlying pools too.
+func (h *Handler) DeleteClusterCephFS(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	nodeName := r.PathValue("node")
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	client := h.pickNodeClient(w, clusterName, nodeName)
+	if client == nil {
+		return
+	}
+	upid, err := client.DeleteCephFS(r.Context(), name, pve.CephFSDeleteOptions{
+		RemoveStorages: r.URL.Query().Get("remove_storages") == "1",
+		RemovePools:    r.URL.Query().Get("remove_pools") == "1",
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"upid": upid})
+}
+
+// GetClusterCephCrushMap returns the textual decompiled CRUSH map for the
+// cluster. Read-only — editing the CRUSH map flows through `ceph osd
+// setcrushmap` and is intentionally not exposed in PR 2.
+func (h *Handler) GetClusterCephCrushMap(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("cluster")
+	client := h.pickClusterClient(w, clusterName)
+	if client == nil {
+		return
+	}
+	out, err := client.GetCephCrushMap(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(out))
+}
+
 // GetSmart returns SMART data for all disks across all nodes
 func (h *Handler) GetSmart(w http.ResponseWriter, r *http.Request) {
 	if h.poller == nil {

@@ -288,6 +288,48 @@ export const api = {
       `/clusters/${cluster}/nodes/${node}/ceph/mgr/${mgrid}`,
       { method: 'DELETE' },
     ),
+  createCephMDS: (cluster: string, node: string, opts?: { hotstandby?: boolean }) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/nodes/${node}/ceph/mds`, {
+      method: 'POST',
+      body: opts ? JSON.stringify(opts) : undefined,
+    }),
+  deleteCephMDS: (cluster: string, node: string, name: string) =>
+    fetchAPI<{ upid: string }>(
+      `/clusters/${cluster}/nodes/${node}/ceph/mds/${name}`,
+      { method: 'DELETE' },
+    ),
+  createCephFS: (
+    cluster: string,
+    node: string,
+    name: string,
+    opts?: { pg_num?: number; add_storage?: boolean },
+  ) =>
+    fetchAPI<{ upid: string }>(`/clusters/${cluster}/nodes/${node}/ceph/fs/${name}`, {
+      method: 'POST',
+      body: opts ? JSON.stringify(opts) : undefined,
+    }),
+  deleteCephFS: (
+    cluster: string,
+    node: string,
+    name: string,
+    opts?: { remove_storages?: boolean; remove_pools?: boolean },
+  ) => {
+    const q = new URLSearchParams();
+    if (opts?.remove_storages) q.set('remove_storages', '1');
+    if (opts?.remove_pools) q.set('remove_pools', '1');
+    const qs = q.toString();
+    return fetchAPI<{ upid: string }>(
+      `/clusters/${cluster}/nodes/${node}/ceph/fs/${name}${qs ? '?' + qs : ''}`,
+      { method: 'DELETE' },
+    );
+  },
+  getCephCrushMap: async (cluster: string): Promise<string> => {
+    const resp = await fetch(`/api/clusters/${cluster}/ceph/crush`, {
+      credentials: 'include',
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+    return await resp.text();
+  },
   getNodeConfig: (cluster: string, node: string) =>
     fetchAPI<NodeConfig>(`/clusters/${cluster}/nodes/${node}/config`),
   updateNodeDNS: (cluster: string, node: string, dns: { search: string; dns1: string; dns2?: string; dns3?: string }) =>

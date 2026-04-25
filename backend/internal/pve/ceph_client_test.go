@@ -599,3 +599,124 @@ func TestDeleteCephMGR_RequiresMgrID(t *testing.T) {
 		t.Fatal("expected error when mgrid is empty")
 	}
 }
+
+func TestCreateCephMDS(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":"UPID:pve1:0020:DDDD:CEPH_MDS_CREATE:pve1:root@pam:"}`)
+	c := newTestClient(srv, "pve1")
+
+	upid, err := c.CreateCephMDS(context.Background(), true)
+	if err != nil {
+		t.Fatalf("CreateCephMDS: %v", err)
+	}
+	if !strings.HasPrefix(upid, "UPID:") {
+		t.Errorf("expected UPID, got %q", upid)
+	}
+	if rec.method != "POST" || rec.path != "/api2/json/nodes/pve1/ceph/mds" {
+		t.Errorf("unexpected request: %s %s", rec.method, rec.path)
+	}
+	if !strings.Contains(rec.body, "hotstandby=1") {
+		t.Errorf("body missing hotstandby=1; got %q", rec.body)
+	}
+}
+
+func TestCreateCephMDS_OmitsHotstandby(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":"UPID:x"}`)
+	c := newTestClient(srv, "pve1")
+	if _, err := c.CreateCephMDS(context.Background(), false); err != nil {
+		t.Fatalf("CreateCephMDS: %v", err)
+	}
+	if rec.body != "" {
+		t.Errorf("body should be empty when hotstandby=false, got %q", rec.body)
+	}
+}
+
+func TestDeleteCephMDS(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":"UPID:x"}`)
+	c := newTestClient(srv, "pve1")
+	if _, err := c.DeleteCephMDS(context.Background(), "pve1"); err != nil {
+		t.Fatalf("DeleteCephMDS: %v", err)
+	}
+	if rec.method != "DELETE" {
+		t.Errorf("method: want DELETE, got %q", rec.method)
+	}
+	if rec.path != "/api2/json/nodes/pve1/ceph/mds/pve1" {
+		t.Errorf("path: %q", rec.path)
+	}
+}
+
+func TestDeleteCephMDS_RequiresName(t *testing.T) {
+	c := newTestClient(httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("server should not be hit when name is empty")
+	})), "pve1")
+	defer c.httpClient.CloseIdleConnections()
+	if _, err := c.DeleteCephMDS(context.Background(), ""); err == nil {
+		t.Fatal("expected error when name is empty")
+	}
+}
+
+func TestCreateCephFS_NameInPath(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":"UPID:pve1:0021:EEEE:CEPH_FS_CREATE:cephfs:root@pam:"}`)
+	c := newTestClient(srv, "pve1")
+
+	upid, err := c.CreateCephFS(context.Background(), CephFSCreateOptions{
+		Name: "cephfs", PGNum: 64, AddStorage: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateCephFS: %v", err)
+	}
+	if !strings.HasPrefix(upid, "UPID:") {
+		t.Errorf("expected UPID, got %q", upid)
+	}
+	// PVE puts the FS name in the URL path, not the body.
+	if want := "/api2/json/nodes/pve1/ceph/fs/cephfs"; rec.path != want {
+		t.Errorf("path: want %q, got %q", want, rec.path)
+	}
+	if !strings.Contains(rec.body, "pg_num=64") || !strings.Contains(rec.body, "add_storage=1") {
+		t.Errorf("body missing fields; got %q", rec.body)
+	}
+}
+
+func TestCreateCephFS_RequiresName(t *testing.T) {
+	c := newTestClient(httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("server should not be hit when name is empty")
+	})), "pve1")
+	defer c.httpClient.CloseIdleConnections()
+	if _, err := c.CreateCephFS(context.Background(), CephFSCreateOptions{}); err == nil {
+		t.Fatal("expected error when name is empty")
+	}
+}
+
+func TestDeleteCephFS_QueryParams(t *testing.T) {
+	srv, rec := recordingSrv(t, `{"data":"UPID:x"}`)
+	c := newTestClient(srv, "pve1")
+
+	if _, err := c.DeleteCephFS(context.Background(), "cephfs", CephFSDeleteOptions{
+		RemoveStorages: true, RemovePools: true,
+	}); err != nil {
+		t.Fatalf("DeleteCephFS: %v", err)
+	}
+	if rec.method != "DELETE" {
+		t.Errorf("method: want DELETE, got %q", rec.method)
+	}
+	if rec.path != "/api2/json/nodes/pve1/ceph/fs/cephfs" {
+		t.Errorf("path: %q", rec.path)
+	}
+	for _, want := range []string{"remove_storages=1", "remove_pools=1"} {
+		if !strings.Contains(rec.query, want) {
+			t.Errorf("query missing %q; got %q", want, rec.query)
+		}
+	}
+}
+
+func TestGetCephCrushMap(t *testing.T) {
+	body := `{"data":"# begin crush map\ntunable choose_local_tries 0\n..."}`
+	srv, _ := cephSrv(t, "/ceph/crush", body)
+	c := newTestClient(srv, "pve1")
+	out, err := c.GetCephCrushMap(context.Background())
+	if err != nil {
+		t.Fatalf("GetCephCrushMap: %v", err)
+	}
+	if !strings.Contains(out, "begin crush map") {
+		t.Errorf("expected crush map text, got %q", out)
+	}
+}

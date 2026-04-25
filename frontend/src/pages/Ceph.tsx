@@ -13,13 +13,15 @@ import type {
   CephFlags,
 } from '../types';
 
-type TabKey = 'status' | 'osds' | 'pools' | 'monitors' | 'flags';
+type TabKey = 'status' | 'osds' | 'pools' | 'monitors' | 'cephfs' | 'crush' | 'flags';
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'status', label: 'Status' },
   { key: 'osds', label: 'OSDs' },
   { key: 'pools', label: 'Pools' },
   { key: 'monitors', label: 'Monitors' },
+  { key: 'cephfs', label: 'CephFS' },
+  { key: 'crush', label: 'CRUSH' },
   { key: 'flags', label: 'Flags' },
 ];
 
@@ -158,6 +160,10 @@ export function CephPage() {
               {activeTab === 'monitors' && (
                 <MonitorsTab cluster={activeCluster} topology={topology} onRefresh={fetchTopology} />
               )}
+              {activeTab === 'cephfs' && (
+                <CephFSTab cluster={activeCluster} topology={topology} onRefresh={fetchTopology} />
+              )}
+              {activeTab === 'crush' && <CrushTab cluster={activeCluster} topology={topology} />}
               {activeTab === 'flags' && (
                 <FlagsTab cluster={activeCluster} topology={topology} onRefresh={fetchTopology} />
               )}
@@ -492,18 +498,23 @@ function PoolsTab({ cluster, topology, onRefresh }: { cluster: string; topology:
 function MonitorsTab({ cluster, topology, onRefresh }: { cluster: string; topology: CephCluster; onRefresh: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [adding, setAdding] = useState<{ kind: 'mon' | 'mgr' } | null>(null);
+  const [adding, setAdding] = useState<{ kind: 'mon' | 'mgr' | 'mds' } | null>(null);
 
-  const remove = async (kind: 'mon' | 'mgr', host: string, id: string) => {
-    const friendly = kind === 'mon' ? 'monitor' : 'manager';
-    if (!window.confirm(`Remove ${friendly} ${id} from ${host}?\n\n${kind === 'mon' ? 'Removing the last MON will break the cluster — confirm quorum will survive.' : 'Removing the active MGR triggers failover; the last MGR loses metrics but I/O continues.'}`)) {
-      return;
-    }
+  const remove = async (kind: 'mon' | 'mgr' | 'mds', host: string, id: string) => {
+    const friendly = kind === 'mon' ? 'monitor' : kind === 'mgr' ? 'manager' : 'metadata server';
+    const warning =
+      kind === 'mon'
+        ? 'Removing the last MON will break the cluster — confirm quorum will survive.'
+        : kind === 'mgr'
+        ? 'Removing the active MGR triggers failover; the last MGR loses metrics but I/O continues.'
+        : 'Removing the active MDS triggers failover; with no standbys, the FS goes degraded until a new MDS is created.';
+    if (!window.confirm(`Remove ${friendly} ${id} from ${host}?\n\n${warning}`)) return;
     setBusy(`${kind}-${id}`);
     setActionError(null);
     try {
       if (kind === 'mon') await api.deleteCephMON(cluster, host, id);
-      else await api.deleteCephMGR(cluster, host, id);
+      else if (kind === 'mgr') await api.deleteCephMGR(cluster, host, id);
+      else await api.deleteCephMDS(cluster, host, id);
       await onRefresh();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
@@ -543,17 +554,19 @@ function MonitorsTab({ cluster, topology, onRefresh }: { cluster: string; topolo
           busy: busy === `mgr-${m.name}`,
         }))}
       />
-      {topology.mdss.length > 0 && (
-        <DaemonSection
-          title="Metadata servers (MDS)"
-          rows={topology.mdss.map<DaemonRow>((m: CephMDS) => ({
-            name: m.name,
-            host: m.host,
-            extra: m.rank ? `rank ${m.rank}` : '',
-            state: m.state,
-          }))}
-        />
-      )}
+      <DaemonSection
+        title="Metadata servers (MDS)"
+        addLabel="+ Add MDS"
+        onAdd={() => setAdding({ kind: 'mds' })}
+        rows={topology.mdss.map<DaemonRow>((m: CephMDS) => ({
+          name: m.name,
+          host: m.host,
+          extra: m.rank ? `rank ${m.rank}` : '',
+          state: m.state,
+          onRemove: () => remove('mds', m.host, m.name),
+          busy: busy === `mds-${m.name}`,
+        }))}
+      />
 
       {adding && (
         <DaemonAddDialog
@@ -563,6 +576,181 @@ function MonitorsTab({ cluster, topology, onRefresh }: { cluster: string; topolo
           onSuccess={() => { setAdding(null); onRefresh(); }}
         />
       )}
+    </div>
+  );
+}
+
+function CephFSTab({ cluster, topology, onRefresh }: { cluster: string; topology: CephCluster; onRefresh: () => void }) {
+  const [creating, setCreating] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  // CephFS deletion needs a node — pick any MDS host, falling back to the
+  // first MON host. This avoids asking the operator to choose; PVE doesn't
+  // care which node receives the DELETE call.
+  const pickHost = (): string | null => {
+    if (topology.mdss.length > 0) return topology.mdss[0].host;
+    if (topology.mons.length > 0) return topology.mons[0].host;
+    return null;
+  };
+
+  const deleteFS = async (name: string) => {
+    const host = pickHost();
+    if (!host) {
+      setActionError('No MDS or MON available to route the delete request through.');
+      return;
+    }
+    if (!window.confirm(`Delete CephFS ${name}?\n\nThe filesystem, its PVE Storage entries, AND the underlying data + metadata pools will be removed. This cannot be undone.`)) return;
+    setBusy(name);
+    setActionError(null);
+    try {
+      await api.deleteCephFS(cluster, host, name, { remove_storages: true, remove_pools: true });
+      await onRefresh();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const createDisabled = topology.mdss.length === 0;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <button
+          onClick={() => setCreating(true)}
+          disabled={createDisabled}
+          title={createDisabled ? 'Create at least one MDS before creating a CephFS' : 'Create a new CephFS'}
+          className="text-sm bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded px-3 py-1.5"
+        >
+          + New CephFS
+        </button>
+      </div>
+
+      {actionError && <div className="bg-red-50 text-red-700 px-3 py-2 rounded text-sm">{actionError}</div>}
+
+      <div className="rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 dark:bg-gray-900 text-xs uppercase text-gray-500 dark:text-gray-400">
+            <tr>
+              <th className="text-left px-4 py-2">Name</th>
+              <th className="text-left px-4 py-2">Metadata pool</th>
+              <th className="text-left px-4 py-2">Data pools</th>
+              <th className="text-right px-4 py-2">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+            {topology.fs.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
+                  No CephFS filesystems.{' '}
+                  {topology.mdss.length === 0 && (
+                    <span className="text-xs text-gray-400">
+                      Add an MDS in the Monitors tab first.
+                    </span>
+                  )}
+                </td>
+              </tr>
+            ) : (
+              topology.fs.map((f) => (
+                <tr key={f.name} className="text-gray-900 dark:text-gray-100">
+                  <td className="px-4 py-2 font-mono">{f.name}</td>
+                  <td className="px-4 py-2 font-mono">{f.metadata_pool || '—'}</td>
+                  <td className="px-4 py-2 font-mono">{f.data_pools?.join(', ') || '—'}</td>
+                  <td className="px-4 py-2 text-right">
+                    <button
+                      disabled={busy !== null}
+                      onClick={() => deleteFS(f.name)}
+                      className="text-xs text-red-600 hover:underline disabled:text-gray-400"
+                    >
+                      {busy === f.name ? '…' : 'Delete'}
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {creating && (
+        <CephFSCreateDialog
+          cluster={cluster}
+          host={pickHost() || ''}
+          onClose={() => setCreating(false)}
+          onSuccess={() => { setCreating(false); onRefresh(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CrushTab({ cluster, topology }: { cluster: string; topology: CephCluster }) {
+  const [crushMap, setCrushMap] = useState<string | null>(null);
+  const [crushError, setCrushError] = useState<string | null>(null);
+  const [crushLoading, setCrushLoading] = useState(false);
+
+  const loadMap = useCallback(async () => {
+    setCrushLoading(true);
+    setCrushError(null);
+    try {
+      setCrushMap(await api.getCephCrushMap(cluster));
+    } catch (err) {
+      setCrushError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCrushLoading(false);
+    }
+  }, [cluster]);
+
+  useEffect(() => {
+    loadMap();
+  }, [loadMap]);
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+        <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-700 text-sm font-medium text-gray-700 dark:text-gray-200">
+          CRUSH rules
+        </div>
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 dark:bg-gray-900 text-xs uppercase text-gray-500 dark:text-gray-400">
+            <tr>
+              <th className="text-left px-4 py-2">ID</th>
+              <th className="text-left px-4 py-2">Name</th>
+              <th className="text-right px-4 py-2">Type</th>
+              <th className="text-right px-4 py-2">Steps</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+            {topology.rules.length === 0 ? (
+              <tr><td colSpan={4} className="px-4 py-6 text-center text-gray-500">No CRUSH rules.</td></tr>
+            ) : (
+              topology.rules.map((r) => (
+                <tr key={r.rule_id} className="text-gray-900 dark:text-gray-100">
+                  <td className="px-4 py-2">{r.rule_id}</td>
+                  <td className="px-4 py-2 font-mono">{r.rule_name}</td>
+                  <td className="px-4 py-2 text-right">{r.type === 1 ? 'replicated' : r.type === 3 ? 'erasure' : r.type ?? '—'}</td>
+                  <td className="px-4 py-2 text-right">{r.steps_count ?? '—'}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+        <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-700 text-sm font-medium text-gray-700 dark:text-gray-200 flex justify-between items-center">
+          <span>Decompiled CRUSH map (read-only)</span>
+          <button onClick={loadMap} disabled={crushLoading} className="text-sm text-blue-600 hover:underline disabled:text-gray-400">
+            {crushLoading ? 'Loading…' : 'Reload'}
+          </button>
+        </div>
+        {crushError && <div className="bg-red-50 text-red-700 px-3 py-2 m-3 rounded text-sm">{crushError}</div>}
+        <pre className="p-4 text-xs font-mono overflow-x-auto whitespace-pre text-gray-800 dark:text-gray-200 max-h-[600px] overflow-y-auto">
+          {crushMap || (crushLoading ? 'Loading…' : '(empty)')}
+        </pre>
+      </div>
     </div>
   );
 }
@@ -828,15 +1016,10 @@ function PoolEditDialog({ cluster, pool, onClose, onSuccess }: { cluster: string
   );
 }
 
-function DaemonAddDialog({ cluster, kind, onClose, onSuccess }: { cluster: string; kind: 'mon' | 'mgr'; onClose: () => void; onSuccess: () => void }) {
-  const { clusters } = useCluster();
-  const cluster_obj = clusters.find((c) => c.name === cluster);
-  // The cluster's nodes aren't in ClusterInfo; the user types the node name.
-  // (Real pCenter has node lists from /clusters/{c}/nodes — we keep this simple
-  // for now since adding a MON/MGR is rare and the operator knows their nodes.)
-  void cluster_obj;
+function DaemonAddDialog({ cluster, kind, onClose, onSuccess }: { cluster: string; kind: 'mon' | 'mgr' | 'mds'; onClose: () => void; onSuccess: () => void }) {
   const [node, setNode] = useState('');
   const [monAddress, setMonAddress] = useState('');
+  const [hotstandby, setHotstandby] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -850,8 +1033,10 @@ function DaemonAddDialog({ cluster, kind, onClose, onSuccess }: { cluster: strin
     try {
       if (kind === 'mon') {
         await api.createCephMON(cluster, node, monAddress ? { mon_address: monAddress } : undefined);
-      } else {
+      } else if (kind === 'mgr') {
         await api.createCephMGR(cluster, node);
+      } else {
+        await api.createCephMDS(cluster, node, hotstandby ? { hotstandby: true } : undefined);
       }
       onSuccess();
     } catch (err) {
@@ -860,8 +1045,10 @@ function DaemonAddDialog({ cluster, kind, onClose, onSuccess }: { cluster: strin
     }
   };
 
+  const title = kind === 'mon' ? 'Add monitor' : kind === 'mgr' ? 'Add manager' : 'Add MDS';
+
   return (
-    <Modal title={kind === 'mon' ? 'Add monitor' : 'Add manager'} onClose={submitting ? () => {} : onClose}>
+    <Modal title={title} onClose={submitting ? () => {} : onClose}>
       <div className="space-y-3">
         <Field label="Node">
           <input value={node} onChange={(e) => setNode(e.target.value)} className={inputCls} placeholder="pve1" />
@@ -872,6 +1059,63 @@ function DaemonAddDialog({ cluster, kind, onClose, onSuccess }: { cluster: strin
             <p className="text-xs text-gray-500 mt-1">Leave blank to let PVE auto-detect.</p>
           </Field>
         )}
+        {kind === 'mds' && (
+          <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+            <input type="checkbox" checked={hotstandby} onChange={(e) => setHotstandby(e.target.checked)} />
+            Hot standby (standby-replay — warmer cache, faster failover)
+          </label>
+        )}
+        {error && <div className="bg-red-50 text-red-700 px-3 py-2 rounded text-sm">{error}</div>}
+      </div>
+      <DialogButtons onCancel={onClose} onSubmit={submit} submitLabel="Create" submitting={submitting} />
+    </Modal>
+  );
+}
+
+function CephFSCreateDialog({ cluster, host, onClose, onSuccess }: { cluster: string; host: string; onClose: () => void; onSuccess: () => void }) {
+  const [name, setName] = useState('');
+  const [pgNum, setPgNum] = useState('64');
+  const [addStorage, setAddStorage] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!name) {
+      setError('Name is required');
+      return;
+    }
+    if (!host) {
+      setError('No MDS or MON host available to route the create through.');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await api.createCephFS(cluster, host, name, {
+        pg_num: Number(pgNum) || undefined,
+        add_storage: addStorage,
+      });
+      onSuccess();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal title="Create CephFS" onClose={submitting ? () => {} : onClose}>
+      <div className="space-y-3">
+        <Field label="Name">
+          <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} placeholder="cephfs" />
+          <p className="text-xs text-gray-500 mt-1">PVE creates {`{name}_data`} and {`{name}_metadata`} pools automatically.</p>
+        </Field>
+        <Field label="PG num (data pool)">
+          <input type="number" min={1} value={pgNum} onChange={(e) => setPgNum(e.target.value)} className={inputCls} />
+        </Field>
+        <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+          <input type="checkbox" checked={addStorage} onChange={(e) => setAddStorage(e.target.checked)} />
+          Also create a PVE Storage entry of type cephfs
+        </label>
         {error && <div className="bg-red-50 text-red-700 px-3 py-2 rounded text-sm">{error}</div>}
       </div>
       <DialogButtons onCancel={onClose} onSubmit={submit} submitLabel="Create" submitting={submitting} />

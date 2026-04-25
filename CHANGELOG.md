@@ -17,6 +17,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 ### Changed
 - **Sidebar nav adds a "Ceph" entry** between Storage and Network. Existing nav order otherwise unchanged.
 
+### Added (PR 2 — CephFS, MDS, CRUSH)
+- **Ceph MDS lifecycle** — `POST /api/clusters/{cluster}/nodes/{node}/ceph/mds` (with optional `hotstandby` for standby-replay), `DELETE .../ceph/mds/{name}`. Surfaced in the Monitors tab with an "+ Add MDS" button + remove confirmations explaining failover semantics.
+- **CephFS lifecycle** — `POST /api/clusters/{cluster}/nodes/{node}/ceph/fs/{name}` (filesystem name in URL per PVE's contract; optional `pg_num` + `add_storage`), `DELETE .../ceph/fs/{name}?remove_storages=1&remove_pools=1`. New "CephFS" tab on the /ceph page with create dialog + delete (always removes underlying pools to avoid orphans). Disabled until at least one MDS exists.
+- **CRUSH viewer** — `GET /api/clusters/{cluster}/ceph/crush` returns the decompiled CRUSH map as plain text. New "CRUSH" tab shows the rules table (already cached in topology) plus the raw map for SSH-free reference. Editing remains via `ceph osd setcrushmap` — intentionally not exposed.
+
 ## v0.1.15 — 2026-04-25
 
 ### Added

@@ -1642,6 +1642,109 @@ func (c *Client) DeleteCephMGR(ctx context.Context, mgrID string) (string, error
 	return resp.Data, nil
 }
 
+// CreateCephMDS creates a Ceph metadata server daemon on this client's node.
+// hotstandby toggles whether the MDS sits in standby-replay (warm cache, faster
+// failover at the cost of memory). Returns UPID.
+func (c *Client) CreateCephMDS(ctx context.Context, hotstandby bool) (string, error) {
+	params := map[string]string{}
+	if hotstandby {
+		params["hotstandby"] = "1"
+	}
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/mds", c.nodeName), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// DeleteCephMDS destroys an MDS by name. If the MDS is the active rank for a
+// CephFS, removing it triggers failover; if there are no standbys, the FS
+// goes degraded until another MDS is created. Returns UPID.
+func (c *Client) DeleteCephMDS(ctx context.Context, name string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	data, err := c.deleteWithData(ctx, fmt.Sprintf("/nodes/%s/ceph/mds/%s", c.nodeName, name))
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// CephFSCreateOptions captures the params for POST /nodes/{node}/ceph/fs/{name}.
+// Note: the FS name lives in the URL, NOT the body — PVE's API contract.
+type CephFSCreateOptions struct {
+	Name       string // required: filesystem name; PVE creates {name}_data + {name}_metadata pools
+	PGNum      int    // optional: PG count for the data pool; 0 = PVE default
+	AddStorage bool   // when true, also create a PVE Storage entry of type "cephfs"
+}
+
+// CreateCephFS creates a CephFS filesystem. PVE creates the underlying
+// data + metadata pools automatically. Returns UPID.
+func (c *Client) CreateCephFS(ctx context.Context, opts CephFSCreateOptions) (string, error) {
+	if opts.Name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	params := map[string]string{}
+	if opts.PGNum > 0 {
+		params["pg_num"] = fmt.Sprintf("%d", opts.PGNum)
+	}
+	if opts.AddStorage {
+		params["add_storage"] = "1"
+	}
+	data, err := c.post(ctx, fmt.Sprintf("/nodes/%s/ceph/fs/%s", c.nodeName, opts.Name), params)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// CephFSDeleteOptions controls the destructive scope of FS removal.
+type CephFSDeleteOptions struct {
+	RemoveStorages bool // also drop PVE Storage entries pointing at this FS
+	RemovePools    bool // also delete the underlying data + metadata pools
+}
+
+// DeleteCephFS destroys a CephFS. When RemovePools is true, the underlying
+// pools are deleted too — without it, the FS is removed but the pools remain
+// (rare, useful only when migrating a pool to a new FS). Returns UPID.
+func (c *Client) DeleteCephFS(ctx context.Context, name string, opts CephFSDeleteOptions) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	path := fmt.Sprintf("/nodes/%s/ceph/fs/%s", c.nodeName, name)
+	q := url.Values{}
+	if opts.RemoveStorages {
+		q.Set("remove_storages", "1")
+	}
+	if opts.RemovePools {
+		q.Set("remove_pools", "1")
+	}
+	if encoded := q.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	data, err := c.deleteWithData(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	var resp APIResponse[string]
+	_ = json.Unmarshal(data, &resp)
+	return resp.Data, nil
+}
+
+// GetCephCrushMap returns the textual decompiled CRUSH map. Useful for the
+// CRUSH viewer tab; editing flows through `ceph osd setcrushmap` which is
+// out of scope for PR 2 (operators do this rarely and via SSH today).
+func (c *Client) GetCephCrushMap(ctx context.Context) (string, error) {
+	return get[string](c, ctx, fmt.Sprintf("/nodes/%s/ceph/crush", c.nodeName))
+}
+
 // GetSmartData fetches SMART data for all disks on this node
 func (c *Client) GetSmartData(ctx context.Context) ([]SmartDisk, error) {
 	host := c.getHostFromURL()
