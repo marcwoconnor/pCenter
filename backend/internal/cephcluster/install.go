@@ -122,6 +122,7 @@ func (m *Manager) runInstallPackagesPhase(
 	// parallelism is safe; same-host concurrent installs would block.
 	var wg sync.WaitGroup
 	results := make(map[string]error, len(req.Nodes))
+	outputs := make(map[string]string, len(req.Nodes))
 	var resultsMu sync.Mutex
 
 	for _, node := range req.Nodes {
@@ -137,13 +138,29 @@ func (m *Manager) runInstallPackagesPhase(
 			cmdCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			defer cancel()
 
-			// `pveceph install` defaults to the no-subscription repo when no
-			// --repository is given. If the operator has an enterprise
-			// subscription, they'll have configured the repo at the apt
-			// level already. -y prevents the prompt.
-			out, err := pve.RunSSHCommand(cmdCtx, host, "pveceph install -y 2>&1 | tail -50")
+			// We can't rely on `pveceph install -y` — PVE 9 dropped the -y
+			// option and its internal apt-get invocation doesn't pass -y
+			// either, so it aborts at the "Do you want to continue?" prompt.
+			// Two-step approach: run pveceph install (best-effort) so the
+			// repo gets configured if it isn't already, then drive the
+			// actual package install with apt-get -y. The final test for
+			// /usr/bin/ceph-mon is the source of truth — without it, the
+			// step fails regardless of how the install path exited.
+			//
+			// `set -o pipefail` matters: piping through `tail` for output
+			// trimming used to mask the underlying exit code, so apt
+			// failures looked like successes (#GH issue context: the
+			// install_packages step reported success while no daemon
+			// packages were ever placed on the node).
+			cmd := "set -o pipefail; " +
+				"pveceph install --repository no-subscription 2>&1 | tail -200; " +
+				"DEBIAN_FRONTEND=noninteractive apt-get install -y " +
+				"--no-install-recommends --allow-downgrades ceph 2>&1 | tail -50; " +
+				"test -x /usr/bin/ceph-mon"
+			out, err := pve.RunSSHCommand(cmdCtx, host, cmd)
 			resultsMu.Lock()
 			results[node] = err
+			outputs[node] = out
 			job.setStepMessage(node, PhaseInstallPackages, lastLine(out))
 			resultsMu.Unlock()
 		}()
@@ -154,15 +171,19 @@ func (m *Manager) runInstallPackagesPhase(
 	failed := []string{}
 	for _, node := range req.Nodes {
 		if err := results[node]; err != nil {
-			job.failStep(node, PhaseInstallPackages, err.Error())
+			detail := err.Error()
+			if last := lastLine(outputs[node]); last != "" {
+				detail = fmt.Sprintf("%s (last line: %s)", detail, last)
+			}
+			job.failStep(node, PhaseInstallPackages, detail)
 			failed = append(failed, node)
 		} else {
-			job.succeedStep(node, PhaseInstallPackages, "pveceph install completed")
+			job.succeedStep(node, PhaseInstallPackages, "ceph daemons installed")
 		}
 	}
 	if len(failed) > 0 {
 		m.fail(job, "", "",
-			fmt.Sprintf("pveceph install failed on: %s. Recovery: SSH each failed node and run `pveceph install -y` manually to inspect, then retry the wizard once apt is unblocked.",
+			fmt.Sprintf("ceph package install failed on: %s. Recovery: SSH each failed node and run `apt-get install -y --no-install-recommends ceph` to see the apt error directly, then retry the wizard once apt is unblocked. Common causes: enterprise repo selected without a subscription (use --repository no-subscription), version skew between an existing ceph-common and the daemon packages, or a held package preventing the install.",
 				strings.Join(failed, ", ")))
 		return false
 	}
