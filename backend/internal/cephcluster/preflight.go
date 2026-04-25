@@ -51,7 +51,10 @@ func RunInstallPreflight(
 	majors := map[string]bool{}
 
 	for _, node := range hosts {
-		hr := HostPreflightResult{Node: node}
+		// Blockers is initialized non-nil so it serializes as [] rather
+		// than null — the wizard renders h.blockers.length and a null
+		// here crashes the React tree (blank screen on success path).
+		hr := HostPreflightResult{Node: node, Blockers: []string{}}
 		c, ok := clientFor(node)
 		if !ok {
 			hr.Blockers = append(hr.Blockers, "no PVE client available for this node")
