@@ -630,3 +630,33 @@ func TestGetSmart_EmptyWhenNoState(t *testing.T) {
 		t.Errorf("expected empty arrays not null; got: %s", body)
 	}
 }
+
+// TestGetSmart_NestedDisksNotNull guards against the regression that caused
+// the v0.1.28 white-screen: a SmartReport with no disks must serialise as
+// `"disks":[]`, not `"disks":null`. Frontend reads `report.disks.length`
+// directly during render, so null = unhandled exception = blank page.
+func TestGetSmart_NestedDisksNotNull(t *testing.T) {
+	h, store := newTestHandler(t)
+
+	cs := store.GetOrCreateCluster("test")
+	// A report with no disks (e.g. agent connected but smartctl errored on
+	// every device, or scan returned zero matches) is a real shape we ship —
+	// it must not crash the UI.
+	cs.SetSmartReport("pve01", &pve.SmartReport{
+		Source:    "agent",
+		ScanError: "smartctl: command not found",
+		Disks:     nil, // explicit nil to simulate the bug
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/smart", nil)
+	rec := httptest.NewRecorder()
+	h.GetSmart(rec, req)
+
+	body := rec.Body.String()
+	if strings.Contains(body, `"disks":null`) {
+		t.Errorf("nested report.disks must serialise as [] not null; got: %s", body)
+	}
+	if !strings.Contains(body, `"scan_error":"smartctl: command not found"`) {
+		t.Errorf("scan_error not present: %s", body)
+	}
+}

@@ -73,7 +73,11 @@ function formatAge(iso: string): string {
 }
 
 function SmartReportBanner({ report }: { report: SmartReport }) {
-  const hasFailure = !!report.scan_error || (report.device_errors?.length ?? 0) > 0;
+  // Backend should ship empty arrays not null, but defend here too —
+  // a single missing field shouldn't whitescreen the page.
+  const disks = report.disks ?? [];
+  const deviceErrors = report.device_errors ?? [];
+  const hasFailure = !!report.scan_error || deviceErrors.length > 0;
   const tone = hasFailure
     ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-300 dark:border-yellow-700 text-yellow-800 dark:text-yellow-300'
     : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400';
@@ -83,7 +87,7 @@ function SmartReportBanner({ report }: { report: SmartReport }) {
       <span className="mx-2">·</span>
       <span>via {report.source}</span>
       <span className="mx-2">·</span>
-      <span>{report.disks.length} disk{report.disks.length === 1 ? '' : 's'}</span>
+      <span>{disks.length} disk{disks.length === 1 ? '' : 's'}</span>
       <span className="mx-2">·</span>
       <span title={report.collected_at}>{formatAge(report.collected_at)}</span>
       {report.scan_error && (
@@ -92,9 +96,9 @@ function SmartReportBanner({ report }: { report: SmartReport }) {
           <span className="font-mono">{report.scan_error}</span>
         </div>
       )}
-      {report.device_errors && report.device_errors.length > 0 && (
+      {deviceErrors.length > 0 && (
         <div className="mt-1">
-          {report.device_errors.map(de => (
+          {deviceErrors.map(de => (
             <div key={de.device}>
               <span className="font-mono">{de.device}</span>: {de.error}
             </div>

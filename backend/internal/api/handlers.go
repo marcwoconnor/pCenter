@@ -1397,6 +1397,7 @@ func (h *Handler) GetSmart(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		for _, rep := range cs.GetSmartReports() {
+			normalizeSmartReport(rep)
 			resp.Reports = append(resp.Reports, rep)
 			resp.Disks = append(resp.Disks, rep.Disks...)
 			covered[clusterName+"/"+rep.Node] = struct{}{}
@@ -1412,6 +1413,7 @@ func (h *Handler) GetSmart(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				rep := collectSmartViaSSH(r.Context(), client, clusterName, nodeName)
+				normalizeSmartReport(rep)
 				resp.Reports = append(resp.Reports, rep)
 				resp.Disks = append(resp.Disks, rep.Disks...)
 			}
@@ -1421,16 +1423,33 @@ func (h *Handler) GetSmart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// normalizeSmartReport ensures slice fields serialise as JSON `[]` not
+// `null`. The frontend reads `report.disks.length` directly during render —
+// a null array would become an unhandled exception and a blank page (the
+// v0.1.28 white-screen regression).
+func normalizeSmartReport(r *pve.SmartReport) {
+	if r.Disks == nil {
+		r.Disks = []pve.SmartDisk{}
+	}
+	// device_errors is `omitempty` so nil is fine on the wire — but if any
+	// caller starts reading it without a guard, normalise here too:
+	// if r.DeviceErrors == nil { r.DeviceErrors = []pve.DeviceError{} }
+}
+
 // collectSmartViaSSH wraps the legacy GetSmartData call in a SmartReport so
 // failures (e.g. SSH key missing on the target node) surface to the UI
 // instead of becoming silent empty arrays.
 func collectSmartViaSSH(ctx context.Context, client *pve.Client, cluster, node string) *pve.SmartReport {
 	start := time.Now()
+	// Disks must be a non-nil slice — Go encodes nil slices as JSON `null`,
+	// and the frontend reads `report.disks.length` directly without a null
+	// guard. Empty `[]` is the right wire shape.
 	rep := &pve.SmartReport{
 		Cluster:     cluster,
 		Node:        node,
 		Source:      "ssh",
 		CollectedAt: start,
+		Disks:       []pve.SmartDisk{},
 	}
 	disks, err := client.GetSmartData(ctx)
 	rep.DurationMs = time.Since(start).Milliseconds()
@@ -1439,7 +1458,9 @@ func collectSmartViaSSH(ctx context.Context, client *pve.Client, cluster, node s
 		slog.Warn("SMART SSH fallback failed", "cluster", cluster, "node", node, "error", err)
 		return rep
 	}
-	rep.Disks = disks
+	if disks != nil {
+		rep.Disks = disks
+	}
 	return rep
 }
 

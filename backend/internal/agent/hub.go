@@ -615,6 +615,7 @@ func (a *AgentConn) handleStatus(data json.RawMessage) {
 // pve.SmartReport. Per-device parse failures become DeviceError entries
 // rather than dropped silently — the UI surfaces the count.
 func convertAgentSmart(in *AgentSmartReport) *pve.SmartReport {
+	// Disks must be a non-nil slice — see collectSmartViaSSH for why.
 	out := &pve.SmartReport{
 		Cluster:     in.Cluster,
 		Node:        in.Node,
@@ -622,6 +623,7 @@ func convertAgentSmart(in *AgentSmartReport) *pve.SmartReport {
 		CollectedAt: time.Unix(in.CollectedAt, 0),
 		DurationMs:  in.DurationMs,
 		ScanError:   in.ScanError,
+		Disks:       []pve.SmartDisk{},
 	}
 	for _, sc := range in.Scrapes {
 		if sc.Error != "" {
