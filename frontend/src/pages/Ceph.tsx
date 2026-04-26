@@ -703,6 +703,7 @@ function CephDestroyDialog({ cluster, onClose, onSuccess }: { cluster: string; o
 function OSDsTab({ cluster, topology, onRefresh }: { cluster: string; topology: CephCluster; onRefresh: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [addingOnHost, setAddingOnHost] = useState<string | null>(null);
 
   const groups = groupByHost(topology.osds);
 
@@ -721,10 +722,26 @@ function OSDsTab({ cluster, topology, onRefresh }: { cluster: string; topology: 
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <button
+          onClick={() => setAddingOnHost('')}
+          className="text-sm bg-blue-600 hover:bg-blue-700 text-white rounded px-3 py-1.5"
+        >
+          + Add OSD
+        </button>
+      </div>
+
       {actionError && <div className="bg-red-50 text-red-700 px-3 py-2 rounded text-sm">{actionError}</div>}
 
       {groups.length === 0 ? (
-        <EmptyState message="No OSDs." />
+        <div className="rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-8 text-center">
+          <p className="text-gray-700 dark:text-gray-200 font-medium mb-1">No OSDs yet.</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Click <strong>+ Add OSD</strong> above to bring up storage. You'll need at least one unused
+            block device (no partitions, no LVM, no filesystem) per node, and at least three OSDs total
+            to satisfy the default <code>osd_pool_default_size</code> of 3.
+          </p>
+        </div>
       ) : (
         groups.map(([host, osds]) => (
           <div key={host} className="rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
@@ -808,7 +825,154 @@ function OSDsTab({ cluster, topology, onRefresh }: { cluster: string; topology: 
           </div>
         ))
       )}
+
+      {addingOnHost !== null && (
+        <AddOSDDialog
+          cluster={cluster}
+          initialHost={addingOnHost}
+          onClose={() => setAddingOnHost(null)}
+          onSuccess={() => { setAddingOnHost(null); onRefresh(); }}
+        />
+      )}
     </div>
+  );
+}
+
+function AddOSDDialog({
+  cluster,
+  initialHost,
+  onClose,
+  onSuccess,
+}: {
+  cluster: string;
+  initialHost: string;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const { getNodesByCluster } = useCluster();
+  const clusterNodes = getNodesByCluster(cluster);
+  const [host, setHost] = useState(initialHost || clusterNodes[0]?.node || '');
+  const [dev, setDev] = useState('');
+  const [encrypted, setEncrypted] = useState(false);
+  const [deviceClass, setDeviceClass] = useState<'' | 'hdd' | 'ssd' | 'nvme'>('');
+  const [dbDev, setDbDev] = useState('');
+  const [walDev, setWalDev] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!host) { setError('Pick a node.'); return; }
+    if (!dev.trim()) { setError('Block device path is required (e.g. /dev/sdb).'); return; }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.createCephOSD(cluster, host, {
+        dev: dev.trim(),
+        db_dev: dbDev.trim() || undefined,
+        wal_dev: walDev.trim() || undefined,
+        encrypted: encrypted || undefined,
+        crush_device_class: deviceClass || undefined,
+      });
+      onSuccess();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={`Add OSD on ${cluster}`} onClose={busy ? () => {} : onClose}>
+      <div className="space-y-4">
+        <Field label="Node">
+          <select
+            value={host}
+            onChange={(e) => setHost(e.target.value)}
+            className={inputCls}
+            disabled={clusterNodes.length === 0}
+          >
+            {clusterNodes.length === 0 ? (
+              <option value="">No nodes discovered</option>
+            ) : (
+              clusterNodes.map((n) => (
+                <option key={n.node} value={n.node}>{n.node} ({n.status})</option>
+              ))
+            )}
+          </select>
+        </Field>
+
+        <Field label="Block device">
+          <input
+            value={dev}
+            onChange={(e) => setDev(e.target.value)}
+            className={inputCls}
+            placeholder="/dev/sdb"
+            autoFocus
+          />
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            Whole-disk path on the node (e.g. <code>/dev/sdb</code>, <code>/dev/nvme0n1</code>).
+            Must be unused — no partitions, LVM, or filesystem. Existing data will be wiped.
+          </p>
+        </Field>
+
+        <Field label="CRUSH device class (optional)">
+          <select
+            value={deviceClass}
+            onChange={(e) => setDeviceClass(e.target.value as '' | 'hdd' | 'ssd' | 'nvme')}
+            className={inputCls}
+          >
+            <option value="">Auto-detect</option>
+            <option value="hdd">hdd</option>
+            <option value="ssd">ssd</option>
+            <option value="nvme">nvme</option>
+          </select>
+        </Field>
+
+        <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+          <input
+            type="checkbox"
+            checked={encrypted}
+            onChange={(e) => setEncrypted(e.target.checked)}
+          />
+          Encrypt OSD (dm-crypt). Cannot be changed after creation.
+        </label>
+
+        <details>
+          <summary className="text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
+            Advanced — separate DB / WAL devices
+          </summary>
+          <div className="mt-3 space-y-3">
+            <Field label="DB device (optional)">
+              <input
+                value={dbDev}
+                onChange={(e) => setDbDev(e.target.value)}
+                className={inputCls}
+                placeholder="/dev/nvme0n1"
+              />
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                Separate fast device for BlueStore RocksDB metadata. Typically NVMe; sized at
+                ~1–4% of the OSD's data device.
+              </p>
+            </Field>
+            <Field label="WAL device (optional)">
+              <input
+                value={walDev}
+                onChange={(e) => setWalDev(e.target.value)}
+                className={inputCls}
+                placeholder="/dev/nvme0n1"
+              />
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                Separate device for the BlueStore write-ahead log. Usually omitted unless the WAL
+                lives on a faster device than the DB.
+              </p>
+            </Field>
+          </div>
+        </details>
+
+        {error && <div className="bg-red-50 text-red-700 px-3 py-2 rounded text-sm">{error}</div>}
+
+        <DialogButtons onCancel={onClose} onSubmit={submit} submitLabel="Create OSD" submitting={busy} />
+      </div>
+    </Modal>
   );
 }
 
