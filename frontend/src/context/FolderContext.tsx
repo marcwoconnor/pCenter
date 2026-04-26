@@ -29,6 +29,8 @@ interface FolderState {
 
 const FolderContext = createContext<FolderState | null>(null);
 
+// Co-locating the hook with its provider. HMR split isn't worth the split cost.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useFolders() {
   const ctx = useContext(FolderContext);
   if (!ctx) throw new Error('useFolders must be used within FolderProvider');

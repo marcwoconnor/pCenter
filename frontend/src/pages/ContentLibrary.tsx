@@ -576,10 +576,16 @@ function DeployDialog({ item, clusters, nodes, onClose, onDeploy }: {
 
   const availableNodes = nodes.filter(n => n.cluster === targetCluster && n.status === 'online');
 
+  // Seed targetNode when available nodes load. Intentionally only re-runs
+  // when the cluster changes or node-count changes — including `availableNodes`
+  // itself would re-run on every array reference change, and including
+  // `targetNode` would re-run immediately after this effect's own
+  // setTargetNode call.
   useEffect(() => {
     if (availableNodes.length > 0 && !targetNode) {
       setTargetNode(availableNodes[0].node);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetCluster, availableNodes.length]);
 
   return (

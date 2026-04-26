@@ -22,6 +22,8 @@ function SubMenu({ items, onClose, parentRef }: { items: MenuItem[]; onClose: ()
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: 0, top: 0 });
 
+  /* eslint-disable react-hooks/set-state-in-effect --
+     DOM measurement after mount; can only happen post-layout */
   useEffect(() => {
     if (parentRef.current && menuRef.current) {
       const parentRect = parentRef.current.getBoundingClientRect();
@@ -45,6 +47,7 @@ function SubMenu({ items, onClose, parentRef }: { items: MenuItem[]; onClose: ()
       setPosition({ left, top });
     }
   }, [parentRef]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   return (
     <div

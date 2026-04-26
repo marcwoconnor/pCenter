@@ -5,7 +5,7 @@ import { api } from '../api/client';
 import { TOTPSetupWizard } from '../components/TOTPSetupWizard';
 import { Layout } from '../components/Layout';
 import { WebhooksPanel } from '../components/WebhooksPanel';
-import type { Session } from '../types/auth';
+import type { Session, User } from '../types/auth';
 import type { AlarmDefinition, NotificationChannel, RBACRole, RBACRoleAssignment, ScheduledTask, TaskRun } from '../types';
 
 type SettingsTab = 'security' | 'sessions' | 'rbac' | 'scheduler' | 'alarms' | 'notifications' | 'webhooks';
@@ -100,7 +100,7 @@ export function Settings() {
             )}
           </div>
 
-          {activeTab === 'security' && <SecurityTab user={user} onUpdate={refreshUser} />}
+          {activeTab === 'security' && user && <SecurityTab user={user} onUpdate={refreshUser} />}
           {activeTab === 'sessions' && <SessionsTab />}
           {activeTab === 'rbac' && <RBACTab />}
           {activeTab === 'scheduler' && <SchedulerTab />}
@@ -114,7 +114,7 @@ export function Settings() {
 }
 
 // Security Tab - Password & 2FA
-function SecurityTab({ user, onUpdate }: { user: any; onUpdate: () => void }) {
+function SecurityTab({ user, onUpdate }: { user: User; onUpdate: () => void }) {
   return (
     <div className="space-y-8">
       <ChangePasswordSection />
@@ -237,7 +237,7 @@ function ChangePasswordSection() {
 }
 
 // Two-Factor Authentication Section
-function TwoFactorSection({ user, onUpdate }: { user: any; onUpdate: () => void }) {
+function TwoFactorSection({ user, onUpdate }: { user: User; onUpdate: () => void }) {
   const [showSetup, setShowSetup] = useState(false);
   const [isDisabling, setIsDisabling] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -770,7 +770,7 @@ function NotificationsTab() {
           </p>
         ) : channels.map(ch => {
           let url = '';
-          try { url = JSON.parse(ch.config)?.url || ''; } catch {}
+          try { url = JSON.parse(ch.config)?.url || ''; } catch { /* malformed channel config — fall back to empty URL below */ }
           return (
             <div key={ch.id} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
               <div className="flex items-center justify-between">

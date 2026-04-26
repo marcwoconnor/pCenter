@@ -16,6 +16,7 @@ export function DatacenterDetail({ datacenterId, datacenterName, defaultTab }: {
   const [activeTab, setActiveTab] = useState(defaultTab || 'summary');
   const [datacenter, setDatacenter] = useState<Datacenter | null>(null);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- sync tab prop into state so parent can deep-link
   useEffect(() => { if (defaultTab) setActiveTab(defaultTab); }, [defaultTab]);
 
   useEffect(() => {

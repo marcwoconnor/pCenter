@@ -90,6 +90,8 @@ export interface SelectedObject {
 
 const ClusterContext = createContext<ClusterState | null>(null);
 
+// Co-locating the hook with its provider. HMR split isn't worth the split cost.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useCluster() {
   const ctx = useContext(ClusterContext);
   if (!ctx) throw new Error('useCluster must be used within ClusterProvider');
@@ -137,10 +139,16 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
   // Track active clone VMIDs to prevent duplicate polls
   const activeCloneVMIDs = useRef<Set<number>>(new Set());
 
-  // Cleanup all active clone polling on unmount
+  // Cleanup all active clone polling on unmount.
+  // exhaustive-deps would have us snapshot the .current Sets at effect time
+  // and use the snapshots in cleanup, but the whole point is to clean up
+  // whatever is in the Sets at unmount time — including intervals registered
+  // after this effect ran. Reading .current in cleanup is intentional.
   useEffect(() => {
     return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       clonePollIntervals.current.forEach(clearInterval);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       clonePollTimeouts.current.forEach(clearTimeout);
     };
   }, []);

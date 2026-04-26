@@ -112,7 +112,17 @@ After=network.target
 Documentation=https://github.com/marcwoconnor/pCenter
 
 [Service]
-Type=simple
+# Type=notify so systemd considers the unit "active" only after the Go
+# binary has sent READY=1 via sd_notify — which happens AFTER the HTTP
+# listener is bound. Closes the deploy-script race where
+# `systemctl restart && curl /health` hit the listener during ~2s init
+# (#36). NotifyAccess=main restricts which processes can notify.
+Type=notify
+NotifyAccess=main
+# systemd's default TimeoutStartSec=90s is fine for our ~2s init, but
+# if startup ever drags (e.g. slow DB migration) we want the unit to
+# fail cleanly rather than hang forever.
+TimeoutStartSec=60s
 WorkingDirectory=/opt/pcenter
 ExecStart=/opt/pcenter/pcenter -config /etc/pcenter/config.yaml
 Restart=always

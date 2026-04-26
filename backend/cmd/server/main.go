@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -614,14 +615,26 @@ func main() {
 		slog.Info("Ceph install orchestration enabled")
 	}
 
-	// Start server in goroutine
+	// Bind the listener on the main goroutine so sd_notify READY=1 only fires
+	// AFTER the HTTP port is actually accepting connections. With
+	// server.ListenAndServe() the bind and the serve both happen inside the
+	// goroutine, and there's no observable moment between them for the parent
+	// to notify systemd — #36.
+	ln, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		slog.Error("listen failed", "addr", server.Addr, "error", err)
+		os.Exit(1)
+	}
 	go func() {
 		slog.Info("starting server", "addr", server.Addr)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
 			slog.Error("server error", "error", err)
 			os.Exit(1)
 		}
 	}()
+	// Listener is bound — tell systemd (if running under Type=notify).
+	// Non-systemd runs (dev, foreground) ignore this silently.
+	sdNotifyReady()
 
 	// Print summary after first poll
 	time.Sleep(500 * time.Millisecond)
@@ -734,6 +747,40 @@ func migrateConfigClusters(ctx context.Context, svc *inventory.Service, cfg *con
 	}
 
 	return nil
+}
+
+// sdNotifyReady sends READY=1 to systemd's notify socket so Type=notify units
+// transition to "active" only after the HTTP listener is bound — closes the
+// race where deploy scripts run `systemctl restart pcenter && curl /health`
+// and hit the listener during the ~2s init window (#36). No-op outside
+// systemd (empty NOTIFY_SOCKET) — covers dev/foreground runs.
+//
+// The sd_notify wire protocol is trivial (a datagram of "READY=1" to a unix
+// socket whose path is in $NOTIFY_SOCKET), so we inline it here rather than
+// pull in github.com/coreos/go-systemd for one call. Abstract socket names
+// (leading "@" replaced with NUL) are handled the same way the reference
+// implementation does.
+func sdNotifyReady() {
+	sock := os.Getenv("NOTIFY_SOCKET")
+	if sock == "" {
+		return
+	}
+	// Abstract sockets use a leading '@' in the env var; the actual address
+	// path uses a leading NUL byte.
+	if strings.HasPrefix(sock, "@") {
+		sock = "\x00" + sock[1:]
+	}
+	conn, err := net.DialUnix("unixgram", nil, &net.UnixAddr{Name: sock, Net: "unixgram"})
+	if err != nil {
+		slog.Warn("sd_notify dial failed — systemd won't see READY=1", "error", err)
+		return
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("READY=1")); err != nil {
+		slog.Warn("sd_notify write failed", "error", err)
+		return
+	}
+	slog.Info("sent sd_notify READY=1")
 }
 
 // persistEncryptionKey writes the auto-generated encryption key to the env file

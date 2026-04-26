@@ -72,7 +72,7 @@ export function Layout({ children, sidebar }: LayoutProps) {
   // Save width to localStorage (try-catch for disabled/full storage)
   useEffect(() => {
     if (!sidebarCollapsed) {
-      try { localStorage.setItem('pcenter-sidebar-width', sidebarWidth.toString()); } catch {}
+      try { localStorage.setItem('pcenter-sidebar-width', sidebarWidth.toString()); } catch { /* localStorage can fail silently (quota, private mode) — non-essential persistence */ }
     }
   }, [sidebarWidth, sidebarCollapsed]);
 

@@ -25,6 +25,11 @@ interface AuthContextValue extends AuthState {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+// Co-locating the hook with its provider keeps the context wiring readable.
+// The react-refresh rule wants components-only in a file for HMR, but the
+// ergonomic cost of a three-file split (provider / context / hook) outweighs
+// the HMR benefit for a short-lived auth context value.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth() {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error('useAuth must be used within AuthProvider');
@@ -250,5 +255,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   );
 }
 
-// Export for use in api client
+// Export for use in api client. Same rationale as the useAuth export above —
+// the rule wants components-only for HMR, not worth a three-file split.
+// eslint-disable-next-line react-refresh/only-export-components
 export { getCSRFToken };

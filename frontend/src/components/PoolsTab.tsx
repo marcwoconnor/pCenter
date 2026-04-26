@@ -19,6 +19,7 @@ export function PoolsTab({ clusterName }: { clusterName: string }) {
     }
   }, [clusterName]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch on mount; load is stable via useCallback
   useEffect(() => { load() }, [load]);
 
   const onDelete = async (poolID: string) => {

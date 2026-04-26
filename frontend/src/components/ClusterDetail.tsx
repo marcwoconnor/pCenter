@@ -30,6 +30,7 @@ export function ClusterDetail({ clusterName, displayName, defaultTab }: { cluste
   const { nodes, guests, drsRecommendations, getCluster } = useCluster();
   const [activeTab, setActiveTab] = useState(defaultTab || 'summary');
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- sync tab prop into state so parent can deep-link
   useEffect(() => { if (defaultTab) setActiveTab(defaultTab); }, [defaultTab]);
 
   const cluster = getCluster(clusterName);

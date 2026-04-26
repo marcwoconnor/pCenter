@@ -429,8 +429,11 @@ export function Home() {
   const [maintenanceNode, setMaintenanceNode] = useState<{ node: string; cluster: string } | null>(null);
   const [timeRange, setTimeRange] = useState<TimeRange>('1h');
 
-  // Memoize cluster name to prevent unnecessary refetches
-  const clusterName = useMemo(() => nodes[0]?.cluster || '', [nodes[0]?.cluster]);
+  // Memoize cluster name to prevent unnecessary refetches. Extracting the
+  // dep into a local stops exhaustive-deps from flagging "complex expression
+  // in dependency array."
+  const firstNodeCluster = nodes[0]?.cluster;
+  const clusterName = useMemo(() => firstNodeCluster || '', [firstNodeCluster]);
 
 
   // Fetch node metrics (cpu, mem, disk)

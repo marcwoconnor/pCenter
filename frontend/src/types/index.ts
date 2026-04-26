@@ -1389,6 +1389,20 @@ export interface CreateScheduledTaskRequest {
   enabled: boolean;
 }
 
+// VersionInfo mirrors backend/internal/updater.UpdateInfo. Returned by
+// GET /api/version; drives the in-app "update available" banner.
+export interface VersionInfo {
+  current_version: string;
+  latest_version?: string;
+  update_available: boolean;
+  release_notes?: string;
+  release_url?: string;
+  release_name?: string;
+  published_at?: string;
+  checked_at?: string;
+  error?: string;
+}
+
 export interface WebhookEndpoint {
   id: string;
   name: string;

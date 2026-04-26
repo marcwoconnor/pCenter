@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+### Fixed
+- **Frontend lint clean** (closes #42). Cleared the lint backlog — 31 errors + 6 warnings → 0 errors / 0 warnings. Real bugs fixed: 3 conditional `useMemo` calls (InventoryTree, ObjectDetail) hoisted above their early returns; `Date.now()` in TasksBar render moved to a state-tracked clock; 3 `any` types replaced (`getVersion` → new `VersionInfo` type, two `user: any` props → `User`); 8 silent `catch {}` blocks given rationale comments; React Compiler's "preserve manual memoization" warning explained at the call site. Pragmatic suppressions with rationale: 11 `set-state-in-effect` (the codebase's pervasive "fetch on mount" / "sync prop into state" patterns), 4 `react-refresh/only-export-components` in context files (HMR cost vs three-file split), 4 `exhaustive-deps` cases where adding the missing dep would cause real regressions (RFB connection rebuild, ref cleanup, deliberate count-only deps). Each suppression has an inline `--` comment explaining why.
+- **systemd readiness probe eliminates deploy-script race on restart** (closes #36). Type=simple meant systemd marked the unit "active" the moment the Go process started — ~2s before the HTTP listener actually bound. Scripts running `systemctl restart pcenter && curl http://localhost:8080/health` were hitting the listener during that window and getting connection-refused. Fix: split `ListenAndServe` into an explicit `net.Listen` + goroutined `server.Serve`, call `sdNotifyReady()` between them, and switch the shipped systemd unit to `Type=notify` with `NotifyAccess=main` + `TimeoutStartSec=60s`. The sd_notify wire protocol (write `READY=1` to `$NOTIFY_SOCKET`) is inlined in ~15 lines rather than pulled in via a new dependency. No-op outside systemd (empty `NOTIFY_SOCKET`), so dev / foreground runs behave identically.
+
 ## v0.1.26 — 2026-04-25
 
 ### Fixed
