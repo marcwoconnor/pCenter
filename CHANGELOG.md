@@ -6,6 +6,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+## v0.1.29 — 2026-04-26
+
+### Fixed
+- **Storage → Disks tab whitescreens after v0.1.28 upgrade.** Go encodes `nil` slices as JSON `null`, not `[]`. The new `/api/smart` envelope returns a `reports[]` array where each report carries its own nested `disks[]` — and any node where `GetSmartData` returned no successful disks (e.g. when a single device exits non-zero, current SSH path swallows it via `continue`) shipped a report with `"disks":null`. The new `SmartReportBanner` reads `report.disks.length` directly during render, so the unhandled exception blanked the page. Belt-and-braces fix: backend now normalises `Disks = []SmartDisk{}` at the wire boundary (`normalizeSmartReport`) so all served reports have empty arrays not null; frontend defensively `?? []`s the same fields so a future regression on the wire side doesn't blank the page either. Added `TestGetSmart_NestedDisksNotNull` to pin the contract.
+
 ## v0.1.28 — 2026-04-26
 
 ### Added
