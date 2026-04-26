@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+### Fixed
+- **`/ceph` page goes white right after install_packages → ceph_init succeed and the first poll returns a freshly-installed cluster.** Same root cause as the preflight white-screen (#73): the topology endpoint returned `osds: null`, `pools: null`, etc. (Go nil slices) for arrays the React tabs unconditionally call `.length` / `.filter` / `.map` on. With MONs and MGRs created but no OSDs or pools yet, every fresh install hit this. The poller now coalesces all slice fields (`mons`, `mgrs`, `mdss`, `osds`, `pools`, `rules`, `fs`) to non-nil before publishing the snapshot, so they JSON-marshal as `[]`.
+
 ## v0.1.20 — 2026-04-25
 
 ### Fixed
