@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+## v0.1.26 — 2026-04-25
+
 ### Fixed
 - **OSDs tab shows "No OSDs yet" even though the cluster is `HEALTH_OK` with OSDs running.** PVE returns the OSD id in the CRUSH tree as a JSON **string** (`"id":"2"`) rather than a number. `CephOSDTreeNode.ID` was typed as `int`, so the entire tree decode failed silently — `ListCephOSDs` returned an error, the poller's partial-fetch handling logged it at debug level and emitted an empty OSD slice (Status tab still worked because total capacity comes from the separate `pgmap.bytes_total` field of `GetCephStatus`). Introduced a `flexInt` JSON unmarshal helper that accepts either a number or a quoted decimal string and applied it to `ID` and `TypeID` so future PVE quirks of the same shape don't bite again.
 
