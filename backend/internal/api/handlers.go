@@ -288,6 +288,45 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
+// shellQuote single-quotes a string for safe inclusion in a /bin/sh
+// command. Single quotes inside the input are closed, escaped, and
+// reopened — the standard POSIX trick.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// stripHostPort drops the trailing :port from a host:port string,
+// returning just the host (or input unchanged if no colon). Used to
+// turn a PVE client's API host (e.g. "pmnode01:8006") into something
+// SSH can connect to.
+func stripHostPort(hostPort string) string {
+	if i := strings.LastIndex(hostPort, ":"); i >= 0 {
+		return hostPort[:i]
+	}
+	return hostPort
+}
+
+// tailLines returns the last n non-empty lines of out joined by \n.
+// Used to fold CLI output into API error messages without dumping the
+// full apt log.
+func tailLines(out string, n int) string {
+	if out == "" || n <= 0 {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	// Filter empties so a trailing blank doesn't eat a useful line.
+	kept := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if strings.TrimSpace(l) != "" {
+			kept = append(kept, l)
+		}
+	}
+	if len(kept) > n {
+		kept = kept[len(kept)-n:]
+	}
+	return strings.Join(kept, "\n")
+}
+
 // --- Global (legacy) Handlers ---
 
 // GetSummary returns global summary (all clusters)
@@ -913,7 +952,15 @@ type CephOSDCreateRequest struct {
 
 // CreateClusterCephOSD creates a Ceph OSD on a specific node. Caller must
 // ensure the device is wiped (use the agent's disk_zap action first).
-// Returns {upid}.
+//
+// Runs `pveceph osd create` over SSH rather than POSTing to PVE's REST
+// `/nodes/{node}/ceph/osd` endpoint. PVE hard-codes a `user == root@pam`
+// check on the OSD-create REST API — even an API token belonging to
+// root@pam can fail it depending on privilege-separation. The SSH path
+// runs as actual root (same key trust the install wizard uses for
+// `pveceph install` / `pveceph init` / `pveceph purge`) and sidesteps
+// the check. Synchronous: the call returns when `pveceph osd create`
+// exits, which is what the frontend already awaits — no UPID polling.
 func (h *Handler) CreateClusterCephOSD(w http.ResponseWriter, r *http.Request) {
 	clusterName := r.PathValue("cluster")
 	nodeName := r.PathValue("node")
@@ -934,21 +981,54 @@ func (h *Handler) CreateClusterCephOSD(w http.ResponseWriter, r *http.Request) {
 	if client == nil {
 		return
 	}
-	upid, err := client.CreateCephOSD(r.Context(), pve.CephOSDCreateOptions{
-		Dev:              req.Dev,
-		DBDev:            req.DBDev,
-		WALDev:           req.WALDev,
-		DBDevSize:        req.DBDevSize,
-		WALDevSize:       req.WALDevSize,
-		Encrypted:        req.Encrypted,
-		CrushDeviceClass: req.CrushDeviceClass,
-		OSDsPerDevice:    req.OSDsPerDevice,
-	})
+
+	// Build `pveceph osd create <dev> [flags]`. Quote the device path
+	// (it's user-supplied) so a path with spaces or shell metacharacters
+	// can't break the command — defense-in-depth, since the dialog
+	// validates a /dev/* path on the client side too.
+	args := []string{"pveceph", "osd", "create", shellQuote(req.Dev)}
+	if req.DBDev != "" {
+		args = append(args, "--db_dev", shellQuote(req.DBDev))
+	}
+	if req.WALDev != "" {
+		args = append(args, "--wal_dev", shellQuote(req.WALDev))
+	}
+	if req.DBDevSize > 0 {
+		args = append(args, "--db_dev_size", strconv.Itoa(req.DBDevSize))
+	}
+	if req.WALDevSize > 0 {
+		args = append(args, "--wal_dev_size", strconv.Itoa(req.WALDevSize))
+	}
+	if req.Encrypted {
+		args = append(args, "--encrypted", "1")
+	}
+	if req.CrushDeviceClass != "" {
+		args = append(args, "--crush-device-class", shellQuote(req.CrushDeviceClass))
+	}
+	if req.OSDsPerDevice > 0 {
+		args = append(args, "--osds_per_device", strconv.Itoa(req.OSDsPerDevice))
+	}
+	cmd := strings.Join(args, " ")
+
+	// 10-minute hard timeout: ceph-volume LVM creation + daemon deploy
+	// can take a few minutes on a busy node, but anything past that is
+	// almost certainly stuck.
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+
+	host := stripHostPort(client.Host())
+	out, err := pve.RunSSHCommand(ctx, host, cmd)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		// Fold the last 20 lines of CLI output into the error so the
+		// UI gets something more actionable than "exit status 25".
+		detail := err.Error()
+		if tail := tailLines(out, 20); tail != "" {
+			detail = fmt.Sprintf("%s\n\n%s", detail, tail)
+		}
+		writeError(w, http.StatusInternalServerError, detail)
 		return
 	}
-	writeJSON(w, map[string]string{"upid": upid})
+	writeJSON(w, map[string]string{"status": "created", "output": tailLines(out, 5)})
 }
 
 // parseOSDID extracts and validates the {osdid} path parameter. Writes 400
