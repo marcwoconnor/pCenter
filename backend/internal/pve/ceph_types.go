@@ -1,6 +1,11 @@
 package pve
 
-import "time"
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"time"
+)
 
 // Types in this file model the read surface of /nodes/{node}/ceph/* beyond
 // /ceph/status (which lives in types.go alongside the older Ceph health types).
@@ -129,17 +134,59 @@ type CephCluster struct {
 // PVE returns a CRUSH tree where each node has children. The client walks
 // this tree to produce []CephOSD; this type is exported so callers that want
 // the raw tree (e.g. a future CRUSH editor UI) can consume it directly.
+//
+// PVE returns the OSD id as a JSON STRING, not a number ("id":"2", not
+// "id":2), so ID is typed as flexInt to accept both shapes — a plain int
+// would silently fail the whole tree decode and the OSD list would be
+// empty even on a healthy cluster.
 type CephOSDTreeNode struct {
-	ID          int               `json:"id"`
+	ID          flexInt           `json:"id"`
 	Name        string            `json:"name"`
 	Type        string            `json:"type"` // "root" | "host" | "osd"
-	TypeID      int               `json:"type_id,omitempty"`
+	TypeID      flexInt           `json:"type_id,omitempty"`
 	Status      string            `json:"status,omitempty"`
 	Host        string            `json:"host,omitempty"`
 	DeviceClass string            `json:"device_class,omitempty"`
 	CrushWeight float64           `json:"crush_weight,omitempty"`
 	Reweight    float64           `json:"reweight,omitempty"`
 	Children    []CephOSDTreeNode `json:"children,omitempty"`
+}
+
+// flexInt unmarshals a JSON value that PVE may return as either a number
+// or a quoted string (e.g. "id":"2" vs "id":2). Stored as a plain int
+// after parse; callers should use int(v) when assigning to typed-int
+// fields they expose externally.
+type flexInt int
+
+// UnmarshalJSON accepts a JSON number, a quoted decimal string, or null
+// (which decodes to 0). Any other shape is a real error.
+func (f *flexInt) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || string(data) == "null" {
+		*f = 0
+		return nil
+	}
+	if data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		if s == "" {
+			*f = 0
+			return nil
+		}
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			return fmt.Errorf("flexInt: %q is not a decimal integer: %w", s, err)
+		}
+		*f = flexInt(n)
+		return nil
+	}
+	var n int
+	if err := json.Unmarshal(data, &n); err != nil {
+		return err
+	}
+	*f = flexInt(n)
+	return nil
 }
 
 // CephOSDListResponse is what GET /nodes/{node}/ceph/osd actually returns
