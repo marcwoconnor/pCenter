@@ -167,6 +167,63 @@ func TestAgentHub_RegisterAndUnregister(t *testing.T) {
 	}
 }
 
+// TestConvertAgentSmart verifies the wire-format SmartReport from the agent
+// converts cleanly into a domain pve.SmartReport: parseable scrapes become
+// disks, scrapes with Error become DeviceErrors, and unparseable RawJSON
+// also becomes a DeviceError (instead of being silently dropped).
+func TestConvertAgentSmart(t *testing.T) {
+	// Minimal valid smartctl JSON output. ParseSmartJSON only requires the
+	// structure to decode — even mostly-empty values yield a SmartDisk.
+	validJSON := `{"device":{"name":"/dev/sda","protocol":"ATA"},"smart_status":{"passed":true},"model_name":"TEST","serial_number":"SN1"}`
+
+	in := &AgentSmartReport{
+		Node:        "pve01",
+		Cluster:     "test",
+		CollectedAt: 1700000000,
+		DurationMs:  1234,
+		Scrapes: []AgentSmartScrape{
+			{Device: "/dev/sda", Type: "sat", RawJSON: validJSON},
+			{Device: "/dev/sdb", Type: "sat", Error: "smartctl: not installed"},
+			{Device: "/dev/sdc", Type: "sat", RawJSON: "not-valid-json"},
+		},
+	}
+
+	out := convertAgentSmart(in)
+
+	if out.Source != "agent" {
+		t.Errorf("Source = %q, want %q", out.Source, "agent")
+	}
+	if out.DurationMs != 1234 {
+		t.Errorf("DurationMs = %d, want 1234", out.DurationMs)
+	}
+	if len(out.Disks) != 1 {
+		t.Fatalf("Disks = %d, want 1", len(out.Disks))
+	}
+	if out.Disks[0].Device != "/dev/sda" || out.Disks[0].Cluster != "test" {
+		t.Errorf("Disk metadata wrong: %+v", out.Disks[0])
+	}
+	if len(out.DeviceErrors) != 2 {
+		t.Fatalf("DeviceErrors = %d, want 2", len(out.DeviceErrors))
+	}
+	// Error from agent passed through verbatim
+	foundAgentErr := false
+	foundParseErr := false
+	for _, de := range out.DeviceErrors {
+		if de.Device == "/dev/sdb" && de.Error == "smartctl: not installed" {
+			foundAgentErr = true
+		}
+		if de.Device == "/dev/sdc" && de.Error == "unparseable smartctl JSON" {
+			foundParseErr = true
+		}
+	}
+	if !foundAgentErr {
+		t.Error("expected agent-provided error to pass through verbatim")
+	}
+	if !foundParseErr {
+		t.Error("expected unparseable JSON to surface as DeviceError, not silently drop")
+	}
+}
+
 // TestAgentHub_ReplaceExistingAgent verifies that when a new agent connects
 // with the same cluster/node key, the old one is signaled to stop.
 func TestAgentHub_ReplaceExistingAgent(t *testing.T) {

@@ -5,7 +5,7 @@ import { InventoryTree } from '../components/InventoryTree';
 import { ObjectDetail } from '../components/ObjectDetail';
 import { useCluster } from '../context/ClusterContext';
 import { formatBytes } from '../api/client';
-import type { SmartDisk } from '../types';
+import type { SmartDisk, SmartReport, SmartResponse } from '../types';
 
 // Ceph management has its own top-level page (/ceph) with full topology,
 // pool/OSD/MON/MGR CRUD, and flag toggles. This Storage tab is a small
@@ -56,8 +56,58 @@ function formatPowerOnTime(hours: number): string {
 // Critical SMART attribute IDs
 const CRITICAL_ATTRS = new Set([5, 10, 196, 197, 198]);
 
+// Format a "collected N ago" string for the status banner. Stays vague at
+// the right granularity — "just now" / "2m ago" / "3h ago" — so the banner
+// is glanceable without nailing precision the user doesn't need.
+function formatAge(iso: string): string {
+  const collected = new Date(iso).getTime();
+  if (!collected || Number.isNaN(collected)) return 'unknown';
+  const sec = Math.max(0, Math.floor((Date.now() - collected) / 1000));
+  if (sec < 30) return 'just now';
+  if (sec < 90) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 90) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 36) return `${hr}h ago`;
+  return `${Math.floor(hr / 24)}d ago`;
+}
+
+function SmartReportBanner({ report }: { report: SmartReport }) {
+  const hasFailure = !!report.scan_error || (report.device_errors?.length ?? 0) > 0;
+  const tone = hasFailure
+    ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-300 dark:border-yellow-700 text-yellow-800 dark:text-yellow-300'
+    : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400';
+  return (
+    <div className={`mb-2 px-3 py-1.5 text-xs border rounded ${tone}`}>
+      <span className="font-medium">{report.node}</span>
+      <span className="mx-2">·</span>
+      <span>via {report.source}</span>
+      <span className="mx-2">·</span>
+      <span>{report.disks.length} disk{report.disks.length === 1 ? '' : 's'}</span>
+      <span className="mx-2">·</span>
+      <span title={report.collected_at}>{formatAge(report.collected_at)}</span>
+      {report.scan_error && (
+        <div className="mt-1">
+          <span className="font-medium">scan error:</span>{' '}
+          <span className="font-mono">{report.scan_error}</span>
+        </div>
+      )}
+      {report.device_errors && report.device_errors.length > 0 && (
+        <div className="mt-1">
+          {report.device_errors.map(de => (
+            <div key={de.device}>
+              <span className="font-mono">{de.device}</span>: {de.error}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SmartPanel() {
   const [disks, setDisks] = useState<SmartDisk[]>([]);
+  const [reports, setReports] = useState<SmartReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedDisk, setExpandedDisk] = useState<string | null>(null);
@@ -67,8 +117,9 @@ function SmartPanel() {
       try {
         const response = await fetch('/api/smart');
         if (!response.ok) throw new Error('Failed to fetch SMART data');
-        const data = await response.json();
-        setDisks(data || []);
+        const data: SmartResponse = await response.json();
+        setDisks(data?.disks ?? []);
+        setReports(data?.reports ?? []);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unknown error');
       } finally {
@@ -144,6 +195,14 @@ function SmartPanel() {
   return (
     <div className="p-6">
       <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">Disk Health (SMART)</h2>
+
+      {/* Per-node collection status banners. Always shown when we have a
+          report — even on success — so the user can see source + freshness.
+          Reports without disks (scan_error or empty drive list) are surfaced
+          here too so failures don't disappear into the "no data" empty state. */}
+      {reports.map(rep => (
+        <SmartReportBanner key={`${rep.cluster}/${rep.node}`} report={rep} />
+      ))}
 
       {Object.entries(disksByNode).map(([node, nodeDisks]) => (
         <div key={node} className="mb-6">
@@ -305,8 +364,12 @@ function SmartPanel() {
         </div>
       ))}
 
-      {disks.length === 0 && (
-        <div className="text-gray-500">No disk SMART data available.</div>
+      {disks.length === 0 && reports.length === 0 && (
+        <div className="text-gray-500">
+          No disk SMART data available. Deploy <code>pve-agent</code> to a node
+          (with <code>include_smart: true</code>) or configure SSH access from
+          pCenter to your PVE nodes.
+        </div>
       )}
     </div>
   );

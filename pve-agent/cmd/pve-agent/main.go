@@ -48,8 +48,19 @@ func main() {
 		cfg.Node.Cluster,
 	)
 
+	// Create SMART collector if enabled. Runs as its own goroutine on a
+	// slower interval (default 300s) — see SmartCollector docs.
+	var smartColl *collector.SmartCollector
+	if cfg.Collection.IncludeSmart {
+		smartColl = collector.NewSmartCollector(
+			cfg.Node.Name,
+			cfg.Node.Cluster,
+			time.Duration(cfg.Collection.SmartInterval)*time.Second,
+		)
+	}
+
 	// Create collector
-	coll := collector.NewCollector(cfg, wsClient)
+	coll := collector.NewCollector(cfg, wsClient, smartColl)
 
 	// Create executor for handling commands
 	exec := executor.NewExecutor(coll.API())
@@ -86,6 +97,11 @@ func main() {
 
 	// Start collector
 	go coll.Start(ctx)
+
+	// Start SMART collector if configured
+	if smartColl != nil {
+		go smartColl.Start(ctx)
+	}
 
 	// Wait for shutdown signal
 	sig := <-sigCh

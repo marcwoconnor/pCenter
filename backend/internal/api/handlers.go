@@ -1362,31 +1362,85 @@ func (h *Handler) GetClusterCephCrushMap(w http.ResponseWriter, r *http.Request)
 	_, _ = w.Write([]byte(out))
 }
 
-// GetSmart returns SMART data for all disks across all nodes
-func (h *Handler) GetSmart(w http.ResponseWriter, r *http.Request) {
-	if h.poller == nil {
-		slog.Warn("SMART: poller is nil")
-		writeJSON(w, []pve.SmartDisk{})
-		return
-	}
-	allClients := h.poller.GetAllClients()
-	slog.Info("SMART: fetching data", "clusters", len(allClients))
+// SmartResponse is the /api/smart payload. Disks is the flat list of all
+// successfully-collected disks across all clusters (preserved for the
+// existing dashboard view). Reports gives the UI per-node observability:
+// when each node was last collected, by which path (agent or SSH), and
+// whether anything failed.
+type SmartResponse struct {
+	Disks   []pve.SmartDisk    `json:"disks"`
+	Reports []*pve.SmartReport `json:"reports"`
+}
 
-	var allDisks []pve.SmartDisk
-	for clusterName, clients := range allClients {
-		slog.Info("SMART: processing cluster", "cluster", clusterName, "nodes", len(clients))
-		for nodeName, client := range clients {
-			disks, err := client.GetSmartData(r.Context())
-			if err != nil {
-				slog.Error("SMART: failed to get data", "cluster", clusterName, "node", nodeName, "error", err)
-				continue
-			}
-			slog.Info("SMART: got disks", "cluster", clusterName, "node", nodeName, "disks", len(disks))
-			allDisks = append(allDisks, disks...)
+// GetSmart returns SMART data for all disks across all nodes.
+//
+// Lookup order per node:
+//  1. Agent-pushed report in the state store (preferred — no SSH required).
+//  2. SSH polling fallback via the poller's per-node clients (legacy path,
+//     still needed for clusters that haven't deployed pve-agent yet).
+//
+// Empty/missing collection is reflected in Reports so the UI can distinguish
+// "no data" from "agent connected, scan failed: smartctl: not installed".
+func (h *Handler) GetSmart(w http.ResponseWriter, r *http.Request) {
+	resp := &SmartResponse{
+		Disks:   []pve.SmartDisk{},
+		Reports: []*pve.SmartReport{},
+	}
+
+	// Track which (cluster,node) pairs we've satisfied from state so the
+	// SSH fallback only runs for nodes the agent isn't covering.
+	covered := map[string]struct{}{}
+
+	for _, clusterName := range h.store.GetClusterNames() {
+		cs, ok := h.store.GetCluster(clusterName)
+		if !ok {
+			continue
+		}
+		for _, rep := range cs.GetSmartReports() {
+			resp.Reports = append(resp.Reports, rep)
+			resp.Disks = append(resp.Disks, rep.Disks...)
+			covered[clusterName+"/"+rep.Node] = struct{}{}
 		}
 	}
 
-	writeJSON(w, allDisks)
+	// SSH fallback for nodes with no agent-pushed report. Skipped entirely
+	// in agent-only mode (h.poller == nil).
+	if h.poller != nil {
+		for clusterName, clients := range h.poller.GetAllClients() {
+			for nodeName, client := range clients {
+				if _, ok := covered[clusterName+"/"+nodeName]; ok {
+					continue
+				}
+				rep := collectSmartViaSSH(r.Context(), client, clusterName, nodeName)
+				resp.Reports = append(resp.Reports, rep)
+				resp.Disks = append(resp.Disks, rep.Disks...)
+			}
+		}
+	}
+
+	writeJSON(w, resp)
+}
+
+// collectSmartViaSSH wraps the legacy GetSmartData call in a SmartReport so
+// failures (e.g. SSH key missing on the target node) surface to the UI
+// instead of becoming silent empty arrays.
+func collectSmartViaSSH(ctx context.Context, client *pve.Client, cluster, node string) *pve.SmartReport {
+	start := time.Now()
+	rep := &pve.SmartReport{
+		Cluster:     cluster,
+		Node:        node,
+		Source:      "ssh",
+		CollectedAt: start,
+	}
+	disks, err := client.GetSmartData(ctx)
+	rep.DurationMs = time.Since(start).Milliseconds()
+	if err != nil {
+		rep.ScanError = err.Error()
+		slog.Warn("SMART SSH fallback failed", "cluster", cluster, "node", node, "error", err)
+		return rep
+	}
+	rep.Disks = disks
+	return rep
 }
 
 // --- Cluster-specific handlers ---

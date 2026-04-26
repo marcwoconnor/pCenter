@@ -1860,13 +1860,6 @@ func (c *Client) GetSmartData(ctx context.Context) ([]SmartDisk, error) {
 	}
 
 	var disks []SmartDisk
-	criticalAttrs := map[int]bool{
-		5:   true, // Reallocated_Sector_Ct
-		10:  true, // Spin_Retry_Count
-		196: true, // Reallocated_Event_Count
-		197: true, // Current_Pending_Sector
-		198: true, // Offline_Uncorrectable
-	}
 
 	for _, dev := range scanResult.Devices {
 		// Skip rbd devices and similar
@@ -1881,7 +1874,7 @@ func (c *Client) GetSmartData(ctx context.Context) ([]SmartDisk, error) {
 			continue
 		}
 
-		disk := parseSmartJSON(smartOutput, dev.Name, c.nodeName, criticalAttrs)
+		disk := ParseSmartJSON(smartOutput, dev.Name, c.nodeName)
 		if disk != nil {
 			disk.Cluster = c.clusterName
 			disks = append(disks, *disk)
@@ -1889,6 +1882,24 @@ func (c *Client) GetSmartData(ctx context.Context) ([]SmartDisk, error) {
 	}
 
 	return disks, nil
+}
+
+// CriticalSmartAttrs are SMART attribute IDs whose nonzero raw values flip
+// disk health from PASSED to WARNING. Single source of truth shared by the
+// SSH polling path (GetSmartData) and the agent-pushed path (hub).
+var CriticalSmartAttrs = map[int]bool{
+	5:   true, // Reallocated_Sector_Ct
+	10:  true, // Spin_Retry_Count
+	196: true, // Reallocated_Event_Count
+	197: true, // Current_Pending_Sector
+	198: true, // Offline_Uncorrectable
+}
+
+// ParseSmartJSON parses one `smartctl -j -a` output into a SmartDisk using
+// the canonical critical-attribute set. Returns nil on parse failure;
+// callers should record a DeviceError when that happens.
+func ParseSmartJSON(jsonData, device, node string) *SmartDisk {
+	return parseSmartJSON(jsonData, device, node, CriticalSmartAttrs)
 }
 
 // parseSmartJSON parses smartctl JSON output into a SmartDisk

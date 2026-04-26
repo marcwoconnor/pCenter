@@ -207,6 +207,26 @@ type StatusData struct {
 	Networks   []NetworkInterface `json:"networks,omitempty"`
 	Ceph       *CephStatus        `json:"ceph,omitempty"`
 	Metrics    *SystemMetrics     `json:"metrics,omitempty"`
+	Smart      *AgentSmartReport  `json:"smart,omitempty"`
+}
+
+// AgentSmartReport is the wire-format SMART payload from the agent. The
+// agent ships raw smartctl JSON per device so the backend stays the single
+// source of parsing truth (see pve.ParseSmartJSON).
+type AgentSmartReport struct {
+	Node        string              `json:"node"`
+	Cluster     string              `json:"cluster"`
+	CollectedAt int64               `json:"collected_at"`
+	DurationMs  int64               `json:"duration_ms"`
+	ScanError   string              `json:"scan_error,omitempty"`
+	Scrapes     []AgentSmartScrape  `json:"scrapes"`
+}
+
+type AgentSmartScrape struct {
+	Device  string `json:"device"`
+	Type    string `json:"type"`
+	RawJSON string `json:"raw_json,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // NetworkInterface from agent
@@ -572,6 +592,13 @@ func (a *AgentConn) handleStatus(data json.RawMessage) {
 		cs.UpdateNetworkInterfaces(status.Node, networks)
 	}
 
+	// SMART report — parse raw smartctl JSON the agent forwarded. The
+	// backend owns parsing (CriticalSmartAttrs etc.) so improvements ship
+	// without an agent rebuild.
+	if status.Smart != nil {
+		cs.SetSmartReport(status.Node, convertAgentSmart(status.Smart))
+	}
+
 	slog.Debug("agent status received",
 		"node", status.Node,
 		"vms", len(vms),
@@ -582,6 +609,40 @@ func (a *AgentConn) handleStatus(data json.RawMessage) {
 	if a.hub.onChange != nil {
 		a.hub.onChange()
 	}
+}
+
+// convertAgentSmart turns the agent wire-format report into a domain
+// pve.SmartReport. Per-device parse failures become DeviceError entries
+// rather than dropped silently — the UI surfaces the count.
+func convertAgentSmart(in *AgentSmartReport) *pve.SmartReport {
+	out := &pve.SmartReport{
+		Cluster:     in.Cluster,
+		Node:        in.Node,
+		Source:      "agent",
+		CollectedAt: time.Unix(in.CollectedAt, 0),
+		DurationMs:  in.DurationMs,
+		ScanError:   in.ScanError,
+	}
+	for _, sc := range in.Scrapes {
+		if sc.Error != "" {
+			out.DeviceErrors = append(out.DeviceErrors, pve.DeviceError{
+				Device: sc.Device,
+				Error:  sc.Error,
+			})
+			continue
+		}
+		disk := pve.ParseSmartJSON(sc.RawJSON, sc.Device, in.Node)
+		if disk == nil {
+			out.DeviceErrors = append(out.DeviceErrors, pve.DeviceError{
+				Device: sc.Device,
+				Error:  "unparseable smartctl JSON",
+			})
+			continue
+		}
+		disk.Cluster = in.Cluster
+		out.Disks = append(out.Disks, *disk)
+	}
+	return out
 }
 
 func (h *Hub) register(a *AgentConn) {

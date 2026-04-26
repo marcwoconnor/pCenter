@@ -614,6 +614,27 @@ export interface SmartDisk {
   nvme_health?: NVMeHealth;
 }
 
+export interface SmartDeviceError {
+  device: string;
+  error: string;
+}
+
+export interface SmartReport {
+  cluster: string;
+  node: string;
+  source: 'agent' | 'ssh';
+  collected_at: string; // ISO timestamp
+  duration_ms: number;
+  scan_error?: string;
+  disks: SmartDisk[];
+  device_errors?: SmartDeviceError[];
+}
+
+export interface SmartResponse {
+  disks: SmartDisk[];
+  reports: SmartReport[];
+}
+
 // Maintenance mode types
 
 export interface QDeviceStatus {

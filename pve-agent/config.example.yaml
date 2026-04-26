@@ -9,6 +9,7 @@ node:
   cluster: "homelab"  # Cluster name this node belongs to
 
 collection:
-  interval: 5        # Status update interval in seconds
-  include_smart: false  # Include SMART disk data
-  include_ceph: true    # Include Ceph status
+  interval: 5             # Status update interval in seconds
+  include_smart: false    # Include SMART disk data
+  include_ceph: true      # Include Ceph status
+  smart_interval: 300     # SMART scan interval in seconds (slow loop, default 5min)

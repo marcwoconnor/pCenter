@@ -436,6 +436,28 @@ type SmartAttribute struct {
 	Critical   bool   `json:"critical"` // highlighted as critical for health
 }
 
+// SmartReport is a per-node SMART collection result, regardless of source.
+// Disks contains successfully-parsed devices; DeviceErrors lists devices the
+// collector tried but failed on. ScanError is set when the smartctl --scan
+// step itself failed (e.g. smartctl not installed). Source distinguishes
+// agent push from the legacy SSH polling fallback so the UI can surface it.
+type SmartReport struct {
+	Cluster      string         `json:"cluster"`
+	Node         string         `json:"node"`
+	Source       string         `json:"source"`            // "agent" | "ssh"
+	CollectedAt  time.Time      `json:"collected_at"`
+	DurationMs   int64          `json:"duration_ms"`
+	ScanError    string         `json:"scan_error,omitempty"`
+	Disks        []SmartDisk    `json:"disks"`
+	DeviceErrors []DeviceError  `json:"device_errors,omitempty"`
+}
+
+// DeviceError is a per-device collection failure.
+type DeviceError struct {
+	Device string `json:"device"`
+	Error  string `json:"error"`
+}
+
 // NVMeHealth contains NVMe-specific health data
 type NVMeHealth struct {
 	CriticalWarning     int   `json:"critical_warning"`

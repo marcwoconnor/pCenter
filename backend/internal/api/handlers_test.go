@@ -581,3 +581,52 @@ func TestGetClusterCeph_ReturnsTopology(t *testing.T) {
 		t.Error("NoOut flag not preserved")
 	}
 }
+
+// TestGetSmart_FromState verifies the handler returns SmartReports stored in
+// the state cache (the agent-push path) — without needing a poller.
+func TestGetSmart_FromState(t *testing.T) {
+	h, store := newTestHandler(t)
+
+	cs := store.GetOrCreateCluster("test")
+	cs.SetSmartReport("pve01", &pve.SmartReport{
+		Source: "agent",
+		Disks: []pve.SmartDisk{
+			{Node: "pve01", Device: "/dev/sda", Health: "PASSED"},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/smart", nil)
+	rec := httptest.NewRecorder()
+	h.GetSmart(rec, req)
+
+	var got SmartResponse
+	decodeJSON(t, rec, &got)
+
+	if len(got.Reports) != 1 {
+		t.Fatalf("Reports = %d, want 1", len(got.Reports))
+	}
+	if got.Reports[0].Source != "agent" || got.Reports[0].Node != "pve01" {
+		t.Errorf("Report metadata wrong: %+v", got.Reports[0])
+	}
+	if len(got.Disks) != 1 || got.Disks[0].Device != "/dev/sda" {
+		t.Errorf("Disks not flattened from reports: %+v", got.Disks)
+	}
+}
+
+// TestGetSmart_EmptyWhenNoState verifies the handler returns a well-formed
+// empty response (not nil arrays) when nothing's collected — this is the
+// shape the frontend depends on after the agent-native rewrite.
+func TestGetSmart_EmptyWhenNoState(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/smart", nil)
+	rec := httptest.NewRecorder()
+	h.GetSmart(rec, req)
+
+	body := rec.Body.String()
+	// JSON arrays must be [] not null — frontend does .reports.map() and
+	// .disks.length without null guards on these specific fields.
+	if !strings.Contains(body, `"disks":[]`) || !strings.Contains(body, `"reports":[]`) {
+		t.Errorf("expected empty arrays not null; got: %s", body)
+	}
+}

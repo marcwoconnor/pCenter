@@ -42,6 +42,31 @@ type StatusData struct {
 	Networks   []NetworkInterface `json:"networks,omitempty"`
 	Ceph       *CephStatus        `json:"ceph,omitempty"`
 	Metrics    *SystemMetrics     `json:"metrics,omitempty"`
+	Smart      *SmartReport       `json:"smart,omitempty"`
+}
+
+// SmartReport carries the most recent SMART scan result for the node. The
+// agent collects smartctl output on a slower interval than the main status
+// push and attaches the cached result here. Empty when the agent has not
+// completed its first scan yet, or when include_smart is disabled.
+type SmartReport struct {
+	Node        string        `json:"node"`
+	Cluster     string        `json:"cluster"`
+	CollectedAt int64         `json:"collected_at"`         // unix seconds
+	DurationMs  int64         `json:"duration_ms"`
+	ScanError   string        `json:"scan_error,omitempty"` // smartctl --scan failed entirely
+	Scrapes     []SmartScrape `json:"scrapes"`
+}
+
+// SmartScrape is one device's smartctl output. RawJSON is the unmodified
+// `smartctl -j -a` output so the backend stays the single source of parsing
+// truth. Error is set when smartctl failed to produce parseable JSON for
+// this device.
+type SmartScrape struct {
+	Device  string `json:"device"`
+	Type    string `json:"type"`
+	RawJSON string `json:"raw_json,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // NetworkInterface represents a network interface on a node

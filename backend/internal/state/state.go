@@ -42,6 +42,10 @@ type ClusterStore struct {
 	haStatus       *pve.HAStatus
 	qdeviceStatus  *pve.QDeviceStatus
 
+	// SMART reports per node — populated by either the agent push path or
+	// the legacy SSH polling path; the report's Source field disambiguates.
+	smartReports map[string]*pve.SmartReport // keyed by node name
+
 	// Network data
 	networkInterfaces map[string][]pve.NetworkInterface // keyed by node name
 	sdnZones          []pve.SDNZone                     // cluster-wide
@@ -115,6 +119,7 @@ func (s *Store) GetOrCreateCluster(name string) *ClusterStore {
 		ceph:              make(map[string]*pve.CephStatus),
 		nodeCerts:         make(map[string][]pve.NodeCertificate),
 		networkInterfaces: make(map[string][]pve.NetworkInterface),
+		smartReports:      make(map[string]*pve.SmartReport),
 		lastUpdate:        make(map[string]time.Time),
 		errors:            make(map[string]error),
 	}
@@ -415,6 +420,33 @@ func (cs *ClusterStore) UpdateNetworkInterfaces(nodeName string, ifaces []pve.Ne
 		ifaces[i].Node = nodeName
 	}
 	cs.networkInterfaces[nodeName] = ifaces
+}
+
+// SetSmartReport records the latest SMART scan result for a node. Pass nil
+// to clear (e.g. when an agent disconnects and we want to drop stale data,
+// though current behavior is to keep the last known report so the UI can
+// show "last collected 12h ago" rather than going blank).
+func (cs *ClusterStore) SetSmartReport(nodeName string, report *pve.SmartReport) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if report == nil {
+		delete(cs.smartReports, nodeName)
+		return
+	}
+	report.Cluster = cs.name
+	report.Node = nodeName
+	cs.smartReports[nodeName] = report
+}
+
+// GetSmartReports returns a copy of all SMART reports for this cluster.
+func (cs *ClusterStore) GetSmartReports() []*pve.SmartReport {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	out := make([]*pve.SmartReport, 0, len(cs.smartReports))
+	for _, r := range cs.smartReports {
+		out = append(out, r)
+	}
+	return out
 }
 
 // SetSDNData updates all SDN data for the cluster

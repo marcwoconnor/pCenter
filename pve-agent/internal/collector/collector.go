@@ -15,15 +15,18 @@ type Collector struct {
 	cfg      *config.Config
 	client   *client.Client
 	api      *PVEClient
+	smart    *SmartCollector // nil when include_smart is disabled
 	interval time.Duration
 }
 
-// NewCollector creates a new collector
-func NewCollector(cfg *config.Config, wsClient *client.Client) *Collector {
+// NewCollector creates a new collector. The optional SmartCollector is
+// constructed only when collection.include_smart is true; pass nil otherwise.
+func NewCollector(cfg *config.Config, wsClient *client.Client, smart *SmartCollector) *Collector {
 	return &Collector{
 		cfg:      cfg,
 		client:   wsClient,
 		api:      NewPVEClient(cfg.Node.Name, cfg.PVE.TokenID, cfg.PVE.TokenSecret),
+		smart:    smart,
 		interval: time.Duration(cfg.Collection.Interval) * time.Second,
 	}
 }
@@ -113,6 +116,15 @@ func (c *Collector) collect(ctx context.Context) {
 		slog.Error("failed to get system metrics", "error", err)
 	} else {
 		status.Metrics = metrics
+	}
+
+	// Attach cached SMART report if the slow scanner has produced one yet.
+	// Empty cache = omit (omitempty); backend distinguishes "not collected
+	// yet" from "collected, no disks" via the report's CollectedAt field.
+	if c.smart != nil {
+		if rep := c.smart.Latest(); rep != nil {
+			status.Smart = rep
+		}
 	}
 
 	// Send to pCenter

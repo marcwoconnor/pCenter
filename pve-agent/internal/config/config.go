@@ -34,9 +34,10 @@ type NodeConfig struct {
 
 // CollectionConfig holds collection settings
 type CollectionConfig struct {
-	Interval     int  `yaml:"interval"`      // Collection interval in seconds
-	IncludeSmart bool `yaml:"include_smart"` // Include SMART disk data
-	IncludeCeph  bool `yaml:"include_ceph"`  // Include Ceph status
+	Interval      int  `yaml:"interval"`        // Status push interval in seconds
+	IncludeSmart  bool `yaml:"include_smart"`   // Include SMART disk data
+	IncludeCeph   bool `yaml:"include_ceph"`    // Include Ceph status
+	SmartInterval int  `yaml:"smart_interval"`  // SMART scan interval in seconds (default 300)
 }
 
 // Load reads config from a YAML file
@@ -49,14 +50,21 @@ func Load(path string) (*Config, error) {
 	cfg := &Config{
 		// Defaults
 		Collection: CollectionConfig{
-			Interval:     5,
-			IncludeSmart: false,
-			IncludeCeph:  true,
+			Interval:      5,
+			IncludeSmart:  false,
+			IncludeCeph:   true,
+			SmartInterval: 300,
 		},
 	}
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, err
+	}
+
+	// yaml.Unmarshal zeroes the field when absent — re-apply default after
+	// load so an existing config without smart_interval still gets 300s.
+	if cfg.Collection.SmartInterval == 0 {
+		cfg.Collection.SmartInterval = 300
 	}
 
 	// Auto-detect node name if not set
