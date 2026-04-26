@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+### Fixed
+- **`/ceph` page randomly empty when one node's storage network is broken.** The poller's `fetchCephTopology` picked the first node responding to `/ceph/status`, but ran the whole probe loop against a single 15 s deadline. If the first-iterated client (map order is non-deterministic) was a node whose storage NIC was wedged so `ceph -s` blocked waiting on unreachable MONs, that one node burned the whole budget and the loop fell out without ever trying the healthy peers — `SetCephTopology(nil)` blanks the page, so the OSDs/MONs sometimes appear and sometimes don't depending on poll luck. Added a tight per-call timeout (3 s) for each probe so a hung node fails fast and the next client gets a fair shot inside the same 15 s overall window.
+
 ## v0.1.24 — 2026-04-25
 
 ### Fixed

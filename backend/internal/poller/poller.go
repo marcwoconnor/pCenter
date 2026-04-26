@@ -982,11 +982,19 @@ func (cp *ClusterPoller) fetchCephTopology(ctx context.Context) {
 	defer cancel()
 
 	// Pick a node that responds to /ceph/status — that's our signal Ceph is
-	// installed and the node is in quorum. Try each client in turn.
+	// installed and the node is in quorum. Try each client in turn with a
+	// tight per-call budget; a single hung node (e.g. one whose storage NIC
+	// is wedged so `ceph -s` blocks waiting on MON quorum it can't reach)
+	// must NOT eat the whole 15 s budget and starve healthy peers — map
+	// iteration order is non-deterministic, so without per-call timeouts
+	// the topology view randomly blanks for users with one bad node.
+	const probeTimeout = 3 * time.Second
 	var probe *pve.Client
 	var status *pve.CephStatus
 	for _, client := range clients {
-		s, err := client.GetCephStatus(fetchCtx)
+		probeCtx, probeCancel := context.WithTimeout(fetchCtx, probeTimeout)
+		s, err := client.GetCephStatus(probeCtx)
+		probeCancel()
 		if err != nil || s == nil {
 			continue
 		}
