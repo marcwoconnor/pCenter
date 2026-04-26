@@ -152,11 +152,21 @@ func (m *Manager) runInstallPackagesPhase(
 			// failures looked like successes (#GH issue context: the
 			// install_packages step reported success while no daemon
 			// packages were ever placed on the node).
+			// Install both `ceph` (the meta-package that pulls daemons —
+			// ceph-mon, ceph-osd, ceph-mgr, ceph-mds) AND `ceph-volume`
+			// explicitly. ceph-volume is the LVM-based OSD provisioning
+			// tool that `pveceph osd create` shells out to; without it
+			// you can complete the install but never bring up an OSD.
+			// It Depends on ceph-osd (not the reverse), so the meta-pkg
+			// alone doesn't pull it under --no-install-recommends.
+			//
+			// Verifying both binaries afterward catches a partial install
+			// before the wizard advances and leaves a useless cluster.
 			cmd := "set -o pipefail; " +
 				"pveceph install --repository no-subscription 2>&1 | tail -200; " +
 				"DEBIAN_FRONTEND=noninteractive apt-get install -y " +
-				"--no-install-recommends --allow-downgrades ceph 2>&1 | tail -50; " +
-				"test -x /usr/bin/ceph-mon"
+				"--no-install-recommends --allow-downgrades ceph ceph-volume 2>&1 | tail -50; " +
+				"test -x /usr/bin/ceph-mon && test -x /usr/sbin/ceph-volume"
 			out, err := pve.RunSSHCommand(cmdCtx, host, cmd)
 			resultsMu.Lock()
 			results[node] = err
