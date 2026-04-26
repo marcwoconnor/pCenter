@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+## v0.1.22 — 2026-04-25
+
 ### Added
 - **Add OSD UI on the Ceph page.** The backend already exposed `POST /api/clusters/{cluster}/nodes/{node}/ceph/osd` (since v0.1.16) but no frontend exposed it — the OSDs tab was view-only with Out / In / Scrub / Destroy actions on existing OSDs and a bare "No OSDs." empty state. New `+ Add OSD` button opens a dialog with node selector, block-device path, optional CRUSH device-class override, optional dm-crypt encryption, and an `<details>` "Advanced" section for separate BlueStore DB / WAL devices. The empty state now points users at the button instead of dead-ending.
 
