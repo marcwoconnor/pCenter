@@ -1286,7 +1286,7 @@ func flattenCephOSDTree(node *CephOSDTreeNode, currentHost string, out *[]CephOS
 	}
 	if node.Type == "osd" {
 		*out = append(*out, CephOSD{
-			ID:          node.ID,
+			ID:          int(node.ID),
 			Name:        node.Name,
 			Type:        node.Type,
 			Host:        host,
