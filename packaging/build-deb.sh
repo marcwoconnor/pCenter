@@ -168,6 +168,16 @@ cat > "${PKG_DIR}/DEBIAN/postinst" << 'POST'
 #!/bin/bash
 set -e
 
+# postinst is invoked with "configure <old-version>" on both fresh install
+# and upgrade. We branch on $2 (the old version) to decide whether to start
+# (fresh install — wait for the operator to configure) or restart
+# (upgrade — the prerm stopped the service before the binary was swapped
+# and we need to bring it back). #55.
+FRESH_INSTALL=0
+if [ -z "${2:-}" ]; then
+    FRESH_INSTALL=1
+fi
+
 # Create symlink
 ln -sf /opt/pcenter/pcenter /usr/local/bin/pcenter
 
@@ -194,25 +204,46 @@ chmod 750 /opt/pcenter/data
 # Reload systemd
 systemctl daemon-reload
 
-# Enable service (but don't start — user needs to configure first)
+# Enable service so it starts on boot
 systemctl enable pcenter 2>/dev/null || true
+
+# On upgrade: restart the service so the new binary takes over. The prerm
+# stopped the old process; without an explicit restart here the service
+# would stay inactive until the operator intervened — #55.
+# Guarded by is-enabled so an operator who deliberately disabled the service
+# before the upgrade doesn't get it surprise-started again.
+# On fresh install: leave it stopped so the operator can register a user
+# and add hosts via the UI before the dashboard goes live.
+if [ "$FRESH_INSTALL" = "0" ]; then
+    if systemctl is-enabled pcenter.service >/dev/null 2>&1; then
+        systemctl restart pcenter.service 2>/dev/null || true
+    fi
+fi
 
 echo ""
 echo "=========================================="
-echo "  pCenter installed successfully!"
-echo "=========================================="
-echo ""
-echo "  Next steps:"
-echo "  1. Start pCenter:"
-echo "       systemctl start pcenter"
-echo ""
-echo "  2. Open http://$(hostname -I | awk '{print $1}'):8080"
-echo ""
-echo "  3. Register the first user (becomes admin)."
-echo ""
-echo "  4. In the UI, click 'Add a host' and enter"
-echo "     your Proxmox address + root password."
-echo "     An API token is created for you."
+if [ "$FRESH_INSTALL" = "1" ]; then
+    echo "  pCenter installed successfully!"
+    echo "=========================================="
+    echo ""
+    echo "  Next steps:"
+    echo "  1. Start pCenter:"
+    echo "       systemctl start pcenter"
+    echo ""
+    echo "  2. Open http://$(hostname -I | awk '{print $1}'):8080"
+    echo ""
+    echo "  3. Register the first user (becomes admin)."
+    echo ""
+    echo "  4. In the UI, click 'Add a host' and enter"
+    echo "     your Proxmox address + root password."
+    echo "     An API token is created for you."
+else
+    echo "  pCenter upgraded successfully!"
+    echo "=========================================="
+    echo ""
+    echo "  Service restarted automatically."
+    echo "  Check status: systemctl status pcenter"
+fi
 echo ""
 echo "=========================================="
 
