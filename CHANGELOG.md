@@ -6,6 +6,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+## v0.1.28 — 2026-04-26
+
+### Added
+- **Disk Health (SMART) collected by pve-agent.** Previously the `/api/smart` handler shelled out from the pcenter LXC to every PVE node via SSH on every page load, then ran `smartctl --scan` + `smartctl -a` per device — an SSH key issue on any single node turned the entire Disk Health view into a silent empty list. New path: pve-agent runs `smartctl` locally on a slow loop (default 300 s, configurable via `collection.smart_interval`, gated by the existing `collection.include_smart`) and ships the raw smartctl JSON over the existing WebSocket inside `StatusData.Smart`. Backend hub parses it via the canonical `pve.ParseSmartJSON` (single source of truth — also used by the SSH fallback) and stores a `SmartReport` per node. Handler now serves agent-pushed data first, falling back to per-node SSH only for clusters where no agent is connected (so existing deployments keep working).
+
+### Changed
+- **`/api/smart` response shape**: was `[]SmartDisk`, is now `{ disks: [], reports: [] }`. The flat `disks` array is preserved for the Disk Health grid; the new `reports` array carries per-node observability (source = `agent` | `ssh`, `collected_at`, `duration_ms`, `scan_error`, `device_errors`) so the UI can show "pve04 · via agent · 6 disks · 2m ago" instead of leaving the user to guess why data is missing. Frontend renders a status banner per node above the disk list, and per-device collection failures (e.g. `smartctl: not installed`) now surface in yellow rather than disappearing into the empty state.
+
+### Fixed
+- **Silent SMART/vmstat outage when pcenter's ed25519 pubkey wasn't installed on a PVE node.** The Go-side `RunSSHCommand` pins `IdentitiesOnly=yes -i id_ed25519`, so any node missing that key in `authorized_keys` failed every shell-out — and the SMART handler swallowed errors via `continue`, masking it as "no data". Documented setup expectation; agent path removes the dependency entirely for SMART. (Operator action — install pcenter's pubkey on each node — still required for the SSH fallback path and other SSH-backed pollers like vmstat. Tracked separately for postinst automation.)
+
 ## v0.1.27 — 2026-04-26
 
 ### Performance
