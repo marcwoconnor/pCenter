@@ -348,32 +348,32 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 | 10 | **Power schedules** | Low | Medium | ✅ Done (existing `power_on`/`power_off` scheduler tasks) |
 
 #### 6. Template Library
-- [ ] Convert VM/CT to template (Proxmox API `POST .../template`)
-- [ ] Template listing with metadata (OS, description, size)
-- [ ] Clone from template with customization (name, resources)
-- [ ] Template categories and search
-- [ ] Cross-cluster template visibility
+- [x] Convert VM/CT to template (Proxmox API `POST .../template`)
+- [x] Template listing with metadata (OS, description, size)
+- [x] Clone from template with customization (name, resources)
+- [x] Template categories and search
+- [x] Cross-cluster template visibility
 
 #### 7. Backup Management
-- [ ] Proxmox Backup Server connection config
-- [ ] Backup job scheduling (vzdump wrapper)
-- [ ] Backup retention policies
-- [ ] Backup listing and browsing
-- [ ] Restore from backup UI
-- [ ] Backup job status and history
+- [ ] Proxmox Backup Server connection config (tracked as #71)
+- [x] Backup job scheduling (vzdump wrapper)
+- [x] Backup retention policies
+- [x] Backup listing and browsing
+- [ ] Restore from backup UI (deferred — separate UX concern, target VMID + overwrite semantics)
+- [x] Backup job status and history
 
 #### 8. Resource Pools
-- [ ] List Proxmox pools (`GET /pools`)
-- [ ] Create/edit/delete pools
-- [ ] Assign VMs/CTs to pools
-- [ ] Pool resource limits display
-- [ ] Pool hierarchy (nested pools)
+- [x] List Proxmox pools (`GET /pools`)
+- [x] Create/edit/delete pools
+- [x] Assign VMs/CTs to pools
+- [x] Pool resource limits display
+- [x] Pool hierarchy (nested pools)
 
 #### 9-10. Scheduled Snapshots & Power Schedules
-- [ ] Snapshot schedule: target, frequency, retention count
-- [ ] Auto-delete old snapshots beyond retention
-- [ ] Power schedule: start/stop times per day of week
-- [ ] Holiday/exception handling
+- [x] Snapshot schedule: target, frequency, retention count
+- [x] Auto-delete old snapshots beyond retention
+- [x] Power schedule: start/stop times per day of week
+- [ ] Holiday/exception handling (deferred — out of scope; cron-driven schedules cover the common case)
 
 ---
 
@@ -381,12 +381,14 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 
 | # | Feature | Effort | Value | Dependencies |
 |---|---------|--------|-------|--------------|
-| 11 | **LDAP/AD integration** | High | High | Extends auth |
-| 12 | **Storage vMotion** | High | Medium | Proxmox API support |
-| 13 | **Content library** | Medium | Medium | Phase 2 templates |
-| 14 | **Webhooks** | Medium | Medium | Activity system |
-| 15 | **OpenAPI spec** | Low | Medium | Documentation |
-| 16 | **Cross-cluster migration** | High | Medium | Shared storage required |
+| 11 | **LDAP/AD integration** | High | High | Extends auth (tracked as #29) |
+| 12 | **Storage vMotion** | High | Medium | ✅ Done (per-disk + per-volume; #28) |
+| 13 | **Content library** | Medium | Medium | ✅ Done (Phase 2 #6) |
+| 14 | **Webhooks** | Medium | Medium | ✅ Done (HMAC, retry, wildcards, auto-disable) |
+| 15 | **OpenAPI spec** | Low | Medium | ✅ Done (hand-authored, drift-test guarded; #26 + #35) |
+| 16 | **Cross-cluster migration** | High | Medium | Shared storage required (tracked as #30) |
+| — | **Ceph full lifecycle** | High | High | ✅ Done (install/day-2/CephFS/destroy via `/ceph` page) |
+| — | **PVE cluster formation** | Medium | High | ✅ Done (Create + Add-Member wizards; see `docs/PVE_CLUSTER_FORMATION.md`) |
 
 #### 11. LDAP/AD Integration
 - [ ] LDAP connection config (server, base DN, bind user)
@@ -396,25 +398,31 @@ Comparison of VMware vCenter Server features vs pCenter current implementation, 
 - [ ] Mixed auth (local + LDAP users)
 
 #### 12. Storage vMotion
-- [ ] API for online disk migration between storage pools
-- [ ] Progress tracking via UPID
-- [ ] Storage load balancing recommendations
+- [x] API for online disk migration between storage pools (`POST /clusters/{c}/vms/{id}/disk/move`)
+- [x] LXC volume move (`POST /clusters/{c}/containers/{id}/volume/move` — offline; PVE limitation)
+- [x] Progress tracking via UPID (`GET /api/disk-moves`)
+- [x] Frontend "Move Storage…" dialog with disk picker, target storage filter, format conversion
+- [ ] Storage load balancing recommendations (deferred — DRS-style automation, separate scope)
 
 #### 13. Content Library
-- [ ] Centralized ISO/template/OVA repository
-- [ ] Sync templates across clusters
-- [ ] Version tracking
+- [x] Centralized ISO/template/OVA repository
+- [x] Sync templates across clusters
+- [x] Version tracking
 
 #### 14. Webhooks
-- [ ] `webhook_endpoints` table: URL, secret, event filters
-- [ ] Fire webhooks from activity log events
-- [ ] Retry with backoff on failure
-- [ ] Webhook test/ping endpoint
+- [x] `webhook_endpoints` table: URL, secret, event filters
+- [x] Fire webhooks from activity log events
+- [x] Retry with backoff on failure (5s / 30s / 2min)
+- [x] Webhook test/ping endpoint
+- [x] Per-component wildcard event filters (`vm.*`, `*.migrate`, `*.*`)
+- [x] Auto-disable after consecutive failures (10-strike threshold)
+- [x] HMAC-SHA256 signed deliveries (Stripe-style `t=<unix>,v1=<hex>`)
 
 #### 15. OpenAPI Spec
-- [ ] Generate OpenAPI 3.0 spec from route definitions
-- [ ] Swagger UI endpoint (`/api/docs`)
-- [ ] Keep spec in sync with code
+- [x] Hand-authored OpenAPI 3.0 spec (embedded at compile time)
+- [x] Swagger UI endpoint (`/api/docs`) — assets vendored for air-gap deploys
+- [x] Keep spec in sync with code (CI test: `TestOpenAPINoDrift` against an explicit allowlist)
+- [ ] Expand spec to remaining route groups (tracked as #32 — currently 18/192 documented; allowlist tracks the rest)
 
 ---
 

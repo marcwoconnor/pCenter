@@ -43,6 +43,9 @@ Full CRUD: create, start, stop, shutdown, reboot, clone, migrate, delete. Edit h
 ### Live Migration
 Online and offline migration between nodes. Target node selection with compatibility checks. Real-time progress tracking via Proxmox UPID task system.
 
+### Storage vMotion
+Move a VM's disk (or LXC volume) between storage pools without shutting down — VMware-style storage migration via Proxmox `move_disk` / `move_volume`. Per-disk source/target picker, optional delete-source, format conversion (raw/qcow2/vmdk) for VMs. VM moves are online; LXC volume moves require the container to be stopped (PVE limitation, not pCenter's). Progress tracked through the same UPID/task system as host migration.
+
 ### Snapshots
 Create, rollback, and delete snapshots for VMs and containers. Tree visualization shows snapshot parent/child relationships. VM snapshots support optional RAM state capture.
 
@@ -55,8 +58,27 @@ Automatic load imbalance detection across cluster nodes. Generates migration rec
 ### High Availability
 Enable/disable HA per VM or container. Configure recovery policies (max restart, max relocate). HA status badges throughout the UI. Quorum and QDevice monitoring.
 
-### Storage & Ceph
-Browse storage pools and content (ISOs, templates, images, backups). Upload files to storage. SMART disk health monitoring with temperature tracking. Ceph cluster health panel with whitelisted repair commands.
+### Storage
+Browse storage pools and content (ISOs, templates, images, backups). Upload files to storage. SMART disk health monitoring with temperature tracking.
+
+### Ceph — Full Lifecycle Management
+A dedicated `/ceph` page covers the entire Ceph day-0 → day-N surface, no `pveceph` shell required:
+
+- **Install wizard** — three-step flow (configure → preflight blocker check → live job poll) installs Ceph on every cluster node, initializes the cluster, creates the first MON + MGR, and waits for `HEALTH_OK`.
+- **Day-2 dashboard** — seven tabs covering Status, OSDs, Pools, Monitors, CephFS, CRUSH, and OSD flags. 30-second auto-refresh + manual reload. Cluster picker is URL-driven, deep-linkable.
+- **OSD lifecycle** — add OSDs with optional separate BlueStore DB/WAL devices, dm-crypt encryption, CRUSH device-class override. Out / In / Scrub / Destroy on existing OSDs.
+- **MON / MGR / MDS lifecycle** — create and destroy daemons per node, multi-NIC MON address support, MDS hot-standby option.
+- **Pool CRUD** — size/min_size, pg_autoscale_mode, application tag, CRUSH rule, with optional auto-create of matching pcenter storage entries (`add_storages`).
+- **CephFS lifecycle** — create the filesystem (PVE provisions matching `_data`/`_metadata` pools); destroy with optional pool + storage cleanup.
+- **CRUSH viewer** — read-only decompiled CRUSH map; editing intentionally out of scope.
+- **OSD flag toggles** — `noout`, `noin`, `noup`, `nodown`, `nobackfill`, `norebalance`, `norecover`, `noscrub`, `nodeep-scrub`, `pause` via an explicit allowlist.
+- **Destroy / purge** — typed-confirmation flow under a "Danger zone" section. Orchestrates noout → CephFS removal → pool removal → daemon teardown → `pveceph purge` per node. Continue-past-failure semantics so a half-purge can be cleaned up.
+
+### Cluster Formation & Joining
+Two wizards under datacenter and cluster context menus turn standalone Proxmox hosts into Corosync-backed clusters via Proxmox's own `/cluster/config` endpoints — no `pvecm` shell:
+
+- **Create Proxmox Cluster** — promote one or more standalone hosts into a new cluster. Per-host preflight (reachable, no guests on joiners, not already clustered, PVE major-version homogeneity), live progress, fail-fast with embedded recovery commands when a half-formed `corosync.conf` needs cleanup.
+- **Add Member Node** — join a standalone host into an existing managed cluster. Inherits the cluster's shared API token (rather than recreating one and breaking other members). Re-discovery is forced post-join so the new node is immediately visible to monitoring.
 
 ### Networking
 Network interface listing per node. SDN zones, VNets, and subnets management. Network topology visualization showing bridges, bonds, and VLANs.
@@ -85,6 +107,12 @@ Safe node maintenance with preflight checks (storage, HA, quorum). Automated gue
 
 ### Real-Time Updates
 WebSocket pushes state changes to the browser instantly. No polling from the frontend — updates appear the moment VMs start, stop, migrate, or metrics change.
+
+### Outbound Webhooks
+Fire HTTP POSTs to external systems on activity events (`vm.create`, `ct.migrate`, `folder.rename`, …). HMAC-SHA256 signed (Stripe-style `t=<unix>,v1=<hex>` over `<unix>.<body>` — receivers can reject replays via timestamp skew). Per-component wildcards in event filters: `vm.*`, `*.migrate`, `*.*`. Retry with exponential backoff (5s / 30s / 2min) and auto-disable after 10 consecutive failures so a permanently-broken receiver stops generating noise. Secrets shown once at creation, encrypted at rest with the same key used for TOTP secrets.
+
+### API & Documentation
+Hand-authored OpenAPI 3.0 spec (`/api/openapi.yaml` and `/api/openapi.json`) plus interactive Swagger UI at `/api/docs`. Assets are vendored in the binary so the docs page works on air-gapped deploys with no outbound internet. A CI test (`TestOpenAPINoDrift`) fails any PR that adds a route without updating the spec or its allowlist, keeping docs in sync with code.
 
 ---
 
