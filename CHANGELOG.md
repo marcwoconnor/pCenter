@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+## v0.1.23 — 2026-04-25
+
 ### Fixed
 - **Add OSD failed with PVE 403 `Permission check failed (user != root@pam)` for non-root API tokens.** PVE hard-codes a `user == root@pam` check on the OSD-create REST endpoint specifically — even an API token belonging to root@pam can fail it depending on privilege-separation, and the rest of pcenter intentionally supports non-root tokens for security. Switched `CreateClusterCephOSD` to drive `pveceph osd create` over SSH (same root-key trust the install wizard uses for `pveceph install` / `init` / `purge`), bypassing PVE's REST-only check. Synchronous: returns when the CLI exits, which is what the dialog already awaits. Errors fold the last 20 lines of CLI output into the response so the UI gets something actionable instead of a bare exit code.
 
