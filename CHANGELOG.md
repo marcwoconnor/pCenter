@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+### Fixed
+- **Add OSD failed with `binary not installed: /usr/sbin/ceph-volume` even after a green install wizard.** `ceph-volume` is the LVM-based OSD provisioning tool `pveceph osd create` shells out to. It `Depends` on `ceph-osd` (not the reverse), so under `--no-install-recommends` the `ceph` meta-package never pulled it in. install_packages now installs `ceph` *and* `ceph-volume` explicitly, and the post-install probe checks for both `/usr/bin/ceph-mon` and `/usr/sbin/ceph-volume` — a missing OSD provisioner now fails install_packages instead of silently leaving an unusable cluster.
+
 ## v0.1.23 — 2026-04-25
 
 ### Fixed
