@@ -1039,6 +1039,34 @@ func (cp *ClusterPoller) fetchCephTopology(ctx context.Context) {
 		}
 	}
 
+	// Coalesce nil slices to empty slices. The TS topology types declare
+	// these as arrays (string[], CephOSD[], etc.) and the React tabs call
+	// .length / .filter / .map on every one. A Go nil slice marshals to
+	// JSON null, which crashes the page (white screen) the moment a
+	// freshly-installed cluster — MONs/MGRs but no OSDs/pools yet — gets
+	// rendered. Always emit [].
+	if mons == nil {
+		mons = []pve.CephMON{}
+	}
+	if mgrs == nil {
+		mgrs = []pve.CephMGR{}
+	}
+	if mdss == nil {
+		mdss = []pve.CephMDS{}
+	}
+	if osds == nil {
+		osds = []pve.CephOSD{}
+	}
+	if pools == nil {
+		pools = []pve.CephPool{}
+	}
+	if rules == nil {
+		rules = []pve.CephRule{}
+	}
+	if fs == nil {
+		fs = []pve.CephFSEntry{}
+	}
+
 	cp.clusterStore.SetCephTopology(&pve.CephCluster{
 		Status:      status,
 		MONs:        mons,
