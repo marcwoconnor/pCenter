@@ -5,6 +5,21 @@ set -euo pipefail
 # Usage: ./packaging/build-deb.sh [version]
 # Example: ./packaging/build-deb.sh 1.0.0
 
+# Preflight: Vite 7 requires Node 20+. On older Node it warns but keeps
+# going, silently emitting a degraded bundle (no per-route code-splitting),
+# which has shipped broken .debs before. Refuse rather than do that.
+# Required version is pinned in frontend/.nvmrc.
+node_major=$(node --version 2>/dev/null | sed -n 's/^v\([0-9][0-9]*\).*/\1/p')
+if [ -z "$node_major" ]; then
+    echo "error: 'node' not found on PATH. Install Node 20+ (see frontend/.nvmrc)." >&2
+    exit 2
+fi
+required_major=$(cat "$(dirname "$0")/../frontend/.nvmrc" | tr -d '[:space:]' | sed 's/^v//')
+if [ "$node_major" -lt "$required_major" ]; then
+    echo "error: Node ${node_major} detected; build requires Node ${required_major}+ (see frontend/.nvmrc). With nvm: 'nvm use' from frontend/." >&2
+    exit 2
+fi
+
 VERSION="${1:-$(git describe --tags --always 2>/dev/null || echo '0.0.1')}"
 VERSION="${VERSION#v}"  # strip leading 'v'
 ARCH="amd64"
