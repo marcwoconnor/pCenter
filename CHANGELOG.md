@@ -6,6 +6,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+## v0.1.30 — 2026-04-26
+
+### Fixed
+- **`apt upgrade pcenter` now actually restarts the service.** The v0.1.27 postinst-restart fix (#55) was applied to `packaging/build-deb.sh` but the CI workflow inlined its own duplicate copy of the .deb scripts that never got the fix. So the .deb shipped to users (CI-built) kept the old behavior — every upgrade left the service stopped until the operator ran `systemctl start` manually. Confirmed observed on 0.1.27→0.1.28 and 0.1.28→0.1.29 on this server. Fix: replaced the ~150-line inline build step in `.github/workflows/release.yml` with a single call to `./packaging/build-deb.sh`, eliminating the drift permanently. Also tightened the prerm to only `disable` on `remove`/`purge`, not on upgrade — previously the upgrade flow stopped *and* disabled the service, then the postinst re-enabled it, which masked the missing restart on every release until now.
+
 ## v0.1.29 — 2026-04-26
 
 ### Fixed
