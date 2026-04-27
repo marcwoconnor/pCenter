@@ -6,6 +6,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+### Fixed
+- **VM/CT console rejected with `websocket: request origin not allowed by Upgrader.CheckOrigin` on a fresh install with no `cors_origins` configured.** The console upgrader added in v0.1.x security hardening rejected the request whenever the allowlist was empty — but browsers always send an `Origin` header on WS upgrades, so even a same-origin connection from pCenter's own UI got refused. Mirrored the user-hub upgrader's same-origin fallback (allow when `Origin` host equals request `Host`) so the console works out of the box without needing `cors_origins` set.
+- **VM/CT console failed to open with `Bad escaped character in JSON at position 19` whenever PVE's vncproxy ticket happened to contain a backslash or other JSON-special byte.** `ConsoleTicket` was hand-rolling the response with `fmt.Fprintf(w, '{"ticket":"%s",...}', ticket, port)`, which doesn't JSON-escape the interpolated string — so a `\` in the ticket produced an invalid `\X` escape that `await ticketResp.json()` rejected on the frontend. Switched to `encoding/json` so the ticket is escaped correctly regardless of what bytes PVE returns.
+- **VM/CT console disconnects with "Connection lost" after a short idle.** The websocket bridge in `backend/internal/api/console.go` had no keepalive, so silent VNC sessions were torn down by PVE's `vncwebsocket` (and intermediate proxies/NAT) once no VNC frames flowed for a while. Added gorilla/websocket-style ping/pong keepalive on both legs: pings every 30 s, read deadline of 60 s refreshed on every pong, with a clean tear-down if either peer stops responding.
+
 ## v0.1.30 — 2026-04-26
 
 ### Fixed

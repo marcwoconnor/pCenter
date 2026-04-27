@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -9,8 +10,19 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
+)
+
+const (
+	// Send a ping to each peer every consolePingInterval; tear the relay
+	// down if no pong arrives within consolePongWait. Without this, idle
+	// VNC sessions surface as "Connection lost" because PVE's vncwebsocket
+	// (and any intermediate proxy/NAT) drops silent connections.
+	consolePingInterval = 30 * time.Second
+	consolePongWait     = 60 * time.Second
+	consoleWriteWait    = 10 * time.Second
 )
 
 // Console WebSocket upgrader is now configured per-handler via Handler.consoleUpgrader
@@ -81,7 +93,12 @@ func (h *Handler) ConsoleTicket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"ticket":"%s","port":%d}`, ticket, port)
+	if err := json.NewEncoder(w).Encode(struct {
+		Ticket string `json:"ticket"`
+		Port   int    `json:"port"`
+	}{Ticket: ticket, Port: port}); err != nil {
+		slog.Error("failed to encode console ticket response", "error", err)
+	}
 }
 
 // ConsoleWebsocket handles websocket connections for VM/container consoles
@@ -197,6 +214,39 @@ func (h *Handler) ConsoleWebsocket(w http.ResponseWriter, r *http.Request) {
 	if resp != nil {
 		slog.Debug("PVE handshake response", "status", resp.StatusCode, "proto", resp.Proto)
 	}
+
+	// Keepalive: arm a read deadline on each side and refresh it on every
+	// pong. Pings (sent below) are control frames and concurrency-safe with
+	// WriteMessage, per gorilla/websocket's documented threading model.
+	clientConn.SetReadDeadline(time.Now().Add(consolePongWait))
+	clientConn.SetPongHandler(func(string) error {
+		return clientConn.SetReadDeadline(time.Now().Add(consolePongWait))
+	})
+	pveConn.SetReadDeadline(time.Now().Add(consolePongWait))
+	pveConn.SetPongHandler(func(string) error {
+		return pveConn.SetReadDeadline(time.Now().Add(consolePongWait))
+	})
+
+	done := make(chan struct{})
+	defer close(done)
+
+	pingLoop := func(c *websocket.Conn, peer string) {
+		ticker := time.NewTicker(consolePingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := c.WriteControl(websocket.PingMessage, nil, time.Now().Add(consoleWriteWait)); err != nil {
+					slog.Debug("console ping failed", "peer", peer, "error", err)
+					return
+				}
+			case <-done:
+				return
+			}
+		}
+	}
+	go pingLoop(clientConn, "client")
+	go pingLoop(pveConn, "pve")
 
 	// Proxy messages bidirectionally
 	errChan := make(chan error, 2)
