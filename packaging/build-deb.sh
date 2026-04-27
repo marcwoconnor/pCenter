@@ -21,9 +21,15 @@ npm run build
 cd ..
 
 # --- Build backend ---
+# -X injects the version into internal/updater so the running binary knows
+# what release it is (used by the in-app version banner and update checker).
+# Must match the CI workflow's ldflags so locally-built and CI-built .debs
+# produce identical binaries.
 echo "Building backend..."
 cd backend
-CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o pcenter ./cmd/server
+CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
+    -ldflags "-s -w -X github.com/moconnor/pcenter/internal/updater.Version=${VERSION}" \
+    -o pcenter ./cmd/server
 cd ..
 
 # --- Assemble .deb structure ---
@@ -251,13 +257,20 @@ POST
 chmod 755 "${PKG_DIR}/DEBIAN/postinst"
 
 # --- Pre-remove script ---
+# prerm is invoked with "upgrade <new-version>" on upgrade and "remove" on
+# uninstall. We must stop the service in both cases (binary is about to be
+# replaced or removed), but only `disable` on actual removal — disabling on
+# upgrade would surprise-disable a service the operator deliberately left
+# enabled, and the postinst's `enable` would then race against an operator
+# who *had* deliberately disabled it.
 cat > "${PKG_DIR}/DEBIAN/prerm" << 'PRERM'
 #!/bin/bash
 set -e
 
-# Stop service before removal
 systemctl stop pcenter 2>/dev/null || true
-systemctl disable pcenter 2>/dev/null || true
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    systemctl disable pcenter 2>/dev/null || true
+fi
 
 PRERM
 chmod 755 "${PKG_DIR}/DEBIAN/prerm"
