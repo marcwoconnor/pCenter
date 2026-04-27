@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -91,9 +92,21 @@ func NewHandler(store *state.Store, p *poller.Poller, allowedOrigins []string) *
 					return true // Same-origin or non-browser client
 				}
 				if len(originSet) == 0 {
-					return false // No configured origins = reject cross-origin
+					// No allowlist configured: fall back to same-origin (Origin host == request Host).
+					// Browsers always send Origin on WS upgrades, so without this check a fresh
+					// install would reject its own UI. Mirrors the user-hub upgrader in websocket.go.
+					u, err := url.Parse(origin)
+					if err != nil || u.Host != r.Host {
+						slog.Warn("console websocket origin rejected", "origin", origin, "host", r.Host)
+						return false
+					}
+					return true
 				}
-				return originSet[origin]
+				if !originSet[origin] {
+					slog.Warn("console websocket origin rejected", "origin", origin)
+					return false
+				}
+				return true
 			},
 		},
 	}
