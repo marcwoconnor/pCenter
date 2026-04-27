@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+### Fixed
+- **VM/CT console disconnects with "Connection lost" after a short idle.** The websocket bridge in `backend/internal/api/console.go` had no keepalive, so silent VNC sessions were torn down by PVE's `vncwebsocket` (and intermediate proxies/NAT) once no VNC frames flowed for a while. Added gorilla/websocket-style ping/pong keepalive on both legs: pings every 30 s, read deadline of 60 s refreshed on every pong, with a clean tear-down if either peer stops responding.
+
 ## v0.1.30 — 2026-04-26
 
 ### Fixed
