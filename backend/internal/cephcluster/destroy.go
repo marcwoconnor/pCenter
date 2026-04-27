@@ -45,15 +45,9 @@ func (m *Manager) StartDestroy(ctx context.Context, req DestroyRequest) (string,
 
 	// Seed top-level steps. Per-node ceph_purge steps get added at runtime
 	// since the node list comes from the live client map.
-	job.Steps = append(job.Steps,
-		Step{Phase: PhaseDestroyPreflight, State: StepStatePending},
-		Step{Phase: PhaseSetNoout, State: StepStatePending},
-		Step{Phase: PhaseDeleteFS, State: StepStatePending},
-		Step{Phase: PhaseDeletePools, State: StepStatePending},
-		Step{Phase: PhaseDeleteMDS, State: StepStatePending},
-		Step{Phase: PhaseDeleteMGR, State: StepStatePending},
-		Step{Phase: PhaseDeleteMON, State: StepStatePending},
-	)
+	for _, phase := range destroyClusterPhases() {
+		job.Steps = append(job.Steps, Step{Phase: phase, State: StepStatePending})
+	}
 	for nodeName := range allClients {
 		job.Steps = append(job.Steps, Step{Host: nodeName, Phase: PhaseCephPurge, State: StepStatePending})
 	}
@@ -67,11 +61,35 @@ func (m *Manager) StartDestroy(ctx context.Context, req DestroyRequest) (string,
 	return job.ID, nil
 }
 
+// destroyClusterPhases is the canonical, ordered list of cluster-scoped
+// destroy phases. Per-node ceph_purge steps are appended after these in
+// the seeded Steps slice. Extracted so tests can assert ordering without
+// re-running the full job — `pveceph purge` aborts when MONs or OSDs are
+// still configured, so PhaseDeleteOSD and PhaseDeleteMON MUST stay before
+// the implicit PhaseCephPurge tail.
+func destroyClusterPhases() []StepPhase {
+	return []StepPhase{
+		PhaseDestroyPreflight,
+		PhaseSetNoout,
+		PhaseDeleteFS,
+		PhaseDeletePools,
+		PhaseDeleteMDS,
+		PhaseDeleteOSD,
+		PhaseDeleteMGR,
+		PhaseDeleteMON,
+	}
+}
+
 // runDestroy is the long-running orchestration goroutine for a destroy Job.
 // Order matters: pools/fs MUST go before MDS (FS needs MDSs to drain);
-// MGR before MON (so the orchestration MGR can still publish cluster
-// updates as MONs go away); pveceph purge LAST (it removes /etc/ceph and
-// the keyrings — anything that needs Ceph auth must complete first).
+// OSDs after MDS but before MGR/MON (MGR helps OSD destroy issue
+// safe-to-destroy checks promptly; MONs must outlive OSD destroy because
+// each `ceph osd destroy` writes the OSDmap); MGR before MON (so the
+// orchestration MGR can still publish cluster updates as MONs go away);
+// pveceph purge LAST (it removes /etc/ceph and the keyrings — anything
+// that needs Ceph auth must complete first, and `pveceph purge` itself
+// aborts when MONs or OSDs are still configured, so the prior phases
+// must finish before it can succeed).
 //
 // Bias: continue past per-resource failures and surface them in step.error
 // rather than bail. An operator destroying Ceph wants the cluster to end
@@ -102,7 +120,7 @@ func (m *Manager) runDestroy(
 		// Still run pveceph purge per node — leftover packages / configs
 		// from a previous half-destroy are common.
 		m.runPurgeAcrossNodes(ctx, job, clients)
-		job.markSucceeded()
+		m.finalizeDestroyResult(job)
 		return
 	}
 	job.succeedStep("", PhaseDestroyPreflight, "Ceph detected; proceeding")
@@ -170,6 +188,47 @@ func (m *Manager) runDestroy(
 		job.succeedStep("", PhaseDeleteMDS, fmt.Sprintf("%d MDS(s) deleted", len(mdss)))
 	}
 
+	// --- Phase 5b: Delete OSDs. `pveceph purge` aborts when OSDs are
+	// configured, so this MUST land before phase 8 or the cluster ends up
+	// half-torn-down. cleanup=true wipes the LVM so the underlying disks
+	// are reusable without manual zap. Each destroy returns a UPID; we
+	// wait for it so the next phase doesn't race the OSDmap update. Run
+	// serially — concurrent OSD destroys on the same host can deadlock
+	// on ceph-volume's LVM lock and there's no value in fanning out
+	// across hosts at the cost of harder-to-read failure output.
+	job.startStep("", PhaseDeleteOSD)
+	osds, osdListErr := lead.ListCephOSDs(ctx)
+	if osdListErr != nil {
+		job.failStep("", PhaseDeleteOSD,
+			fmt.Sprintf("ListCephOSDs failed: %v — pveceph purge will abort if OSDs remain. Recovery: SSH each node and run `pveceph osd destroy <id> --cleanup` for any leftover OSDs before retrying.", osdListErr))
+	} else {
+		osdErrs := []string{}
+		for _, o := range osds {
+			c, ok := clients[o.Host]
+			if !ok {
+				c = lead
+			}
+			upid, err := c.DeleteCephOSD(ctx, o.ID, true)
+			if err != nil {
+				osdErrs = append(osdErrs, fmt.Sprintf("osd.%d on %s: %v", o.ID, o.Host, err))
+				continue
+			}
+			// 5 minutes is generous — most OSD destroys finish in <60s; SSDs
+			// with large LVM stacks can take longer to wipe.
+			if _, werr := c.WaitForTask(ctx, upid, 5*time.Minute); werr != nil {
+				osdErrs = append(osdErrs, fmt.Sprintf("osd.%d on %s: task wait failed: %v", o.ID, o.Host, werr))
+				continue
+			}
+		}
+		if len(osdErrs) > 0 {
+			job.failStep("", PhaseDeleteOSD,
+				fmt.Sprintf("%d/%d OSD destroy(s) failed: %v. Recovery: SSH the affected node(s) and run `pveceph osd destroy <id> --cleanup` manually — `pveceph purge` will abort while OSDs remain.",
+					len(osdErrs), len(osds), osdErrs))
+		} else {
+			job.succeedStep("", PhaseDeleteOSD, fmt.Sprintf("%d OSD(s) destroyed", len(osds)))
+		}
+	}
+
 	// --- Phase 6: Delete MGRs.
 	job.startStep("", PhaseDeleteMGR)
 	mgrs, _ := lead.ListCephMGRs(ctx)
@@ -214,11 +273,37 @@ func (m *Manager) runDestroy(
 	// --- Phase 8: pveceph purge per node, in parallel.
 	m.runPurgeAcrossNodes(ctx, job, clients)
 
-	// Job is "succeeded" if no terminal step failed. We use a softer rule:
-	// always mark succeeded UNLESS ALL purge steps failed (which would mean
-	// none of the nodes is actually clean). Per-resource failures during
-	// teardown are surfaced as step errors but don't fail the whole job —
-	// the operator can re-run destroy to mop up.
+	m.finalizeDestroyResult(job)
+}
+
+// finalizeDestroyResult decides the terminal Job state. Soft rule:
+// per-resource teardown failures (pool/FS/MDS/OSD/MGR/MON) surface as step
+// errors but don't fail the job — the operator can re-run destroy and
+// pveceph purge will mop up. The job is only failed when EVERY per-node
+// `pveceph purge` step failed, which is the signal that the cluster is
+// genuinely still installed on every host. A purge succeeding on even one
+// node means the orchestration did its job; the operator can SSH the
+// remaining nodes and run purge by hand.
+func (m *Manager) finalizeDestroyResult(job *Job) {
+	job.mu.Lock()
+	purgeAttempted, purgeSucceeded := 0, 0
+	for _, s := range job.Steps {
+		if s.Phase != PhaseCephPurge {
+			continue
+		}
+		purgeAttempted++
+		if s.State == StepStateSucceeded {
+			purgeSucceeded++
+		}
+	}
+	job.mu.Unlock()
+
+	if purgeAttempted > 0 && purgeSucceeded == 0 {
+		job.markFailed(fmt.Sprintf(
+			"destroy did not complete: pveceph purge failed on all %d node(s). The cluster is in a partially-torn-down state. Recovery: SSH each node and run `pveceph purge --crash --logs` manually to inspect, then re-run destroy once the underlying cause (typically leftover OSDs or MONs) is fixed.",
+			purgeAttempted))
+		return
+	}
 	job.markSucceeded()
 }
 

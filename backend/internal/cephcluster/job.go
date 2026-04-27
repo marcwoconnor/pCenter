@@ -63,6 +63,7 @@ const (
 	PhaseDeletePools      StepPhase = "delete_pools"
 	PhaseDeleteFS         StepPhase = "delete_fs"
 	PhaseDeleteMDS        StepPhase = "delete_mds"
+	PhaseDeleteOSD        StepPhase = "delete_osd"
 	PhaseDeleteMGR        StepPhase = "delete_mgr"
 	PhaseDeleteMON        StepPhase = "delete_mon"
 	PhaseCephPurge        StepPhase = "ceph_purge"
