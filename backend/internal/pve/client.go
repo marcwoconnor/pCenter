@@ -1335,10 +1335,14 @@ func (c *Client) GetCephRules(ctx context.Context) ([]CephRule, error) {
 // GetCephFlags returns the cluster-wide OSD flags. PVE returns these as an
 // array of {name, value, description} objects from /cluster/ceph/flags;
 // translate to the typed struct callers expect.
+//
+// PVE serializes the flag value as an integer (`"value":0`, not `false`),
+// so rawFlag.Value is intBool — a plain bool would fail the decode and
+// flags would silently appear unset even when they were on.
 func (c *Client) GetCephFlags(ctx context.Context) (CephFlags, error) {
 	type rawFlag struct {
-		Name  string `json:"name"`
-		Value bool   `json:"value"`
+		Name  string  `json:"name"`
+		Value intBool `json:"value"`
 	}
 	raw, err := get[[]rawFlag](c, ctx, "/cluster/ceph/flags")
 	if err != nil {
@@ -1346,27 +1350,28 @@ func (c *Client) GetCephFlags(ctx context.Context) (CephFlags, error) {
 	}
 	var flags CephFlags
 	for _, f := range raw {
+		v := bool(f.Value)
 		switch f.Name {
 		case "noout":
-			flags.NoOut = f.Value
+			flags.NoOut = v
 		case "noin":
-			flags.NoIn = f.Value
+			flags.NoIn = v
 		case "noup":
-			flags.NoUp = f.Value
+			flags.NoUp = v
 		case "nodown":
-			flags.NoDown = f.Value
+			flags.NoDown = v
 		case "nobackfill":
-			flags.NoBackfill = f.Value
+			flags.NoBackfill = v
 		case "norebalance":
-			flags.NoRebalance = f.Value
+			flags.NoRebalance = v
 		case "norecover":
-			flags.NoRecover = f.Value
+			flags.NoRecover = v
 		case "noscrub":
-			flags.NoScrub = f.Value
+			flags.NoScrub = v
 		case "nodeep-scrub":
-			flags.NoDeepScrub = f.Value
+			flags.NoDeepScrub = v
 		case "pause":
-			flags.Pause = f.Value
+			flags.Pause = v
 		}
 	}
 	return flags, nil

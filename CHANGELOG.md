@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+### Fixed
+- **Ceph Monitors tab rendered "None." even on healthy clusters with active MONs.** PVE's perl JSON encoder serializes booleans as integers (`"quorum":1`, not `"quorum":true`) throughout the Ceph API surface, but `pve.CephMON.Quorum`, `pve.CephMDS.Standby`, and the `value` field inside `GetCephFlags` were typed as Go `bool`. `encoding/json` refuses `1 → bool` and errors the entire enclosing decode, so a single MON with `quorum:1` blanked the whole MON list (same story for MDSs and the cluster-wide flag toggles). Introduced an `intBool` type that accepts `1`/`0`, `true`/`false`, `"1"`/`"0"`/`"true"`/`"false"`, or `null` — same loose-acceptance pattern the existing `flexInt` already takes for ints PVE quotes as strings — and swapped the affected fields. Added regression tests using PVE's actual int shape so the next time the encoder switches conventions on us we catch it in CI rather than in the UI (closes #90).
+
 ## v0.1.32 — 2026-04-27
 
 ### Fixed

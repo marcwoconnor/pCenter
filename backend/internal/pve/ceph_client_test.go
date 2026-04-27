@@ -72,8 +72,8 @@ func TestListCephOSDs_FlattensTree(t *testing.T) {
 
 func TestListCephMONs(t *testing.T) {
 	body := `{"data":[
-		{"name":"pve1","addr":"10.0.0.1:6789","host":"pve1","rank":0,"quorum":true,"state":"leader"},
-		{"name":"pve2","addr":"10.0.0.2:6789","host":"pve2","rank":1,"quorum":true,"state":"peon"}
+		{"name":"pve1","addr":"10.0.0.1:6789","host":"pve1","rank":0,"quorum":1,"state":"leader"},
+		{"name":"pve2","addr":"10.0.0.2:6789","host":"pve2","rank":1,"quorum":1,"state":"peon"}
 	]}`
 	srv, gotPath := cephSrv(t, "/ceph/mon", body)
 	c := newTestClient(srv, "pve1")
@@ -140,12 +140,16 @@ func TestGetCephRules(t *testing.T) {
 
 func TestGetCephFlags_Translates(t *testing.T) {
 	// PVE returns array of {name, value, description}; client must translate
-	// to the typed struct.
+	// to the typed struct. Older tests used JSON-native booleans here, but
+	// the live PVE encoder emits integers (`"value":1`/`"value":0`) — using
+	// the integer shape pins the regression that motivated the intBool
+	// type. See TestGetCephFlags_BoolShape below for the legacy shape;
+	// both must keep working.
 	body := `{"data":[
-		{"name":"noout","value":true,"description":"OSDs will not be marked out"},
-		{"name":"noscrub","value":false,"description":"..."},
-		{"name":"nodeep-scrub","value":true,"description":"..."},
-		{"name":"unrelated-flag","value":true,"description":"should be ignored"}
+		{"name":"noout","value":1,"description":"OSDs will not be marked out"},
+		{"name":"noscrub","value":0,"description":"..."},
+		{"name":"nodeep-scrub","value":1,"description":"..."},
+		{"name":"unrelated-flag","value":1,"description":"should be ignored"}
 	]}`
 	srv, gotPath := cephSrv(t, "/cluster/ceph/flags", body)
 	c := newTestClient(srv, "pve1")
@@ -168,6 +172,25 @@ func TestGetCephFlags_Translates(t *testing.T) {
 	}
 	if flags.NoIn || flags.NoUp {
 		t.Errorf("unset flags must default false, got %+v", flags)
+	}
+}
+
+// TestGetCephFlags_BoolShape confirms the JSON-native bool shape still
+// decodes — guards against an over-strict intBool that rejected `true`.
+func TestGetCephFlags_BoolShape(t *testing.T) {
+	body := `{"data":[
+		{"name":"noout","value":true},
+		{"name":"noscrub","value":false}
+	]}`
+	srv, _ := cephSrv(t, "/cluster/ceph/flags", body)
+	c := newTestClient(srv, "pve1")
+
+	flags, err := c.GetCephFlags(context.Background())
+	if err != nil {
+		t.Fatalf("GetCephFlags: %v", err)
+	}
+	if !flags.NoOut || flags.NoScrub {
+		t.Errorf("decoded wrong from bool shape: %+v", flags)
 	}
 }
 
