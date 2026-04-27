@@ -1,0 +1,92 @@
+# GitLab CI release pipeline for pCenter.
+#
+# Mirrors .github/workflows/release.yml — single source of truth for the
+# build itself is packaging/build-deb.sh; we only feed it a version and
+# ship the resulting artifacts.
+#
+# Triggered on tag push matching v<N.N.N>. Two outputs:
+#   1. A GitLab Release attached to the tag, with notes pulled from the
+#      matching CHANGELOG.md section.
+#   2. A .deb in the project's Debian Package Registry — consumers `apt
+#      install pcenter` against the project's repo URL (private projects
+#      need a deploy token in /etc/apt/auth.conf.d).
+#
+# Authentication uses CI_JOB_TOKEN, which is auto-injected and scoped to
+# the project's own registry — no PAT setup needed.
+
+stages:
+  - release
+
+variables:
+  PACKAGE_REGISTRY_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/debian"
+
+release:
+  stage: release
+  image: golang:1.24-bookworm
+  rules:
+    # Tag-only — manual pipelines and branch pushes don't release.
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+  before_script:
+    # The bookworm Go image already has go + dpkg-deb; we add Node 20
+    # (matches frontend/.nvmrc, build-deb.sh refuses older) and a few
+    # tools the script and release upload assume.
+    - apt-get update -qq
+    - apt-get install -y -qq curl ca-certificates gnupg
+    - curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    - apt-get install -y -qq nodejs
+    - node --version
+    - go version
+  script:
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - echo "Building pCenter ${VERSION}..."
+    - ./packaging/build-deb.sh "${VERSION}"
+    # Pull just this version's section out of CHANGELOG.md for the
+    # release body. Mirrors the awk in .github/workflows/release.yml so
+    # the rendered release notes look identical between hosts.
+    - |
+      awk -v tag="## v${VERSION}" '
+        $0 ~ "^"tag"($|[^0-9.])" { found=1; next }
+        found && /^## / { exit }
+        found { print }
+      ' CHANGELOG.md > release-notes.md
+    - |
+      if [ ! -s release-notes.md ]; then
+        echo "No CHANGELOG entry for v${VERSION}; using minimal body." > release-notes.md
+        echo "" >> release-notes.md
+        echo "See commit history at ${CI_PROJECT_URL}/-/commits/${CI_COMMIT_TAG}" >> release-notes.md
+      fi
+    - echo "--- Release notes ---" && cat release-notes.md
+    # Upload the .deb to the Debian Package Registry. Consumers `apt
+    # install pcenter` after adding the project repo to sources.list.d.
+    - DEB="pcenter_${VERSION}_amd64.deb"
+    - >
+      curl --fail --silent --show-error
+      --header "JOB-TOKEN: ${CI_JOB_TOKEN}"
+      --upload-file "${DEB}"
+      "${PACKAGE_REGISTRY_URL}/${DEB}?distribution=stable&component=main"
+    - echo "Uploaded ${DEB} to Debian Package Registry."
+  artifacts:
+    # Job artifacts give the GitLab Release something to link to and act
+    # as a fallback download path if a consumer doesn't want to wire up
+    # the apt registry.
+    paths:
+      - pcenter_*.deb
+      - backend/pcenter
+      - release-notes.md
+    expire_in: 30 days
+  release:
+    # GitLab spawns release-cli automatically when this keyword is set —
+    # no install step needed. The release is created/updated for the
+    # commit referenced by ref (the tag itself).
+    name: "v${CI_COMMIT_TAG#v}"
+    description: "./release-notes.md"
+    tag_name: "${CI_COMMIT_TAG}"
+    ref: "${CI_COMMIT_TAG}"
+    assets:
+      links:
+        - name: "pcenter_${CI_COMMIT_TAG#v}_amd64.deb"
+          url: "${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/file/pcenter_${CI_COMMIT_TAG#v}_amd64.deb"
+          link_type: package
+        - name: "pcenter linux/amd64 binary"
+          url: "${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/file/backend/pcenter"
+          link_type: other
