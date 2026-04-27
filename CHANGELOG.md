@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: pre-1.0 (Se
 
 ## Unreleased
 
+## v0.1.32 — 2026-04-27
+
 ### Fixed
 - **"Destroy Ceph" left clusters half-destroyed.** The orchestration deleted CephFS, pools, MDSs, MGRs, and MONs but never destroyed OSDs, so the final `pveceph purge` per node aborted (PVE refuses to purge while OSDs are configured) — leaving `/etc/ceph`, `/etc/pve/ceph.conf`, the CRUSH map, and OSD daemons in place. The job was nevertheless marked succeeded, masking the half-state from the UI. Fix: added a new `delete_osd` phase between MDS and MGR teardown (`DeleteCephOSD(id, cleanup=true)` per OSD, with UPID wait so the next phase doesn't race the OSDmap update); replaced the unconditional success-mark with a finalizer that fails the job when every per-node `pveceph purge` fails (with a recovery hint in the error message). Operators stuck with a half-torn-down cluster from before this fix can re-run "Destroy Ceph…" — it will now finish the job.
 
