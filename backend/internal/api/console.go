@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -92,7 +93,12 @@ func (h *Handler) ConsoleTicket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"ticket":"%s","port":%d}`, ticket, port)
+	if err := json.NewEncoder(w).Encode(struct {
+		Ticket string `json:"ticket"`
+		Port   int    `json:"port"`
+	}{Ticket: ticket, Port: port}); err != nil {
+		slog.Error("failed to encode console ticket response", "error", err)
+	}
 }
 
 // ConsoleWebsocket handles websocket connections for VM/container consoles
